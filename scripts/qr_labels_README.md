@@ -21,6 +21,18 @@ python scripts/qr_labels.py \
 From the database (uses `DATABASE_URL`):
 
 ```
+
+Sequential bin_ids:
+
+```
+python scripts/qr_labels.py \
+  --sequential \
+  --start 1 \
+  --count 120 \
+  --out labels.pdf
+```
+
+This generates `BIN-0001` through `BIN-0120` by default. Use `--prefix` and `--pad` to customize.
 DATABASE_URL=postgresql+psycopg://binbrain:***@127.0.0.1:5432/binbrain \
 python scripts/qr_labels.py \
   --from-db \

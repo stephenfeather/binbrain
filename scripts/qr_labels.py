@@ -121,6 +121,7 @@ def parse_args() -> argparse.Namespace:
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--input", help="Text or CSV file with bin_ids, one per line/row")
     src.add_argument("--from-db", action="store_true", help="Load bin_ids from DATABASE_URL")
+    src.add_argument("--sequential", action="store_true", help="Generate sequential bin_ids")
 
     p.add_argument("--out", required=True, help="Output PDF path")
     p.add_argument("--csv", help="Optional CSV output path")
@@ -134,6 +135,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gap-x", type=float, default=DEFAULT_LAYOUT.gap_x_in)
     p.add_argument("--gap-y", type=float, default=DEFAULT_LAYOUT.gap_y_in)
     p.add_argument("--qr-padding", type=float, default=0.08, help="Padding inside label in inches")
+    p.add_argument("--start", type=int, default=1, help="Start number for sequential bin_ids")
+    p.add_argument("--count", type=int, help="How many sequential bin_ids to generate")
+    p.add_argument("--end", type=int, help="End number (inclusive) for sequential bin_ids")
+    p.add_argument("--prefix", default="BIN-", help="Prefix for sequential bin_ids")
+    p.add_argument("--pad", type=int, default=4, help="Zero padding width for sequential bin_ids")
 
     return p.parse_args()
 
@@ -141,7 +147,23 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    if args.from_db:
+    if args.sequential:
+        if args.count is None and args.end is None:
+            raise SystemExit("--sequential requires --count or --end")
+        if args.count is not None and args.end is not None:
+            raise SystemExit("Use only one of --count or --end")
+        if args.end is not None and args.end < args.start:
+            raise SystemExit("--end must be >= --start")
+
+        if args.count is not None:
+            end = args.start + args.count - 1
+        else:
+            end = args.end
+        bin_ids = [
+            f"{args.prefix}{str(i).zfill(args.pad)}"
+            for i in range(args.start, end + 1)
+        ]
+    elif args.from_db:
         database_url = os.environ.get("DATABASE_URL")
         if not database_url:
             raise SystemExit("DATABASE_URL is required with --from-db")
