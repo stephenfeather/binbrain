@@ -88,7 +88,13 @@ def iter_positions(layout: Layout):
             yield x, y, label_w, label_h
 
 
-def render_pdf(bin_ids: Iterable[str], out_path: Path, layout: Layout, qr_padding_in: float) -> None:
+def render_pdf(
+    bin_ids: Iterable[str],
+    out_path: Path,
+    layout: Layout,
+    qr_padding_in: float,
+    single_per_page: bool,
+) -> None:
     if FONT_PATH.exists():
         pdfmetrics.registerFont(TTFont(FONT_NAME, str(FONT_PATH)))
 
@@ -96,6 +102,9 @@ def render_pdf(bin_ids: Iterable[str], out_path: Path, layout: Layout, qr_paddin
     positions = list(iter_positions(layout))
     if not positions:
         raise ValueError("layout has no positions")
+
+    if single_per_page:
+        positions = [(0.0, 0.0, layout.label_width_in * inch, layout.label_height_in * inch)]
 
     qr_padding = qr_padding_in * inch
     labels_per_page = len(positions)
@@ -110,6 +119,9 @@ def render_pdf(bin_ids: Iterable[str], out_path: Path, layout: Layout, qr_paddin
         img = qr_image(bin_id, qr_px)
         img_reader = ImageReader(img)
 
+        if single_per_page:
+            c.setPageSize((w, h))
+            x, y = 0.0, 0.0
         qr_center_x = x + w * 0.25
         text_center_x = x + w * 0.75
         center_y = y + h * 0.5
@@ -155,6 +167,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--end", type=int, help="End number (inclusive) for sequential bin_ids")
     p.add_argument("--prefix", default="BIN-", help="Prefix for sequential bin_ids")
     p.add_argument("--pad", type=int, default=4, help="Zero padding width for sequential bin_ids")
+    p.add_argument("--single-per-page", action="store_true", help="Render one label per page")
 
     return p.parse_args()
 
@@ -200,7 +213,13 @@ def main() -> None:
         gap_y_in=args.gap_y,
     )
 
-    render_pdf(bin_ids, Path(args.out), layout, qr_padding_in=args.qr_padding)
+    render_pdf(
+        bin_ids,
+        Path(args.out),
+        layout,
+        qr_padding_in=args.qr_padding,
+        single_per_page=args.single_per_page,
+    )
 
     if args.csv:
         write_csv(bin_ids, Path(args.csv))

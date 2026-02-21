@@ -36,6 +36,17 @@ python scripts/qr_labels.py \
 ```
 
 This generates `BIN-0001` through `BIN-0120` by default. Use `--prefix` and `--pad` to customize.
+
+Label printers (one label per page):
+
+```
+python scripts/qr_labels.py \
+  --sequential \
+  --start 1 \
+  --count 120 \
+  --out labels.pdf \
+  --single-per-page
+```
 DATABASE_URL=postgresql+psycopg://binbrain:***@127.0.0.1:5432/binbrain \
 python scripts/qr_labels.py \
   --from-db \
