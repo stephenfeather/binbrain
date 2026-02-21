@@ -41,3 +41,6 @@
 
 ## 2026-02-21
 - QR label generator (PDF): no database schema changes.
+
+## 2026-02-21
+- Photo suggestions endpoint: no database schema changes.

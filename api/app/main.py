@@ -372,6 +372,17 @@ def list_bins(
     return bins
 
 
+@app.get("/photos/{photo_id}/suggest")
+def suggest_for_photo(
+    photo_id: int,
+    db: Session = Depends(get_db),
+):
+    if not repository.photo_exists(db, photo_id):
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    return {"photo_id": photo_id, "suggestions": []}
+
+
 @app.get("/search")
 def search(
     q: str = Query(..., min_length=1),

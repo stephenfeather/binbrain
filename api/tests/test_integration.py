@@ -48,6 +48,35 @@ def test_error_shape_on_missing_bin(client):
     assert body["error"]["request_id"]
 
 
+def test_photo_suggest_shape(client, db):
+    bin_id = "BIN-PHOTO-0001"
+    r = client.post(
+        "/items",
+        data={"name": "Photo Item", "category": "widget", "bin_id": bin_id},
+    )
+    assert r.status_code == 200
+
+    db.execute(
+        text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path)"),
+        {"bin_id": bin_id, "path": "/tmp/photo.jpg"},
+    )
+    db.commit()
+    photo_id = db.execute(text("SELECT max(photo_id) FROM photos")).scalar_one()
+
+    resp = client.get(f"/photos/{photo_id}/suggest")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["photo_id"] == photo_id
+    assert isinstance(body["suggestions"], list)
+
+
+def test_photo_suggest_missing(client):
+    resp = client.get("/photos/999999/suggest")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "http_error"
+
+
 def test_soft_deleted_bin_hidden(client, db):
     bin_id = "BIN-DEL-0001"
     r_item = client.post(

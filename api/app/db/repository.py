@@ -131,6 +131,15 @@ def fetch_bin_photos(db: Session, bin_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def photo_exists(db: Session, photo_id: int) -> bool:
+    return bool(
+        db.execute(
+            text("SELECT 1 FROM photos WHERE photo_id = :photo_id"),
+            {"photo_id": photo_id},
+        ).scalar()
+    )
+
+
 def list_bins(db: Session) -> list[dict]:
     rows = db.execute(
         text(
