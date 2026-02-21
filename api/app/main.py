@@ -198,6 +198,57 @@ def associate_item(
     return {"ok": True, "bin_id": bin_id, "item_id": item_id}
 
 
+@app.get("/bins/{bin_id}")
+def get_bin(
+    bin_id: str,
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    exists = db.execute(
+        text("SELECT 1 FROM bins WHERE bin_id = :bin_id"),
+        {"bin_id": bin_id},
+    ).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    items = db.execute(
+        text("""
+            SELECT
+              i.item_id,
+              i.name,
+              i.category,
+              bi.quantity,
+              bi.confidence
+            FROM bin_items bi
+            JOIN items i ON i.item_id = bi.item_id
+            WHERE bi.bin_id = :bin_id
+            ORDER BY i.item_id
+        """),
+        {"bin_id": bin_id},
+    ).mappings().all()
+
+    photos = db.execute(
+        text("""
+            SELECT
+              photo_id,
+              path
+            FROM photos
+            WHERE bin_id = :bin_id
+            ORDER BY photo_id
+        """),
+        {"bin_id": bin_id},
+    ).mappings().all()
+
+    return {
+        "bin_id": bin_id,
+        "items": [dict(row) for row in items],
+        "photos": [dict(row) for row in photos],
+    }
+
+
 @app.get("/search")
 def search(
     q: str = Query(..., min_length=1),
