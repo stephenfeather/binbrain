@@ -155,6 +155,7 @@ def create_item(
                 text("""
                     INSERT INTO bin_items (bin_id, item_id, confidence, quantity)
                     VALUES (:bin_id, :item_id, :confidence, :quantity)
+                    ON CONFLICT DO NOTHING
                 """),
                 {"bin_id": bin_id, "item_id": item_id, "confidence": confidence, "quantity": quantity},
             )
@@ -190,6 +191,7 @@ def associate_item(
         text("""
             INSERT INTO bin_items (bin_id, item_id, confidence, quantity)
             VALUES (:bin_id, :item_id, :confidence, :quantity)
+            ON CONFLICT DO NOTHING
         """),
         {"bin_id": bin_id, "item_id": item_id, "confidence": confidence, "quantity": quantity},
     )
