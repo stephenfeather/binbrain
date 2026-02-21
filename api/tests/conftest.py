@@ -9,13 +9,20 @@ from sqlalchemy import text
 
 
 def _stub_fastembed() -> None:
+    class DummyVec:
+        def __init__(self, dims: int):
+            self._dims = dims
+
+        def tolist(self):
+            return [0.0] * self._dims
+
     class DummyEmbed:
         def __init__(self, model_name: str):
             self.model_name = model_name
 
         def embed(self, texts):
             for _ in texts:
-                yield [0.0] * 384
+                yield DummyVec(384)
 
     sys.modules["fastembed"] = types.SimpleNamespace(TextEmbedding=DummyEmbed)
 
