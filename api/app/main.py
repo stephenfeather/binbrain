@@ -149,10 +149,10 @@ async def ingest(
         fpath = bin_dir / fname
         fpath.write_bytes(await up.read())
 
-        repository.insert_photo(db, bin_id, str(fpath))
+        photo_id = repository.insert_photo(db, bin_id, str(fpath))
         db.commit()
 
-        saved.append({"path": str(fpath)})
+        saved.append({"photo_id": photo_id, "path": str(fpath)})
 
     logger.info(
         "event=ingest_complete request_id=%s bin_id=%s saved=%s",
@@ -161,7 +161,7 @@ async def ingest(
         len(saved),
     )
 
-    return {"bin_id": bin_id, "count": len(saved), "saved": saved}
+    return {"bin_id": bin_id, "photos": saved}
 
 
 @app.post("/items")
@@ -297,8 +297,8 @@ async def add_to_bin(
                 fpath = bin_dir / fname
                 fpath.write_bytes(await up.read())
 
-                repository.insert_photo(db, bin_id, str(fpath))
-                saved_photos.append({"path": str(fpath)})
+                photo_id = repository.insert_photo(db, bin_id, str(fpath))
+                saved_photos.append({"photo_id": photo_id, "path": str(fpath)})
 
         if item_id is not None:
             repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)

@@ -44,3 +44,6 @@
 
 ## 2026-02-21
 - Photo suggestions endpoint: no database schema changes.
+
+## 2026-02-21
+- /ingest response shape: no database schema changes.

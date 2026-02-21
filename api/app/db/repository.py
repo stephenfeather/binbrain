@@ -76,11 +76,12 @@ def insert_bin_item(
     )
 
 
-def insert_photo(db: Session, bin_id: str, path: str) -> None:
-    db.execute(
-        text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path)"),
+def insert_photo(db: Session, bin_id: str, path: str) -> int:
+    res = db.execute(
+        text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path) RETURNING photo_id"),
         {"bin_id": bin_id, "path": path},
     )
+    return int(res.scalar_one())
 
 
 def bin_exists(db: Session, bin_id: str) -> bool:

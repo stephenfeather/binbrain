@@ -56,12 +56,17 @@ def test_photo_suggest_shape(client, db):
     )
     assert r.status_code == 200
 
-    db.execute(
-        text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path)"),
-        {"bin_id": bin_id, "path": "/tmp/photo.jpg"},
+    r_ingest = client.post(
+        "/ingest",
+        data={"bin_id": bin_id},
+        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
     )
-    db.commit()
-    photo_id = db.execute(text("SELECT max(photo_id) FROM photos")).scalar_one()
+    assert r_ingest.status_code == 200
+    body = r_ingest.json()
+    assert body["bin_id"] == bin_id
+    assert isinstance(body["photos"], list)
+    assert body["photos"]
+    photo_id = body["photos"][0]["photo_id"]
 
     resp = client.get(f"/photos/{photo_id}/suggest")
     assert resp.status_code == 200
