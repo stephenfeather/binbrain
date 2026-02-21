@@ -402,6 +402,7 @@ def search(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    min_score: Optional[float] = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
 ):
     try:
@@ -414,23 +415,51 @@ def search(
 
     qvec_str = vec_to_pgvector(qvec)
 
-    rows = db.execute(
-        text("""
-            SELECT
-              i.item_id,
-              i.name,
-              i.category,
-              (e.embedding <=> CAST(:qvec AS vector)) AS distance,
-              array_remove(array_agg(bi.bin_id), NULL) AS bins
-            FROM item_embeddings e
-            JOIN items i ON i.item_id = e.item_id
-            LEFT JOIN bin_items bi ON bi.item_id = i.item_id
-            GROUP BY i.item_id, i.name, i.category, e.embedding
-            ORDER BY e.embedding <=> CAST(:qvec AS vector)
-            LIMIT :limit
-            OFFSET :offset
-        """),
-        {"qvec": qvec_str, "limit": limit, "offset": offset},
-    ).mappings().all()
+    if min_score is None:
+        rows = db.execute(
+            text("""
+                SELECT
+                  i.item_id,
+                  i.name,
+                  i.category,
+                  (e.embedding <=> CAST(:qvec AS vector)) AS distance,
+                  array_remove(array_agg(bi.bin_id), NULL) AS bins
+                FROM item_embeddings e
+                JOIN items i ON i.item_id = e.item_id
+                LEFT JOIN bin_items bi ON bi.item_id = i.item_id
+                GROUP BY i.item_id, i.name, i.category, e.embedding
+                ORDER BY e.embedding <=> CAST(:qvec AS vector)
+                LIMIT :limit
+                OFFSET :offset
+            """),
+            {"qvec": qvec_str, "limit": limit, "offset": offset},
+        ).mappings().all()
+    else:
+        max_distance = 1.0 - min_score
+        rows = db.execute(
+            text("""
+                SELECT
+                  i.item_id,
+                  i.name,
+                  i.category,
+                  (e.embedding <=> CAST(:qvec AS vector)) AS distance,
+                  array_remove(array_agg(bi.bin_id), NULL) AS bins
+                FROM item_embeddings e
+                JOIN items i ON i.item_id = e.item_id
+                LEFT JOIN bin_items bi ON bi.item_id = i.item_id
+                WHERE (e.embedding <=> CAST(:qvec AS vector)) <= :max_distance
+                GROUP BY i.item_id, i.name, i.category, e.embedding
+                ORDER BY e.embedding <=> CAST(:qvec AS vector)
+                LIMIT :limit
+                OFFSET :offset
+            """),
+            {"qvec": qvec_str, "limit": limit, "offset": offset, "max_distance": max_distance},
+        ).mappings().all()
 
-    return {"q": q, "limit": limit, "offset": offset, "results": [dict(r) for r in rows]}
+    return {
+        "q": q,
+        "limit": limit,
+        "offset": offset,
+        "min_score": min_score,
+        "results": [dict(r) for r in rows],
+    }

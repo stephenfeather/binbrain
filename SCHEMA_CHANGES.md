@@ -12,3 +12,6 @@
 
 ## 2026-02-21
 - Task 7 (GET /search pagination): no database schema changes.
+
+## 2026-02-21
+- Task 8 (GET /search min_score): no database schema changes.
