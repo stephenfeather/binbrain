@@ -1,0 +1,17 @@
+services:
+  api:
+    build: ./api
+    container_name: binbrain_api
+    environment:
+      DATABASE_URL: postgresql+psycopg://binbrain:${POSTGRES_PASSWORD}@127.0.0.1:5432/binbrain
+      PHOTO_DIR: /data/photos
+      EMBED_MODEL: BAAI/bge-small-en-v1.5
+    volumes:
+      - ./data/photos:/data/photos
+      # Optional: persist model cache so restarts don't redownload
+      - binbrain_cache:/root/.cache
+    network_mode: "host"
+    restart: unless-stopped
+
+volumes:
+  binbrain_cache:

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binbrain-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.8",
+  "uvicorn[standard]==0.30.6",
+  "sqlalchemy==2.0.36",
+  "psycopg[binary]==3.2.3",
+  "python-multipart==0.0.12",
+  "fastembed==0.3.6",
+]
