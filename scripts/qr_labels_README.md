@@ -8,6 +8,9 @@ This script generates a PDF of QR labels sized for 2" x 1" labels on letter pape
 pip install -r scripts/requirements.txt
 ```
 
+Font:
+- `scripts/fonts/OpenSans-ExtraBold.ttf` is used if present. If missing, the script falls back to Helvetica.
+
 ## Examples
 
 From a file of bin_ids:

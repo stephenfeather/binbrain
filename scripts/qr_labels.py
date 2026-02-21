@@ -12,6 +12,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 
 @dataclass
@@ -36,6 +38,9 @@ DEFAULT_LAYOUT = Layout(
     gap_x_in=0.0,
     gap_y_in=0.0,
 )
+
+FONT_NAME = "OpenSans-ExtraBold"
+FONT_PATH = Path(__file__).parent / "fonts" / "OpenSans-ExtraBold.ttf"
 
 
 def load_bin_ids_from_file(path: Path) -> List[str]:
@@ -84,6 +89,9 @@ def iter_positions(layout: Layout):
 
 
 def render_pdf(bin_ids: Iterable[str], out_path: Path, layout: Layout, qr_padding_in: float) -> None:
+    if FONT_PATH.exists():
+        pdfmetrics.registerFont(TTFont(FONT_NAME, str(FONT_PATH)))
+
     c = canvas.Canvas(str(out_path), pagesize=letter)
     positions = list(iter_positions(layout))
     if not positions:
@@ -109,7 +117,8 @@ def render_pdf(bin_ids: Iterable[str], out_path: Path, layout: Layout, qr_paddin
         qr_x = qr_center_x - (qr_size / 2)
         qr_y = center_y - (qr_size / 2)
         c.drawImage(img_reader, qr_x, qr_y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask='auto')
-        c.setFont("Helvetica", max(6, int(h * 8)))
+        font_size = max(6, int(h * 8))
+        c.setFont(FONT_NAME if FONT_PATH.exists() else "Helvetica", font_size)
         c.drawCentredString(text_center_x, center_y - (h * 0.12), bin_id)
 
     c.save()
