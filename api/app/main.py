@@ -6,7 +6,8 @@ from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query
 from fastapi import Request
-from sqlalchemy import create_engine
+from fastapi.responses import JSONResponse
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from fastembed import TextEmbedding
@@ -38,6 +39,37 @@ async def request_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["x-request-id"] = request_id
     return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": "http_error",
+                "message": exc.detail,
+                "request_id": getattr(request.state, "request_id", None),
+            }
+        },
+        headers={"x-request-id": getattr(request.state, "request_id", "")},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("event=unhandled_error request_id=%s", getattr(request.state, "request_id", None))
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "internal_error",
+                "message": "internal server error",
+                "request_id": getattr(request.state, "request_id", None),
+            }
+        },
+        headers={"x-request-id": getattr(request.state, "request_id", "")},
+    )
 
 
 def get_db(request: Request):
@@ -72,8 +104,12 @@ def vec_to_pgvector(vec: list[float]) -> str:
 
 
 @app.get("/health")
-def health():
-    return {"ok": True, "embed_model": EMBED_MODEL_NAME}
+def health(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"ok": True, "db_ok": True, "embed_model": EMBED_MODEL_NAME}
+    except Exception:
+        raise HTTPException(status_code=503, detail="database unavailable")
 
 
 @app.post("/ingest")

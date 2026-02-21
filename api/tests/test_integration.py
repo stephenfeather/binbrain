@@ -39,6 +39,15 @@ def test_bins_endpoints(client):
     assert isinstance(r_bins.json(), list)
 
 
+def test_error_shape_on_missing_bin(client):
+    r = client.get("/bins/DOES-NOT-EXIST")
+    assert r.status_code == 404
+    body = r.json()
+    assert "error" in body
+    assert body["error"]["code"] == "http_error"
+    assert body["error"]["request_id"]
+
+
 def test_soft_deleted_bin_hidden(client, db):
     bin_id = "BIN-DEL-0001"
     r_item = client.post(

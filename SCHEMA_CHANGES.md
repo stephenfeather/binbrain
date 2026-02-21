@@ -35,3 +35,6 @@
 ## 2026-02-21
 - Task 6 (photo_labels table):
   - Migration: `migrations/2026-02-21_add_photo_labels.sql`
+
+## 2026-02-21
+- DB health check + structured error responses: no database schema changes.
