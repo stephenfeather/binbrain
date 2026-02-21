@@ -38,3 +38,6 @@
 
 ## 2026-02-21
 - DB health check + structured error responses: no database schema changes.
+
+## 2026-02-21
+- QR label generator (PDF): no database schema changes.
