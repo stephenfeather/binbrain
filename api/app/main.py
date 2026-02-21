@@ -249,6 +249,47 @@ def get_bin(
     }
 
 
+@app.get("/bins")
+def list_bins(
+    db: Session = Depends(get_db),
+):
+    rows = db.execute(
+        text("""
+            WITH item_agg AS (
+              SELECT
+                bin_id,
+                COUNT(*)::int AS item_count,
+                MAX(created_at) AS last_item_at
+              FROM bin_items
+              GROUP BY bin_id
+            ),
+            photo_agg AS (
+              SELECT
+                bin_id,
+                COUNT(*)::int AS photo_count,
+                MAX(created_at) AS last_photo_at
+              FROM photos
+              GROUP BY bin_id
+            )
+            SELECT
+              b.bin_id,
+              COALESCE(ia.item_count, 0) AS item_count,
+              COALESCE(pa.photo_count, 0) AS photo_count,
+              GREATEST(
+                b.created_at,
+                COALESCE(ia.last_item_at, b.created_at),
+                COALESCE(pa.last_photo_at, b.created_at)
+              ) AS last_updated
+            FROM bins b
+            LEFT JOIN item_agg ia ON ia.bin_id = b.bin_id
+            LEFT JOIN photo_agg pa ON pa.bin_id = b.bin_id
+            ORDER BY last_updated DESC
+        """),
+    ).mappings().all()
+
+    return [dict(row) for row in rows]
+
+
 @app.get("/search")
 def search(
     q: str = Query(..., min_length=1),
