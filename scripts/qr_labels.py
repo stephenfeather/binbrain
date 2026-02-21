@@ -98,13 +98,15 @@ def render_pdf(
     if FONT_PATH.exists():
         pdfmetrics.registerFont(TTFont(FONT_NAME, str(FONT_PATH)))
 
-    c = canvas.Canvas(str(out_path), pagesize=letter)
     positions = list(iter_positions(layout))
     if not positions:
         raise ValueError("layout has no positions")
 
     if single_per_page:
         positions = [(0.0, 0.0, layout.label_width_in * inch, layout.label_height_in * inch)]
+        c = canvas.Canvas(str(out_path), pagesize=(layout.label_width_in * inch, layout.label_height_in * inch))
+    else:
+        c = canvas.Canvas(str(out_path), pagesize=letter)
 
     qr_padding = qr_padding_in * inch
     labels_per_page = len(positions)
@@ -119,19 +121,21 @@ def render_pdf(
         img = qr_image(bin_id, qr_px)
         img_reader = ImageReader(img)
 
-        if single_per_page:
-            c.setPageSize((w, h))
-            x, y = 0.0, 0.0
         qr_center_x = x + w * 0.25
-        text_center_x = x + w * 0.75
+        text_center_x = x + w * 0.73
         center_y = y + h * 0.5
 
         qr_x = qr_center_x - (qr_size / 2)
         qr_y = center_y - (qr_size / 2)
         c.drawImage(img_reader, qr_x, qr_y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask='auto')
-        font_size = max(6, int(h * 8))
-        c.setFont(FONT_NAME if FONT_PATH.exists() else "Helvetica", font_size)
-        c.drawCentredString(text_center_x, center_y - (h * 0.12), bin_id)
+        font_name = FONT_NAME if FONT_PATH.exists() else "Helvetica"
+        font_size = max(8, int(h * 0.25))
+        max_text_width = w * 0.5
+        text_width = pdfmetrics.stringWidth(bin_id, font_name, font_size)
+        if text_width > max_text_width and text_width > 0:
+            font_size = max(6, int(font_size * (max_text_width / text_width)))
+        c.setFont(font_name, font_size)
+        c.drawCentredString(text_center_x, center_y - (font_size * 0.35), bin_id)
 
     c.save()
 
