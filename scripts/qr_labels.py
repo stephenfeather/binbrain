@@ -102,9 +102,15 @@ def render_pdf(bin_ids: Iterable[str], out_path: Path, layout: Layout, qr_paddin
         img = qr_image(bin_id, qr_px)
         img_reader = ImageReader(img)
 
-        qr_x = x + (w - qr_size) / 2
-        qr_y = y + (h - qr_size) / 2
+        qr_center_x = x + w * 0.25
+        text_center_x = x + w * 0.75
+        center_y = y + h * 0.5
+
+        qr_x = qr_center_x - (qr_size / 2)
+        qr_y = center_y - (qr_size / 2)
         c.drawImage(img_reader, qr_x, qr_y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask='auto')
+        c.setFont("Helvetica", max(6, int(h * 8)))
+        c.drawCentredString(text_center_x, center_y - (h * 0.12), bin_id)
 
     c.save()
 
