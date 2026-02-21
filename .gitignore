@@ -1,0 +1,5 @@
+.env
+.venv/
+api/binbrain_api.egg-info/
+__pycache__/
+*.pyc
