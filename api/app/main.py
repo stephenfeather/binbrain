@@ -1,9 +1,11 @@
+import logging
 import os
 import uuid
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query
+from fastapi import Request
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
@@ -25,10 +27,23 @@ photo_root.mkdir(parents=True, exist_ok=True)
 # Local CPU text embeddings (bge-small-en-v1.5 => 384 dims)
 embedder = TextEmbedding(model_name=EMBED_MODEL_NAME)
 
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger("binbrain")
 
-def get_db():
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["x-request-id"] = request_id
+    return response
+
+
+def get_db(request: Request):
     db = SessionLocal()
     try:
+        db.info["request_id"] = getattr(request.state, "request_id", None)
         yield db
     finally:
         db.close()
@@ -75,6 +90,13 @@ async def ingest(
     repository.ensure_bin_exists(db, bin_id)
     db.commit()
 
+    logger.info(
+        "event=ingest_start request_id=%s bin_id=%s count=%s",
+        db.info.get("request_id"),
+        bin_id,
+        len(photos),
+    )
+
     saved = []
     bin_dir = photo_root / bin_id
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -92,6 +114,13 @@ async def ingest(
         db.commit()
 
         saved.append({"path": str(fpath)})
+
+    logger.info(
+        "event=ingest_complete request_id=%s bin_id=%s saved=%s",
+        db.info.get("request_id"),
+        bin_id,
+        len(saved),
+    )
 
     return {"bin_id": bin_id, "count": len(saved), "saved": saved}
 
@@ -131,6 +160,12 @@ def create_item(
             repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
 
         db.commit()
+        logger.info(
+            "event=item_create request_id=%s item_id=%s bin_id=%s",
+            db.info.get("request_id"),
+            item_id,
+            bin_id,
+        )
         return {"item_id": item_id, "name": name, "category": category, "notes": notes, "bin_id": bin_id}
 
     except HTTPException:
@@ -157,6 +192,12 @@ def associate_item(
     repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
     db.commit()
 
+    logger.info(
+        "event=item_associate request_id=%s bin_id=%s item_id=%s",
+        db.info.get("request_id"),
+        bin_id,
+        item_id,
+    )
     return {"ok": True, "bin_id": bin_id, "item_id": item_id}
 
 
@@ -216,6 +257,13 @@ async def add_to_bin(
 
         db.commit()
 
+        logger.info(
+            "event=bin_add request_id=%s bin_id=%s item_id=%s photos=%s",
+            getattr(db, "info", {}).get("request_id"),
+            bin_id,
+            item_id,
+            len(saved_photos),
+        )
         return {
             "bin_id": bin_id,
             "item_id": item_id,
@@ -249,6 +297,13 @@ def get_bin(
     items = repository.fetch_bin_items(db, bin_id)
     photos = repository.fetch_bin_photos(db, bin_id)
 
+    logger.info(
+        "event=bin_get request_id=%s bin_id=%s items=%s photos=%s",
+        db.info.get("request_id"),
+        bin_id,
+        len(items),
+        len(photos),
+    )
     return {
         "bin_id": bin_id,
         "items": items,
@@ -260,7 +315,13 @@ def get_bin(
 def list_bins(
     db: Session = Depends(get_db),
 ):
-    return repository.list_bins(db)
+    bins = repository.list_bins(db)
+    logger.info(
+        "event=bins_list request_id=%s count=%s",
+        db.info.get("request_id"),
+        len(bins),
+    )
+    return bins
 
 
 @app.get("/search")
@@ -283,6 +344,14 @@ def search(
 
     rows = repository.search_items(db, qvec_str, limit, offset, min_score)
 
+    logger.info(
+        "event=search request_id=%s limit=%s offset=%s min_score=%s results=%s",
+        db.info.get("request_id"),
+        limit,
+        offset,
+        min_score,
+        len(rows),
+    )
     return {
         "q": q,
         "limit": limit,

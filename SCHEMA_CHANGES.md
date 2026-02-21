@@ -18,3 +18,6 @@
 
 ## 2026-02-21
 - Refactor 1 (repository layer): no database schema changes.
+
+## 2026-02-21
+- Refactor 2 (structured logging): no database schema changes.
