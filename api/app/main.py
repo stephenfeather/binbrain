@@ -401,6 +401,7 @@ def list_bins(
 def search(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     try:
@@ -427,8 +428,9 @@ def search(
             GROUP BY i.item_id, i.name, i.category, e.embedding
             ORDER BY e.embedding <=> CAST(:qvec AS vector)
             LIMIT :limit
+            OFFSET :offset
         """),
-        {"qvec": qvec_str, "limit": limit},
+        {"qvec": qvec_str, "limit": limit, "offset": offset},
     ).mappings().all()
 
-    return {"q": q, "limit": limit, "results": [dict(r) for r in rows]}
+    return {"q": q, "limit": limit, "offset": offset, "results": [dict(r) for r in rows]}
