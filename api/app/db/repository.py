@@ -6,11 +6,19 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-def ensure_bin_exists(db: Session, bin_id: str) -> None:
-    db.execute(
-        text("INSERT INTO bins (bin_id) VALUES (:bin_id) ON CONFLICT (bin_id) DO NOTHING"),
+def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
+    row = db.execute(
+        text("SELECT deleted_at FROM bins WHERE bin_id = :bin_id"),
         {"bin_id": bin_id},
-    )
+    ).first()
+    if row is None:
+        db.execute(
+            text("INSERT INTO bins (bin_id) VALUES (:bin_id)"),
+            {"bin_id": bin_id},
+        )
+        return
+    if row[0] is not None:
+        raise ValueError("bin is deleted")
 
 
 def insert_item(db: Session, name: str, category: Optional[str], notes: Optional[str]) -> int:
@@ -22,7 +30,8 @@ def insert_item(db: Session, name: str, category: Optional[str], notes: Optional
             ON CONFLICT (fingerprint) DO UPDATE
             SET name = EXCLUDED.name,
                 category = EXCLUDED.category,
-                notes = EXCLUDED.notes
+                notes = EXCLUDED.notes,
+                deleted_at = NULL
             RETURNING item_id
             """
         ),
@@ -77,7 +86,7 @@ def insert_photo(db: Session, bin_id: str, path: str) -> None:
 def bin_exists(db: Session, bin_id: str) -> bool:
     return bool(
         db.execute(
-            text("SELECT 1 FROM bins WHERE bin_id = :bin_id"),
+            text("SELECT 1 FROM bins WHERE bin_id = :bin_id AND deleted_at IS NULL"),
             {"bin_id": bin_id},
         ).scalar()
     )
@@ -96,6 +105,7 @@ def fetch_bin_items(db: Session, bin_id: str) -> list[dict]:
             FROM bin_items bi
             JOIN items i ON i.item_id = bi.item_id
             WHERE bi.bin_id = :bin_id
+              AND i.deleted_at IS NULL
             ORDER BY i.item_id
             """
         ),
@@ -127,11 +137,13 @@ def list_bins(db: Session) -> list[dict]:
             """
             WITH item_agg AS (
               SELECT
-                bin_id,
+                bi.bin_id,
                 COUNT(*)::int AS item_count,
-                MAX(created_at) AS last_item_at
-              FROM bin_items
-              GROUP BY bin_id
+                MAX(bi.created_at) AS last_item_at
+              FROM bin_items bi
+              JOIN items i ON i.item_id = bi.item_id
+              WHERE i.deleted_at IS NULL
+              GROUP BY bi.bin_id
             ),
             photo_agg AS (
               SELECT
@@ -153,6 +165,7 @@ def list_bins(db: Session) -> list[dict]:
             FROM bins b
             LEFT JOIN item_agg ia ON ia.bin_id = b.bin_id
             LEFT JOIN photo_agg pa ON pa.bin_id = b.bin_id
+            WHERE b.deleted_at IS NULL
             ORDER BY last_updated DESC
             """
         )
@@ -180,6 +193,7 @@ def search_items(
                 FROM item_embeddings e
                 JOIN items i ON i.item_id = e.item_id
                 LEFT JOIN bin_items bi ON bi.item_id = i.item_id
+                WHERE i.deleted_at IS NULL
                 GROUP BY i.item_id, i.name, i.category, e.embedding
                 ORDER BY e.embedding <=> CAST(:qvec AS vector)
                 LIMIT :limit
@@ -202,7 +216,8 @@ def search_items(
                 FROM item_embeddings e
                 JOIN items i ON i.item_id = e.item_id
                 LEFT JOIN bin_items bi ON bi.item_id = i.item_id
-                WHERE (e.embedding <=> CAST(:qvec AS vector)) <= :max_distance
+                WHERE i.deleted_at IS NULL
+                  AND (e.embedding <=> CAST(:qvec AS vector)) <= :max_distance
                 GROUP BY i.item_id, i.name, i.category, e.embedding
                 ORDER BY e.embedding <=> CAST(:qvec AS vector)
                 LIMIT :limit

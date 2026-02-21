@@ -87,7 +87,10 @@ async def ingest(
         raise HTTPException(status_code=400, detail="bin_id is required")
 
     # Ensure bin exists
-    repository.ensure_bin_exists(db, bin_id)
+    try:
+        repository.ensure_bin_active_or_create(db, bin_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="bin not found")
     db.commit()
 
     logger.info(
@@ -156,7 +159,10 @@ def create_item(
         # 4) Optional association to a bin
         if bin_id:
             bin_id = bin_id.strip()
-            repository.ensure_bin_exists(db, bin_id)
+            try:
+                repository.ensure_bin_active_or_create(db, bin_id)
+            except ValueError:
+                raise HTTPException(status_code=404, detail="bin not found")
             repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
 
         db.commit()
@@ -188,7 +194,10 @@ def associate_item(
     if not bin_id:
         raise HTTPException(status_code=400, detail="bin_id is required")
 
-    repository.ensure_bin_exists(db, bin_id)
+    try:
+        repository.ensure_bin_active_or_create(db, bin_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="bin not found")
     repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
     db.commit()
 
@@ -221,7 +230,10 @@ async def add_to_bin(
         name = None
 
     try:
-        repository.ensure_bin_exists(db, bin_id)
+        try:
+            repository.ensure_bin_active_or_create(db, bin_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="bin not found")
 
         item_id = None
         if name:

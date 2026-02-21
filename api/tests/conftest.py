@@ -14,7 +14,7 @@ def _stub_fastembed() -> None:
             self._dims = dims
 
         def tolist(self):
-            return [0.0] * self._dims
+            return [0.1] * self._dims
 
     class DummyEmbed:
         def __init__(self, model_name: str):
@@ -39,6 +39,7 @@ def _init_schema(engine) -> None:
 
     CREATE TABLE bins (
       bin_id text PRIMARY KEY,
+      deleted_at timestamptz,
       created_at timestamptz DEFAULT now()
     );
 
@@ -47,6 +48,7 @@ def _init_schema(engine) -> None:
       name text NOT NULL,
       category text,
       notes text,
+      deleted_at timestamptz,
       fingerprint text GENERATED ALWAYS AS (
         lower(trim(name)) || '|' || coalesce(lower(trim(category)), '')
       ) STORED,

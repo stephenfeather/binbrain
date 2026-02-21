@@ -37,3 +37,39 @@ def test_bins_endpoints(client):
     r_bins = client.get("/bins")
     assert r_bins.status_code == 200
     assert isinstance(r_bins.json(), list)
+
+
+def test_soft_deleted_bin_hidden(client, db):
+    bin_id = "BIN-DEL-0001"
+    r_item = client.post(
+        "/items",
+        data={"name": "Soft Delete Item", "category": "widget", "bin_id": bin_id},
+    )
+    assert r_item.status_code == 200
+
+    db.execute(text("UPDATE bins SET deleted_at = now() WHERE bin_id = :bin_id"), {"bin_id": bin_id})
+    db.commit()
+
+    r_bin = client.get(f"/bins/{bin_id}")
+    assert r_bin.status_code == 404
+
+    r_bins = client.get("/bins")
+    assert r_bins.status_code == 200
+    assert all(b["bin_id"] != bin_id for b in r_bins.json())
+
+
+def test_soft_deleted_item_hidden_from_search(client, db):
+    r_item = client.post(
+        "/items",
+        data={"name": "Hidden Item", "category": "widget"},
+    )
+    assert r_item.status_code == 200
+    item_id = r_item.json()["item_id"]
+
+    db.execute(text("UPDATE items SET deleted_at = now() WHERE item_id = :item_id"), {"item_id": item_id})
+    db.commit()
+
+    r_search = client.get("/search", params={"q": "Hidden Item"})
+    assert r_search.status_code == 200
+    results = r_search.json()["results"]
+    assert all(r["item_id"] != item_id for r in results)
