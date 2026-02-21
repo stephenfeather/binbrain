@@ -4,11 +4,12 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
 from fastembed import TextEmbedding
 
+from app.db import repository
 DATABASE_URL = os.environ["DATABASE_URL"]
 PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
@@ -71,10 +72,7 @@ async def ingest(
         raise HTTPException(status_code=400, detail="bin_id is required")
 
     # Ensure bin exists
-    db.execute(
-        text("INSERT INTO bins (bin_id) VALUES (:bin_id) ON CONFLICT (bin_id) DO NOTHING"),
-        {"bin_id": bin_id},
-    )
+    repository.ensure_bin_exists(db, bin_id)
     db.commit()
 
     saved = []
@@ -90,10 +88,7 @@ async def ingest(
         fpath = bin_dir / fname
         fpath.write_bytes(await up.read())
 
-        db.execute(
-            text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path)"),
-            {"bin_id": bin_id, "path": str(fpath)},
-        )
+        repository.insert_photo(db, bin_id, str(fpath))
         db.commit()
 
         saved.append({"path": str(fpath)})
@@ -117,11 +112,7 @@ def create_item(
 
     try:
         # 1) Insert item (no commit yet)
-        res = db.execute(
-            text("INSERT INTO items (name, category, notes) VALUES (:name, :category, :notes) RETURNING item_id"),
-            {"name": name, "category": category, "notes": notes},
-        )
-        item_id = int(res.scalar_one())
+        item_id = repository.insert_item(db, name, category, notes)
 
         # 2) Create embedding
         vec = embed_text(canonical_item_text(name, category, notes))
@@ -131,34 +122,13 @@ def create_item(
         vec_str = vec_to_pgvector(vec)
 
         # 3) Upsert embedding row
-        db.execute(
-            text("""
-                INSERT INTO item_embeddings (item_id, model, dims, embedding)
-                VALUES (:item_id, :model, :dims, CAST(:embedding AS vector))
-                ON CONFLICT (item_id) DO UPDATE
-                SET model = EXCLUDED.model,
-                    dims = EXCLUDED.dims,
-                    embedding = EXCLUDED.embedding,
-                    updated_at = now()
-            """),
-            {"item_id": item_id, "model": EMBED_MODEL_NAME, "dims": dims, "embedding": vec_str},
-        )
+        repository.upsert_item_embedding(db, item_id, EMBED_MODEL_NAME, dims, vec_str)
 
         # 4) Optional association to a bin
         if bin_id:
             bin_id = bin_id.strip()
-            db.execute(
-                text("INSERT INTO bins (bin_id) VALUES (:bin_id) ON CONFLICT (bin_id) DO NOTHING"),
-                {"bin_id": bin_id},
-            )
-            db.execute(
-                text("""
-                    INSERT INTO bin_items (bin_id, item_id, confidence, quantity)
-                    VALUES (:bin_id, :item_id, :confidence, :quantity)
-                    ON CONFLICT DO NOTHING
-                """),
-                {"bin_id": bin_id, "item_id": item_id, "confidence": confidence, "quantity": quantity},
-            )
+            repository.ensure_bin_exists(db, bin_id)
+            repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
 
         db.commit()
         return {"item_id": item_id, "name": name, "category": category, "notes": notes, "bin_id": bin_id}
@@ -183,18 +153,8 @@ def associate_item(
     if not bin_id:
         raise HTTPException(status_code=400, detail="bin_id is required")
 
-    db.execute(
-        text("INSERT INTO bins (bin_id) VALUES (:bin_id) ON CONFLICT (bin_id) DO NOTHING"),
-        {"bin_id": bin_id},
-    )
-    db.execute(
-        text("""
-            INSERT INTO bin_items (bin_id, item_id, confidence, quantity)
-            VALUES (:bin_id, :item_id, :confidence, :quantity)
-            ON CONFLICT DO NOTHING
-        """),
-        {"bin_id": bin_id, "item_id": item_id, "confidence": confidence, "quantity": quantity},
-    )
+    repository.ensure_bin_exists(db, bin_id)
+    repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
     db.commit()
 
     return {"ok": True, "bin_id": bin_id, "item_id": item_id}
@@ -220,22 +180,11 @@ async def add_to_bin(
         name = None
 
     try:
-        db.execute(
-            text("INSERT INTO bins (bin_id) VALUES (:bin_id) ON CONFLICT (bin_id) DO NOTHING"),
-            {"bin_id": bin_id},
-        )
+        repository.ensure_bin_exists(db, bin_id)
 
         item_id = None
         if name:
-            res = db.execute(
-                text("""
-                    INSERT INTO items (name, category, notes)
-                    VALUES (:name, :category, :notes)
-                    RETURNING item_id
-                """),
-                {"name": name, "category": category, "notes": notes},
-            )
-            item_id = int(res.scalar_one())
+            item_id = repository.insert_item(db, name, category, notes)
 
             vec = embed_text(canonical_item_text(name, category, notes))
             dims = len(vec)
@@ -243,18 +192,7 @@ async def add_to_bin(
                 raise HTTPException(status_code=500, detail=f"unexpected embedding dims {dims}, expected 384")
             vec_str = vec_to_pgvector(vec)
 
-            db.execute(
-                text("""
-                    INSERT INTO item_embeddings (item_id, model, dims, embedding)
-                    VALUES (:item_id, :model, :dims, CAST(:embedding AS vector))
-                    ON CONFLICT (item_id) DO UPDATE
-                    SET model = EXCLUDED.model,
-                        dims = EXCLUDED.dims,
-                        embedding = EXCLUDED.embedding,
-                        updated_at = now()
-                """),
-                {"item_id": item_id, "model": EMBED_MODEL_NAME, "dims": dims, "embedding": vec_str},
-            )
+            repository.upsert_item_embedding(db, item_id, EMBED_MODEL_NAME, dims, vec_str)
 
         saved_photos = []
         if photos:
@@ -270,21 +208,11 @@ async def add_to_bin(
                 fpath = bin_dir / fname
                 fpath.write_bytes(await up.read())
 
-                db.execute(
-                    text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path)"),
-                    {"bin_id": bin_id, "path": str(fpath)},
-                )
+                repository.insert_photo(db, bin_id, str(fpath))
                 saved_photos.append({"path": str(fpath)})
 
         if item_id is not None:
-            db.execute(
-                text("""
-                    INSERT INTO bin_items (bin_id, item_id, confidence, quantity)
-                    VALUES (:bin_id, :item_id, :confidence, :quantity)
-                    ON CONFLICT DO NOTHING
-                """),
-                {"bin_id": bin_id, "item_id": item_id, "confidence": confidence, "quantity": quantity},
-            )
+            repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
 
         db.commit()
 
@@ -314,45 +242,17 @@ def get_bin(
     if not bin_id:
         raise HTTPException(status_code=400, detail="bin_id is required")
 
-    exists = db.execute(
-        text("SELECT 1 FROM bins WHERE bin_id = :bin_id"),
-        {"bin_id": bin_id},
-    ).scalar()
+    exists = repository.bin_exists(db, bin_id)
     if not exists:
         raise HTTPException(status_code=404, detail="bin not found")
 
-    items = db.execute(
-        text("""
-            SELECT
-              i.item_id,
-              i.name,
-              i.category,
-              bi.quantity,
-              bi.confidence
-            FROM bin_items bi
-            JOIN items i ON i.item_id = bi.item_id
-            WHERE bi.bin_id = :bin_id
-            ORDER BY i.item_id
-        """),
-        {"bin_id": bin_id},
-    ).mappings().all()
-
-    photos = db.execute(
-        text("""
-            SELECT
-              photo_id,
-              path
-            FROM photos
-            WHERE bin_id = :bin_id
-            ORDER BY photo_id
-        """),
-        {"bin_id": bin_id},
-    ).mappings().all()
+    items = repository.fetch_bin_items(db, bin_id)
+    photos = repository.fetch_bin_photos(db, bin_id)
 
     return {
         "bin_id": bin_id,
-        "items": [dict(row) for row in items],
-        "photos": [dict(row) for row in photos],
+        "items": items,
+        "photos": photos,
     }
 
 
@@ -360,41 +260,7 @@ def get_bin(
 def list_bins(
     db: Session = Depends(get_db),
 ):
-    rows = db.execute(
-        text("""
-            WITH item_agg AS (
-              SELECT
-                bin_id,
-                COUNT(*)::int AS item_count,
-                MAX(created_at) AS last_item_at
-              FROM bin_items
-              GROUP BY bin_id
-            ),
-            photo_agg AS (
-              SELECT
-                bin_id,
-                COUNT(*)::int AS photo_count,
-                MAX(created_at) AS last_photo_at
-              FROM photos
-              GROUP BY bin_id
-            )
-            SELECT
-              b.bin_id,
-              COALESCE(ia.item_count, 0) AS item_count,
-              COALESCE(pa.photo_count, 0) AS photo_count,
-              GREATEST(
-                b.created_at,
-                COALESCE(ia.last_item_at, b.created_at),
-                COALESCE(pa.last_photo_at, b.created_at)
-              ) AS last_updated
-            FROM bins b
-            LEFT JOIN item_agg ia ON ia.bin_id = b.bin_id
-            LEFT JOIN photo_agg pa ON pa.bin_id = b.bin_id
-            ORDER BY last_updated DESC
-        """),
-    ).mappings().all()
-
-    return [dict(row) for row in rows]
+    return repository.list_bins(db)
 
 
 @app.get("/search")
@@ -415,51 +281,12 @@ def search(
 
     qvec_str = vec_to_pgvector(qvec)
 
-    if min_score is None:
-        rows = db.execute(
-            text("""
-                SELECT
-                  i.item_id,
-                  i.name,
-                  i.category,
-                  (e.embedding <=> CAST(:qvec AS vector)) AS distance,
-                  array_remove(array_agg(bi.bin_id), NULL) AS bins
-                FROM item_embeddings e
-                JOIN items i ON i.item_id = e.item_id
-                LEFT JOIN bin_items bi ON bi.item_id = i.item_id
-                GROUP BY i.item_id, i.name, i.category, e.embedding
-                ORDER BY e.embedding <=> CAST(:qvec AS vector)
-                LIMIT :limit
-                OFFSET :offset
-            """),
-            {"qvec": qvec_str, "limit": limit, "offset": offset},
-        ).mappings().all()
-    else:
-        max_distance = 1.0 - min_score
-        rows = db.execute(
-            text("""
-                SELECT
-                  i.item_id,
-                  i.name,
-                  i.category,
-                  (e.embedding <=> CAST(:qvec AS vector)) AS distance,
-                  array_remove(array_agg(bi.bin_id), NULL) AS bins
-                FROM item_embeddings e
-                JOIN items i ON i.item_id = e.item_id
-                LEFT JOIN bin_items bi ON bi.item_id = i.item_id
-                WHERE (e.embedding <=> CAST(:qvec AS vector)) <= :max_distance
-                GROUP BY i.item_id, i.name, i.category, e.embedding
-                ORDER BY e.embedding <=> CAST(:qvec AS vector)
-                LIMIT :limit
-                OFFSET :offset
-            """),
-            {"qvec": qvec_str, "limit": limit, "offset": offset, "max_distance": max_distance},
-        ).mappings().all()
+    rows = repository.search_items(db, qvec_str, limit, offset, min_score)
 
     return {
         "q": q,
         "limit": limit,
         "offset": offset,
         "min_score": min_score,
-        "results": [dict(r) for r in rows],
+        "results": rows,
     }

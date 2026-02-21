@@ -15,3 +15,6 @@
 
 ## 2026-02-21
 - Task 8 (GET /search min_score): no database schema changes.
+
+## 2026-02-21
+- Refactor 1 (repository layer): no database schema changes.
