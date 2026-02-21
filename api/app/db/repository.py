@@ -15,7 +15,17 @@ def ensure_bin_exists(db: Session, bin_id: str) -> None:
 
 def insert_item(db: Session, name: str, category: Optional[str], notes: Optional[str]) -> int:
     res = db.execute(
-        text("INSERT INTO items (name, category, notes) VALUES (:name, :category, :notes) RETURNING item_id"),
+        text(
+            """
+            INSERT INTO items (name, category, notes)
+            VALUES (:name, :category, :notes)
+            ON CONFLICT (fingerprint) DO UPDATE
+            SET name = EXCLUDED.name,
+                category = EXCLUDED.category,
+                notes = EXCLUDED.notes
+            RETURNING item_id
+            """
+        ),
         {"name": name, "category": category, "notes": notes},
     )
     return int(res.scalar_one())

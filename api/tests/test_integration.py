@@ -2,7 +2,6 @@ import pytest
 from sqlalchemy import text
 
 
-@pytest.mark.xfail(reason="/items does not upsert on fingerprint yet")
 def test_create_item_twice_idempotent(client, db):
     payload = {"name": "M3 socket head cap screw 12mm", "category": "fastener"}
 

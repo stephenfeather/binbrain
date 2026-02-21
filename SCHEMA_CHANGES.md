@@ -24,3 +24,6 @@
 
 ## 2026-02-21
 - Testing strategy: no database schema changes.
+
+## 2026-02-21
+- /items upsert: no database schema changes.
