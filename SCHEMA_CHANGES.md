@@ -31,3 +31,7 @@
 ## 2026-02-21
 - Task 4 (soft delete): add deleted_at columns to bins and items.
   - Migration: `migrations/2026-02-21_add_soft_delete.sql`
+
+## 2026-02-21
+- Task 6 (photo_labels table):
+  - Migration: `migrations/2026-02-21_add_photo_labels.sql`
