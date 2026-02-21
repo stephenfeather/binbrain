@@ -200,6 +200,111 @@ def associate_item(
     return {"ok": True, "bin_id": bin_id, "item_id": item_id}
 
 
+@app.post("/bins/{bin_id}/add")
+async def add_to_bin(
+    bin_id: str,
+    name: Optional[str] = Form(None),
+    category: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    confidence: Optional[float] = Form(None),
+    quantity: Optional[float] = Form(None),
+    photos: Optional[list[UploadFile]] = File(None),
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    name = (name or "").strip() if name is not None else None
+    if name == "":
+        name = None
+
+    try:
+        db.execute(
+            text("INSERT INTO bins (bin_id) VALUES (:bin_id) ON CONFLICT (bin_id) DO NOTHING"),
+            {"bin_id": bin_id},
+        )
+
+        item_id = None
+        if name:
+            res = db.execute(
+                text("""
+                    INSERT INTO items (name, category, notes)
+                    VALUES (:name, :category, :notes)
+                    RETURNING item_id
+                """),
+                {"name": name, "category": category, "notes": notes},
+            )
+            item_id = int(res.scalar_one())
+
+            vec = embed_text(canonical_item_text(name, category, notes))
+            dims = len(vec)
+            if dims != 384:
+                raise HTTPException(status_code=500, detail=f"unexpected embedding dims {dims}, expected 384")
+            vec_str = vec_to_pgvector(vec)
+
+            db.execute(
+                text("""
+                    INSERT INTO item_embeddings (item_id, model, dims, embedding)
+                    VALUES (:item_id, :model, :dims, CAST(:embedding AS vector))
+                    ON CONFLICT (item_id) DO UPDATE
+                    SET model = EXCLUDED.model,
+                        dims = EXCLUDED.dims,
+                        embedding = EXCLUDED.embedding,
+                        updated_at = now()
+                """),
+                {"item_id": item_id, "model": EMBED_MODEL_NAME, "dims": dims, "embedding": vec_str},
+            )
+
+        saved_photos = []
+        if photos:
+            bin_dir = photo_root / bin_id
+            bin_dir.mkdir(parents=True, exist_ok=True)
+
+            for up in photos:
+                ext = os.path.splitext(up.filename or "")[1].lower()
+                if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"):
+                    ext = ext if ext else ".bin"
+
+                fname = f"{uuid.uuid4().hex}{ext}"
+                fpath = bin_dir / fname
+                fpath.write_bytes(await up.read())
+
+                db.execute(
+                    text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path)"),
+                    {"bin_id": bin_id, "path": str(fpath)},
+                )
+                saved_photos.append({"path": str(fpath)})
+
+        if item_id is not None:
+            db.execute(
+                text("""
+                    INSERT INTO bin_items (bin_id, item_id, confidence, quantity)
+                    VALUES (:bin_id, :item_id, :confidence, :quantity)
+                    ON CONFLICT DO NOTHING
+                """),
+                {"bin_id": bin_id, "item_id": item_id, "confidence": confidence, "quantity": quantity},
+            )
+
+        db.commit()
+
+        return {
+            "bin_id": bin_id,
+            "item_id": item_id,
+            "name": name,
+            "category": category,
+            "notes": notes,
+            "photos": saved_photos,
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"add_to_bin failed: {e}")
+
+
 @app.get("/bins/{bin_id}")
 def get_bin(
     bin_id: str,
