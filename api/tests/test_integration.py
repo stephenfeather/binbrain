@@ -82,6 +82,24 @@ def test_photo_suggest_missing(client):
     assert body["error"]["code"] == "http_error"
 
 
+def test_ingest_multiple_photos_returns_ids(client):
+    bin_id = "BIN-INGEST-0001"
+    files = [
+        ("photos", ("a.jpg", b"aaa", "image/jpeg")),
+        ("photos", ("b.jpg", b"bbb", "image/jpeg")),
+        ("photos", ("c.jpg", b"ccc", "image/jpeg")),
+    ]
+    resp = client.post("/ingest", data={"bin_id": bin_id}, files=files)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bin_id"] == bin_id
+    assert isinstance(body["photos"], list)
+    assert len(body["photos"]) == 3
+    for entry in body["photos"]:
+        assert "photo_id" in entry
+        assert "path" in entry
+
+
 def test_soft_deleted_bin_hidden(client, db):
     bin_id = "BIN-DEL-0001"
     r_item = client.post(
