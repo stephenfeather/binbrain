@@ -20,6 +20,11 @@ test = [
   "pytest==8.3.4",
   "httpx==0.27.2",
 ]
+scripts = [
+  "qrcode[pil]==7.4.2",
+  "reportlab==4.2.5",
+  "psycopg[binary]==3.2.3",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

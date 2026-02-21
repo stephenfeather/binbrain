@@ -2,10 +2,11 @@
 
 This script generates a PDF of QR labels sized for 2" x 1" labels on letter paper.
 
-## Install
+## Install (uv)
 
 ```
-pip install -r scripts/requirements.txt
+cd api
+uv sync --extra scripts
 ```
 
 Font:
@@ -16,7 +17,7 @@ Font:
 From a file of bin_ids:
 
 ```
-python scripts/qr_labels.py \
+uv run python scripts/qr_labels.py \
   --input bins.txt \
   --out labels.pdf
 ```
@@ -24,11 +25,16 @@ python scripts/qr_labels.py \
 From the database (uses `DATABASE_URL`):
 
 ```
+DATABASE_URL=postgresql+psycopg://binbrain:***@127.0.0.1:5432/binbrain \
+uv run python scripts/qr_labels.py \
+  --from-db \
+  --out labels.pdf
+```
 
 Sequential bin_ids:
 
 ```
-python scripts/qr_labels.py \
+uv run python scripts/qr_labels.py \
   --sequential \
   --start 1 \
   --count 120 \
@@ -40,19 +46,13 @@ This generates `BIN-0001` through `BIN-0120` by default. Use `--prefix` and `--p
 Label printers (one label per page):
 
 ```
-python scripts/qr_labels.py \
+uv run python scripts/qr_labels.py \
   --sequential \
   --start 1 \
   --count 120 \
   --out labels.pdf \
   --single-per-page
 ```
-DATABASE_URL=postgresql+psycopg://binbrain:***@127.0.0.1:5432/binbrain \
-python scripts/qr_labels.py \
-  --from-db \
-  --out labels.pdf
-```
-
 ## Layout Defaults (2" x 1")
 
 - Label size: 2.0" x 1.0"
