@@ -141,6 +141,13 @@ def photo_exists(db: Session, photo_id: int) -> bool:
     )
 
 
+def fetch_photo_path(db: Session, photo_id: int) -> str | None:
+    return db.execute(
+        text("SELECT path FROM photos WHERE photo_id = :photo_id"),
+        {"photo_id": photo_id},
+    ).scalar()
+
+
 def fetch_photo_groups(db: Session, photo_id: int) -> list[dict]:
     rows = db.execute(
         text(

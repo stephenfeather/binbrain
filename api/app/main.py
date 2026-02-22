@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from fastembed import TextEmbedding
 
 from app.db import repository
+from app.services.detection import detect
 DATABASE_URL = os.environ["DATABASE_URL"]
 PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
@@ -411,7 +412,11 @@ def detect_for_photo(
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
-    detections = []
+    photo_path = repository.fetch_photo_path(db, photo_id)
+    if not photo_path:
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    detections = detect(photo_path)
     model = "stub"
     repository.insert_photo_detections(db, photo_id, model, detections)
     repository.clear_detection_groups(db, photo_id, model)
