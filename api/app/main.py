@@ -4,8 +4,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query, Body
-from fastapi import Request
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query, Body, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
@@ -44,12 +44,43 @@ async def request_id_middleware(request: Request, call_next):
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    status_code = exc.status_code
+    code_map = {
+        400: "bad_request",
+        404: "not_found",
+        409: "conflict",
+        413: "payload_too_large",
+        415: "unsupported_media_type",
+        429: "rate_limited",
+        500: "internal_error",
+        503: "service_unavailable",
+    }
+    error_code = code_map.get(status_code, "bad_request" if status_code == 422 else "internal_error")
+    message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
     return JSONResponse(
-        status_code=exc.status_code,
+        status_code=status_code,
         content={
+            "version": "1",
             "error": {
-                "code": "http_error",
-                "message": exc.detail,
+                "code": error_code,
+                "message": message,
+                "request_id": getattr(request.state, "request_id", None),
+            }
+        },
+        headers={"x-request-id": getattr(request.state, "request_id", "")},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=400,
+        content={
+            "version": "1",
+            "error": {
+                "code": "bad_request",
+                "message": "validation error",
+                "details": exc.errors(),
                 "request_id": getattr(request.state, "request_id", None),
             }
         },
@@ -63,6 +94,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={
+            "version": "1",
             "error": {
                 "code": "internal_error",
                 "message": "internal server error",

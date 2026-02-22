@@ -46,7 +46,7 @@ def test_error_shape_on_missing_bin(client):
     assert r.status_code == 404
     body = r.json()
     assert "error" in body
-    assert body["error"]["code"] == "http_error"
+    assert body["error"]["code"] == "not_found"
     assert body["error"]["request_id"]
 
 
@@ -85,7 +85,7 @@ def test_photo_suggest_missing(client):
     resp = client.get("/photos/999999/suggest")
     assert resp.status_code == 404
     body = resp.json()
-    assert body["error"]["code"] == "http_error"
+    assert body["error"]["code"] == "not_found"
 
 
 def test_ingest_multiple_photos_returns_ids(client):
@@ -128,7 +128,7 @@ def test_photo_detect_missing(client):
     resp = client.post("/photos/999999/detect")
     assert resp.status_code == 404
     body = resp.json()
-    assert body["error"]["code"] == "http_error"
+    assert body["error"]["code"] == "not_found"
 
 
 def test_photo_groups(client, db):
@@ -191,7 +191,7 @@ def test_photo_groups_missing(client):
     resp = client.get("/photos/999999/groups")
     assert resp.status_code == 404
     body = resp.json()
-    assert body["error"]["code"] == "http_error"
+    assert body["error"]["code"] == "not_found"
 
 
 def test_detection_cascade_delete(client, db):

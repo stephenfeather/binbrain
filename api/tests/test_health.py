@@ -24,7 +24,7 @@ def test_health_db_down(app_module):
         resp = client.get("/health")
         assert resp.status_code == 503
         body = resp.json()
-        assert body["error"]["code"] == "http_error"
+        assert body["error"]["code"] == "service_unavailable"
     finally:
         app_module.engine.dispose()
         app_module.engine = original_engine
