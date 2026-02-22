@@ -161,6 +161,14 @@ async def ingest(
         len(saved),
     )
 
+    if saved:
+        logger.info(
+            "event=ingest_photo_ids request_id=%s bin_id=%s photo_ids=%s",
+            db.info.get("request_id"),
+            bin_id,
+            [p["photo_id"] for p in saved],
+        )
+
     return {"bin_id": bin_id, "photos": saved}
 
 
@@ -307,11 +315,18 @@ async def add_to_bin(
 
         logger.info(
             "event=bin_add request_id=%s bin_id=%s item_id=%s photos=%s",
-            getattr(db, "info", {}).get("request_id"),
+            db.info.get("request_id"),
             bin_id,
             item_id,
             len(saved_photos),
         )
+        if saved_photos:
+            logger.info(
+                "event=bin_add_photo_ids request_id=%s bin_id=%s photo_ids=%s",
+                db.info.get("request_id"),
+                bin_id,
+                [p["photo_id"] for p in saved_photos],
+            )
         return {
             "bin_id": bin_id,
             "item_id": item_id,
@@ -380,6 +395,11 @@ def suggest_for_photo(
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
+    logger.info(
+        "event=photo_suggest request_id=%s photo_id=%s",
+        db.info.get("request_id"),
+        photo_id,
+    )
     return {"photo_id": photo_id, "suggestions": []}
 
 
@@ -397,6 +417,13 @@ def detect_for_photo(
     repository.clear_detection_groups(db, photo_id, model)
     db.commit()
 
+    logger.info(
+        "event=photo_detect request_id=%s photo_id=%s model=%s detections=%s",
+        db.info.get("request_id"),
+        photo_id,
+        model,
+        len(detections),
+    )
     return {
         "photo_id": photo_id,
         "model": model,
@@ -419,6 +446,13 @@ def groups_for_photo(
         repository.clear_detection_groups(db, photo_id, model)
         repository.insert_detection_groups(db, photo_id, model, groups)
         db.commit()
+    logger.info(
+        "event=photo_groups request_id=%s photo_id=%s model=%s groups=%s",
+        db.info.get("request_id"),
+        photo_id,
+        model,
+        len(groups),
+    )
     return {"photo_id": photo_id, "groups": groups}
 
 
@@ -468,6 +502,13 @@ def confirm_photo_groups(
             )
 
         db.commit()
+        logger.info(
+            "event=photo_confirm request_id=%s photo_id=%s bin_id=%s item_ids=%s",
+            db.info.get("request_id"),
+            photo_id,
+            bin_id,
+            [i["item_id"] for i in items_out],
+        )
     except HTTPException:
         db.rollback()
         raise
