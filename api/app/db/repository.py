@@ -161,6 +161,119 @@ def fetch_photo_groups(db: Session, photo_id: int) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def insert_photo_detections(
+    db: Session,
+    photo_id: int,
+    model: str,
+    detections: list[dict],
+) -> None:
+    if not detections:
+        return
+    db.execute(
+        text(
+            """
+            INSERT INTO photo_detections
+              (photo_id, model, label, category, confidence, x1, y1, x2, y2)
+            VALUES
+              (:photo_id, :model, :label, :category, :confidence, :x1, :y1, :x2, :y2)
+            """
+        ),
+        [
+            {
+                "photo_id": photo_id,
+                "model": model,
+                "label": d["label"],
+                "category": d.get("category"),
+                "confidence": d["confidence"],
+                "x1": d["bbox"][0],
+                "y1": d["bbox"][1],
+                "x2": d["bbox"][2],
+                "y2": d["bbox"][3],
+            }
+            for d in detections
+        ],
+    )
+
+
+def clear_detection_groups(db: Session, photo_id: int, model: str) -> None:
+    db.execute(
+        text(
+            "DELETE FROM photo_detection_groups WHERE photo_id = :photo_id AND model = :model"
+        ),
+        {"photo_id": photo_id, "model": model},
+    )
+
+
+def fetch_cached_groups(db: Session, photo_id: int, model: str) -> list[dict]:
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              label,
+              category,
+              confidence_avg AS confidence,
+              count_estimate
+            FROM photo_detection_groups
+            WHERE photo_id = :photo_id AND model = :model
+            ORDER BY confidence_avg DESC, label ASC, category ASC
+            """
+        ),
+        {"photo_id": photo_id, "model": model},
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def compute_groups_from_detections(db: Session, photo_id: int, model: str) -> list[dict]:
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              label,
+              category,
+              AVG(confidence)::float AS confidence,
+              COUNT(*)::int AS count_estimate
+            FROM photo_detections
+            WHERE photo_id = :photo_id AND model = :model
+            GROUP BY label, category
+            ORDER BY confidence DESC, label ASC, category ASC
+            """
+        ),
+        {"photo_id": photo_id, "model": model},
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def insert_detection_groups(
+    db: Session,
+    photo_id: int,
+    model: str,
+    groups: list[dict],
+) -> None:
+    if not groups:
+        return
+    db.execute(
+        text(
+            """
+            INSERT INTO photo_detection_groups
+              (photo_id, model, label, category, confidence_avg, count_estimate)
+            VALUES
+              (:photo_id, :model, :label, :category, :confidence_avg, :count_estimate)
+            """
+        ),
+        [
+            {
+                "photo_id": photo_id,
+                "model": model,
+                "label": g["label"],
+                "category": g.get("category"),
+                "confidence_avg": g["confidence"],
+                "count_estimate": g["count_estimate"],
+            }
+            for g in groups
+        ],
+    )
+
+
 def list_bins(db: Session) -> list[dict]:
     rows = db.execute(
         text(

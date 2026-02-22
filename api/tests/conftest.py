@@ -31,6 +31,9 @@ def _init_schema(engine) -> None:
     ddl = """
     CREATE EXTENSION IF NOT EXISTS vector;
 
+    DROP TABLE IF EXISTS photo_detection_groups CASCADE;
+    DROP TABLE IF EXISTS photo_detections CASCADE;
+    DROP TABLE IF EXISTS photo_labels CASCADE;
     DROP TABLE IF EXISTS item_embeddings CASCADE;
     DROP TABLE IF EXISTS bin_items CASCADE;
     DROP TABLE IF EXISTS photos CASCADE;
@@ -96,6 +99,31 @@ def _init_schema(engine) -> None:
       label text NOT NULL,
       category text,
       confidence float NOT NULL,
+      created_at timestamptz DEFAULT now()
+    );
+
+    CREATE TABLE photo_detections (
+      id bigserial PRIMARY KEY,
+      photo_id bigint REFERENCES photos(photo_id) ON DELETE CASCADE,
+      model text NOT NULL,
+      label text NOT NULL,
+      category text,
+      confidence float NOT NULL,
+      x1 float NOT NULL,
+      y1 float NOT NULL,
+      x2 float NOT NULL,
+      y2 float NOT NULL,
+      created_at timestamptz DEFAULT now()
+    );
+
+    CREATE TABLE photo_detection_groups (
+      id bigserial PRIMARY KEY,
+      photo_id bigint REFERENCES photos(photo_id) ON DELETE CASCADE,
+      model text NOT NULL,
+      label text NOT NULL,
+      category text,
+      confidence_avg float NOT NULL,
+      count_estimate int NOT NULL,
       created_at timestamptz DEFAULT now()
     );
     """

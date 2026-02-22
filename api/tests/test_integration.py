@@ -135,15 +135,23 @@ def test_photo_groups(client, db):
     assert resp.status_code == 200
     photo_id = resp.json()["photos"][0]["photo_id"]
 
+    r_groups = client.get(f"/photos/{photo_id}/groups")
+    assert r_groups.status_code == 200
+    body = r_groups.json()
+    assert body["photo_id"] == photo_id
+    groups = body["groups"]
+    assert isinstance(groups, list)
+    assert groups == []
+
     db.execute(
         text(
             """
-            INSERT INTO photo_labels (photo_id, model, label, category, confidence)
+            INSERT INTO photo_detections (photo_id, model, label, category, confidence, x1, y1, x2, y2)
             VALUES
-              (:photo_id, 'stub', 'M3 screw', 'fastener', 0.9),
-              (:photo_id, 'stub', 'M3 screw', 'fastener', 0.8),
-              (:photo_id, 'stub', 'M4 screw', 'fastener', 0.95),
-              (:photo_id, 'stub', 'washer', 'fastener', 0.5)
+              (:photo_id, 'stub', 'M3 screw', 'fastener', 0.9, 0.1, 0.1, 0.2, 0.2),
+              (:photo_id, 'stub', 'M3 screw', 'fastener', 0.8, 0.2, 0.2, 0.3, 0.3),
+              (:photo_id, 'stub', 'M4 screw', 'fastener', 0.95, 0.3, 0.3, 0.4, 0.4),
+              (:photo_id, 'stub', 'washer', 'fastener', 0.5, 0.4, 0.4, 0.5, 0.5)
             """
         ),
         {"photo_id": photo_id},
@@ -152,15 +160,20 @@ def test_photo_groups(client, db):
 
     r_groups = client.get(f"/photos/{photo_id}/groups")
     assert r_groups.status_code == 200
-    body = r_groups.json()
-    assert body["photo_id"] == photo_id
-    groups = body["groups"]
-    assert isinstance(groups, list)
+    groups = r_groups.json()["groups"]
     assert groups[0]["label"] == "M4 screw"
     assert groups[0]["category"] == "fastener"
     assert groups[0]["count_estimate"] == 1
     assert groups[1]["label"] == "M3 screw"
     assert groups[1]["count_estimate"] == 2
+
+    cached = db.execute(
+        text(
+            "SELECT COUNT(*) FROM photo_detection_groups WHERE photo_id = :photo_id AND model = 'stub'"
+        ),
+        {"photo_id": photo_id},
+    ).scalar_one()
+    assert cached == 3
 
 
 def test_photo_groups_missing(client):
@@ -168,6 +181,51 @@ def test_photo_groups_missing(client):
     assert resp.status_code == 404
     body = resp.json()
     assert body["error"]["code"] == "http_error"
+
+
+def test_detection_cascade_delete(client, db):
+    bin_id = "BIN-DEL-DET-0001"
+    resp = client.post(
+        "/ingest",
+        data={"bin_id": bin_id},
+        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+    )
+    assert resp.status_code == 200
+    photo_id = resp.json()["photos"][0]["photo_id"]
+
+    db.execute(
+        text(
+            """
+            INSERT INTO photo_detections (photo_id, model, label, category, confidence, x1, y1, x2, y2)
+            VALUES (:photo_id, 'stub', 'M3 screw', 'fastener', 0.9, 0.1, 0.1, 0.2, 0.2)
+            """
+        ),
+        {"photo_id": photo_id},
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO photo_detection_groups (photo_id, model, label, category, confidence_avg, count_estimate)
+            VALUES (:photo_id, 'stub', 'M3 screw', 'fastener', 0.9, 1)
+            """
+        ),
+        {"photo_id": photo_id},
+    )
+    db.commit()
+
+    db.execute(text("DELETE FROM photos WHERE photo_id = :photo_id"), {"photo_id": photo_id})
+    db.commit()
+
+    det_count = db.execute(
+        text("SELECT COUNT(*) FROM photo_detections WHERE photo_id = :photo_id"),
+        {"photo_id": photo_id},
+    ).scalar_one()
+    grp_count = db.execute(
+        text("SELECT COUNT(*) FROM photo_detection_groups WHERE photo_id = :photo_id"),
+        {"photo_id": photo_id},
+    ).scalar_one()
+    assert det_count == 0
+    assert grp_count == 0
 
 
 def test_soft_deleted_bin_hidden(client, db):

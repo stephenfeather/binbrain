@@ -391,10 +391,16 @@ def detect_for_photo(
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
+    detections = []
+    model = "stub"
+    repository.insert_photo_detections(db, photo_id, model, detections)
+    repository.clear_detection_groups(db, photo_id, model)
+    db.commit()
+
     return {
         "photo_id": photo_id,
-        "model": "stub",
-        "detections": [],
+        "model": model,
+        "detections": detections,
     }
 
 
@@ -406,7 +412,13 @@ def groups_for_photo(
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
-    groups = repository.fetch_photo_groups(db, photo_id)
+    model = "stub"
+    groups = repository.fetch_cached_groups(db, photo_id, model)
+    if not groups:
+        groups = repository.compute_groups_from_detections(db, photo_id, model)
+        repository.clear_detection_groups(db, photo_id, model)
+        repository.insert_detection_groups(db, photo_id, model, groups)
+        db.commit()
     return {"photo_id": photo_id, "groups": groups}
 
 
