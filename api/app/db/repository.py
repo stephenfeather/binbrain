@@ -40,6 +40,27 @@ def insert_item(db: Session, name: str, category: Optional[str], notes: Optional
     return int(res.scalar_one())
 
 
+def insert_item_with_status(
+    db: Session, name: str, category: Optional[str], notes: Optional[str]
+) -> tuple[int, bool]:
+    res = db.execute(
+        text(
+            """
+            INSERT INTO items (name, category, notes)
+            VALUES (:name, :category, :notes)
+            ON CONFLICT (fingerprint) DO UPDATE
+            SET name = EXCLUDED.name,
+                category = EXCLUDED.category,
+                notes = EXCLUDED.notes,
+                deleted_at = NULL
+            RETURNING item_id, (xmax = 0) AS inserted
+            """
+        ),
+        {"name": name, "category": category, "notes": notes},
+    ).mappings().one()
+    return int(res["item_id"]), bool(res["inserted"])
+
+
 def upsert_item_embedding(db: Session, item_id: int, model: str, dims: int, embedding: str) -> None:
     db.execute(
         text(
@@ -63,17 +84,19 @@ def insert_bin_item(
     item_id: int,
     confidence: Optional[float],
     quantity: Optional[float],
-) -> None:
-    db.execute(
+) -> bool:
+    res = db.execute(
         text(
             """
             INSERT INTO bin_items (bin_id, item_id, confidence, quantity)
             VALUES (:bin_id, :item_id, :confidence, :quantity)
             ON CONFLICT DO NOTHING
+            RETURNING id
             """
         ),
         {"bin_id": bin_id, "item_id": item_id, "confidence": confidence, "quantity": quantity},
     )
+    return res.scalar() is not None
 
 
 def insert_photo(db: Session, bin_id: str, path: str) -> int:
@@ -153,6 +176,7 @@ def fetch_photo_groups(db: Session, photo_id: int) -> list[dict]:
         text(
             """
             SELECT
+              (label || '|' || COALESCE(category, '')) AS group_key,
               label,
               category,
               AVG(confidence)::float AS confidence,
@@ -216,6 +240,7 @@ def fetch_cached_groups(db: Session, photo_id: int, model: str) -> list[dict]:
         text(
             """
             SELECT
+              (label || '|' || COALESCE(category, '')) AS group_key,
               label,
               category,
               confidence_avg AS confidence,
@@ -235,6 +260,7 @@ def compute_groups_from_detections(db: Session, photo_id: int, model: str) -> li
         text(
             """
             SELECT
+              (label || '|' || COALESCE(category, '')) AS group_key,
               label,
               category,
               AVG(confidence)::float AS confidence,

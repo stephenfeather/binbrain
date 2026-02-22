@@ -91,6 +91,12 @@ def canonical_item_text(name: str, category: Optional[str], notes: Optional[str]
     return "\n".join(parts)
 
 
+def fingerprint_for(name: str, category: Optional[str]) -> str:
+    name_part = (name or "").strip().lower()
+    cat_part = (category or "").strip().lower()
+    return f"{name_part}|{cat_part}"
+
+
 def embed_text(s: str) -> list[float]:
     s = (s or "").strip()
     if not s:
@@ -108,7 +114,7 @@ def vec_to_pgvector(vec: list[float]) -> str:
 def health(db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
-        return {"ok": True, "db_ok": True, "embed_model": EMBED_MODEL_NAME}
+        return {"version": "1", "ok": True, "db_ok": True, "embed_model": EMBED_MODEL_NAME, "expected_dims": 384}
     except Exception:
         raise HTTPException(status_code=503, detail="database unavailable")
 
@@ -170,7 +176,7 @@ async def ingest(
             [p["photo_id"] for p in saved],
         )
 
-    return {"bin_id": bin_id, "photos": saved}
+    return {"version": "1", "bin_id": bin_id, "photos": saved}
 
 
 @app.post("/items")
@@ -217,7 +223,15 @@ def create_item(
             item_id,
             bin_id,
         )
-        return {"item_id": item_id, "name": name, "category": category, "notes": notes, "bin_id": bin_id}
+        return {
+            "version": "1",
+            "item_id": item_id,
+            "fingerprint": fingerprint_for(name, category),
+            "name": name,
+            "category": category,
+            "notes": notes,
+            "bin_id": bin_id,
+        }
 
     except HTTPException:
         db.rollback()
@@ -368,11 +382,7 @@ def get_bin(
         len(items),
         len(photos),
     )
-    return {
-        "bin_id": bin_id,
-        "items": items,
-        "photos": photos,
-    }
+    return {"version": "1", "bin_id": bin_id, "items": items, "photos": photos}
 
 
 @app.get("/bins")
@@ -385,7 +395,7 @@ def list_bins(
         db.info.get("request_id"),
         len(bins),
     )
-    return bins
+    return {"version": "1", "bins": bins}
 
 
 @app.get("/photos/{photo_id}/suggest")
@@ -401,7 +411,9 @@ def suggest_for_photo(
         db.info.get("request_id"),
         photo_id,
     )
-    return {"photo_id": photo_id, "suggestions": []}
+    suggestions = []
+    suggestions.sort(key=lambda s: (-s.get("confidence", 0.0), s.get("name", "")))
+    return {"version": "1", "photo_id": photo_id, "suggestions": suggestions}
 
 
 @app.post("/photos/{photo_id}/detect")
@@ -430,6 +442,7 @@ def detect_for_photo(
         len(detections),
     )
     return {
+        "version": "1",
         "photo_id": photo_id,
         "model": model,
         "detections": detections,
@@ -458,7 +471,7 @@ def groups_for_photo(
         model,
         len(groups),
     )
-    return {"photo_id": photo_id, "groups": groups}
+    return {"version": "1", "photo_id": photo_id, "model": model, "groups": groups}
 
 
 @app.post("/photos/{photo_id}/confirm")
@@ -474,6 +487,10 @@ def confirm_photo_groups(
     if not bin_id:
         raise HTTPException(status_code=400, detail="bin_id is required")
 
+    version = payload.get("version")
+    if version != "1":
+        raise HTTPException(status_code=400, detail="version must be '1'")
+
     selected_groups = payload.get("selected_groups") or []
     if not isinstance(selected_groups, list):
         raise HTTPException(status_code=400, detail="selected_groups must be a list")
@@ -484,25 +501,34 @@ def confirm_photo_groups(
         raise HTTPException(status_code=404, detail="bin not found")
 
     model = "stub"
-    items_out = []
+    results = []
     try:
         for g in selected_groups:
+            group_key = (g.get("group_key") or "").strip()
             label = (g.get("label") or "").strip()
-            category = g.get("category")
+            category = (g.get("category") or "").strip()
+            if not group_key:
+                raise HTTPException(status_code=400, detail="group_key is required")
             if not label:
                 raise HTTPException(status_code=400, detail="label is required")
+            if not category:
+                raise HTTPException(status_code=400, detail="category is required")
             quantity = g.get("quantity")
 
-            item_id = repository.insert_item(db, label, category, None)
-            repository.insert_bin_item(db, bin_id, item_id, None, quantity)
+            item_id, inserted = repository.insert_item_with_status(db, label, category, None)
+            linked = repository.insert_bin_item(db, bin_id, item_id, None, quantity)
             repository.insert_photo_group_item(db, photo_id, model, label, category, item_id)
 
-            items_out.append(
+            status = "created" if inserted else "updated"
+            if not linked:
+                status = "linked"
+
+            results.append(
                 {
+                    "group_key": group_key or fingerprint_for(label, category),
                     "item_id": item_id,
-                    "label": label,
-                    "category": category,
-                    "quantity": quantity,
+                    "fingerprint": fingerprint_for(label, category),
+                    "status": status,
                 }
             )
 
@@ -512,7 +538,7 @@ def confirm_photo_groups(
             db.info.get("request_id"),
             photo_id,
             bin_id,
-            [i["item_id"] for i in items_out],
+            [i["item_id"] for i in results],
         )
     except HTTPException:
         db.rollback()
@@ -521,7 +547,7 @@ def confirm_photo_groups(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"confirm failed: {e}")
 
-    return {"photo_id": photo_id, "bin_id": bin_id, "items": items_out}
+    return {"version": "1", "photo_id": photo_id, "bin_id": bin_id, "results": results}
 
 
 @app.get("/search")

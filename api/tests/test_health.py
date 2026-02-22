@@ -7,8 +7,10 @@ def test_health_db_ok(app_module):
     resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
+    assert body["version"] == "1"
     assert body["ok"] is True
     assert body["db_ok"] is True
+    assert body["expected_dims"] == 384
 
 
 def test_health_db_down(app_module):

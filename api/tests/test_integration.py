@@ -36,7 +36,9 @@ def test_bins_endpoints(client):
 
     r_bins = client.get("/bins")
     assert r_bins.status_code == 200
-    assert isinstance(r_bins.json(), list)
+    bins_body = r_bins.json()
+    assert bins_body["version"] == "1"
+    assert isinstance(bins_body["bins"], list)
 
 
 def test_error_shape_on_missing_bin(client):
@@ -73,6 +75,10 @@ def test_photo_suggest_shape(client, db):
     body = resp.json()
     assert body["photo_id"] == photo_id
     assert isinstance(body["suggestions"], list)
+    assert body["suggestions"] == sorted(
+        body["suggestions"],
+        key=lambda s: (-s.get("confidence", 0.0), s.get("name", "")),
+    )
 
 
 def test_photo_suggest_missing(client):
@@ -139,6 +145,7 @@ def test_photo_groups(client, db):
     assert r_groups.status_code == 200
     body = r_groups.json()
     assert body["photo_id"] == photo_id
+    assert body["model"] == "stub"
     groups = body["groups"]
     assert isinstance(groups, list)
     assert groups == []
@@ -166,6 +173,10 @@ def test_photo_groups(client, db):
     assert groups[0]["count_estimate"] == 1
     assert groups[1]["label"] == "M3 screw"
     assert groups[1]["count_estimate"] == 2
+    assert groups == sorted(
+        groups,
+        key=lambda g: (-g["confidence"], g["label"], g.get("category") or ""),
+    )
 
     cached = db.execute(
         text(
@@ -239,10 +250,11 @@ def test_confirm_groups_idempotent(client, db):
     photo_id = resp.json()["photos"][0]["photo_id"]
 
     payload = {
+        "version": "1",
         "bin_id": bin_id,
         "selected_groups": [
-            {"label": "M3 screw", "category": "fastener", "quantity": 34},
-            {"label": "washer", "category": "fastener", "quantity": 12},
+            {"group_key": "M3 screw|fastener", "label": "M3 screw", "category": "fastener", "quantity": 34},
+            {"group_key": "washer|fastener", "label": "washer", "category": "fastener", "quantity": 12},
         ],
     }
     r1 = client.post(f"/photos/{photo_id}/confirm", json=payload)
@@ -250,9 +262,9 @@ def test_confirm_groups_idempotent(client, db):
     r2 = client.post(f"/photos/{photo_id}/confirm", json=payload)
     assert r2.status_code == 200
 
-    items = r1.json()["items"]
-    assert len(items) == 2
-    item_ids = [i["item_id"] for i in items]
+    results = r1.json()["results"]
+    assert len(results) == 2
+    item_ids = [i["item_id"] for i in results]
 
     count_items = db.execute(
         text("SELECT COUNT(*) FROM items WHERE name IN ('M3 screw','washer')")
@@ -291,7 +303,8 @@ def test_soft_deleted_bin_hidden(client, db):
 
     r_bins = client.get("/bins")
     assert r_bins.status_code == 200
-    assert all(b["bin_id"] != bin_id for b in r_bins.json())
+    bins = r_bins.json()["bins"]
+    assert all(b["bin_id"] != bin_id for b in bins)
 
 
 def test_soft_deleted_item_hidden_from_search(client, db):
