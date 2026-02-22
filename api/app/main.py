@@ -398,6 +398,18 @@ def detect_for_photo(
     }
 
 
+@app.get("/photos/{photo_id}/groups")
+def groups_for_photo(
+    photo_id: int,
+    db: Session = Depends(get_db),
+):
+    if not repository.photo_exists(db, photo_id):
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    groups = repository.fetch_photo_groups(db, photo_id)
+    return {"photo_id": photo_id, "groups": groups}
+
+
 @app.get("/search")
 def search(
     q: str = Query(..., min_length=1),

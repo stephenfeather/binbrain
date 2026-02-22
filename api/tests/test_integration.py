@@ -125,6 +125,51 @@ def test_photo_detect_missing(client):
     assert body["error"]["code"] == "http_error"
 
 
+def test_photo_groups(client, db):
+    bin_id = "BIN-GROUP-0001"
+    resp = client.post(
+        "/ingest",
+        data={"bin_id": bin_id},
+        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+    )
+    assert resp.status_code == 200
+    photo_id = resp.json()["photos"][0]["photo_id"]
+
+    db.execute(
+        text(
+            """
+            INSERT INTO photo_labels (photo_id, model, label, category, confidence)
+            VALUES
+              (:photo_id, 'stub', 'M3 screw', 'fastener', 0.9),
+              (:photo_id, 'stub', 'M3 screw', 'fastener', 0.8),
+              (:photo_id, 'stub', 'M4 screw', 'fastener', 0.95),
+              (:photo_id, 'stub', 'washer', 'fastener', 0.5)
+            """
+        ),
+        {"photo_id": photo_id},
+    )
+    db.commit()
+
+    r_groups = client.get(f"/photos/{photo_id}/groups")
+    assert r_groups.status_code == 200
+    body = r_groups.json()
+    assert body["photo_id"] == photo_id
+    groups = body["groups"]
+    assert isinstance(groups, list)
+    assert groups[0]["label"] == "M4 screw"
+    assert groups[0]["category"] == "fastener"
+    assert groups[0]["count_estimate"] == 1
+    assert groups[1]["label"] == "M3 screw"
+    assert groups[1]["count_estimate"] == 2
+
+
+def test_photo_groups_missing(client):
+    resp = client.get("/photos/999999/groups")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "http_error"
+
+
 def test_soft_deleted_bin_hidden(client, db):
     bin_id = "BIN-DEL-0001"
     r_item = client.post(

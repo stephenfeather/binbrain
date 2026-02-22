@@ -50,3 +50,6 @@
 
 ## 2026-02-21
 - Photo detect endpoint: no database schema changes.
+
+## 2026-02-21
+- Photo groups endpoint: no database schema changes.

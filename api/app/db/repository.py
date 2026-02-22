@@ -141,6 +141,26 @@ def photo_exists(db: Session, photo_id: int) -> bool:
     )
 
 
+def fetch_photo_groups(db: Session, photo_id: int) -> list[dict]:
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              label,
+              category,
+              AVG(confidence)::float AS confidence,
+              COUNT(*)::int AS count_estimate
+            FROM photo_labels
+            WHERE photo_id = :photo_id
+            GROUP BY label, category
+            ORDER BY confidence DESC, label ASC, category ASC
+            """
+        ),
+        {"photo_id": photo_id},
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
 def list_bins(db: Session) -> list[dict]:
     rows = db.execute(
         text(

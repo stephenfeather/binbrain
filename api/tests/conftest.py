@@ -88,6 +88,16 @@ def _init_schema(engine) -> None:
       path text NOT NULL,
       created_at timestamptz DEFAULT now()
     );
+
+    CREATE TABLE photo_labels (
+      id bigserial PRIMARY KEY,
+      photo_id bigint REFERENCES photos(photo_id) ON DELETE CASCADE,
+      model text NOT NULL,
+      label text NOT NULL,
+      category text,
+      confidence float NOT NULL,
+      created_at timestamptz DEFAULT now()
+    );
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))
