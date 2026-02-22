@@ -100,6 +100,31 @@ def test_ingest_multiple_photos_returns_ids(client):
         assert "path" in entry
 
 
+def test_photo_detect_shape(client):
+    bin_id = "BIN-DETECT-0001"
+    resp = client.post(
+        "/ingest",
+        data={"bin_id": bin_id},
+        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+    )
+    assert resp.status_code == 200
+    photo_id = resp.json()["photos"][0]["photo_id"]
+
+    r_detect = client.post(f"/photos/{photo_id}/detect")
+    assert r_detect.status_code == 200
+    body = r_detect.json()
+    assert body["photo_id"] == photo_id
+    assert body["model"] == "stub"
+    assert isinstance(body["detections"], list)
+
+
+def test_photo_detect_missing(client):
+    resp = client.post("/photos/999999/detect")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "http_error"
+
+
 def test_soft_deleted_bin_hidden(client, db):
     bin_id = "BIN-DEL-0001"
     r_item = client.post(

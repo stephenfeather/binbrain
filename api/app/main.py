@@ -383,6 +383,21 @@ def suggest_for_photo(
     return {"photo_id": photo_id, "suggestions": []}
 
 
+@app.post("/photos/{photo_id}/detect")
+def detect_for_photo(
+    photo_id: int,
+    db: Session = Depends(get_db),
+):
+    if not repository.photo_exists(db, photo_id):
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    return {
+        "photo_id": photo_id,
+        "model": "stub",
+        "detections": [],
+    }
+
+
 @app.get("/search")
 def search(
     q: str = Query(..., min_length=1),
