@@ -57,6 +57,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     }
     error_code = code_map.get(status_code, "bad_request" if status_code == 422 else "internal_error")
     message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    details = exc.detail if status_code == 400 else None
     return JSONResponse(
         status_code=status_code,
         content={
@@ -64,6 +65,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "error": {
                 "code": error_code,
                 "message": message,
+                **({"details": details} if details is not None else {}),
                 "request_id": getattr(request.state, "request_id", None),
             }
         },
