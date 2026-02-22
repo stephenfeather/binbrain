@@ -34,6 +34,7 @@ def _init_schema(engine) -> None:
     DROP TABLE IF EXISTS photo_detection_groups CASCADE;
     DROP TABLE IF EXISTS photo_detections CASCADE;
     DROP TABLE IF EXISTS photo_labels CASCADE;
+    DROP TABLE IF EXISTS photo_group_items CASCADE;
     DROP TABLE IF EXISTS item_embeddings CASCADE;
     DROP TABLE IF EXISTS bin_items CASCADE;
     DROP TABLE IF EXISTS photos CASCADE;
@@ -126,6 +127,19 @@ def _init_schema(engine) -> None:
       count_estimate int NOT NULL,
       created_at timestamptz DEFAULT now()
     );
+
+    CREATE TABLE photo_group_items (
+      id bigserial PRIMARY KEY,
+      photo_id bigint REFERENCES photos(photo_id) ON DELETE CASCADE,
+      model text NOT NULL,
+      label text NOT NULL,
+      category text,
+      item_id bigint REFERENCES items(item_id) ON DELETE CASCADE,
+      created_at timestamptz DEFAULT now()
+    );
+
+    CREATE UNIQUE INDEX photo_group_items_uq
+    ON photo_group_items (photo_id, model, label, category, item_id);
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))

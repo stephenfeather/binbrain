@@ -274,6 +274,32 @@ def insert_detection_groups(
     )
 
 
+def insert_photo_group_item(
+    db: Session,
+    photo_id: int,
+    model: str,
+    label: str,
+    category: str | None,
+    item_id: int,
+) -> None:
+    db.execute(
+        text(
+            """
+            INSERT INTO photo_group_items (photo_id, model, label, category, item_id)
+            VALUES (:photo_id, :model, :label, :category, :item_id)
+            ON CONFLICT DO NOTHING
+            """
+        ),
+        {
+            "photo_id": photo_id,
+            "model": model,
+            "label": label,
+            "category": category,
+            "item_id": item_id,
+        },
+    )
+
+
 def list_bins(db: Session) -> list[dict]:
     rows = db.execute(
         text(

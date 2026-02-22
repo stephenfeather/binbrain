@@ -57,3 +57,7 @@
 ## 2026-02-21
 - Persisted detections and groups: added photo_detections and photo_detection_groups.
   - Migration: `migrations/2026-02-21_add_photo_detections.sql`
+
+## 2026-02-21
+- Photo confirm endpoint + audit table: added photo_group_items.
+  - Migration: `migrations/2026-02-21_add_photo_group_items.sql`

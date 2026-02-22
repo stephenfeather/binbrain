@@ -228,6 +228,53 @@ def test_detection_cascade_delete(client, db):
     assert grp_count == 0
 
 
+def test_confirm_groups_idempotent(client, db):
+    bin_id = "BIN-CONFIRM-0001"
+    resp = client.post(
+        "/ingest",
+        data={"bin_id": bin_id},
+        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+    )
+    assert resp.status_code == 200
+    photo_id = resp.json()["photos"][0]["photo_id"]
+
+    payload = {
+        "bin_id": bin_id,
+        "selected_groups": [
+            {"label": "M3 screw", "category": "fastener", "quantity": 34},
+            {"label": "washer", "category": "fastener", "quantity": 12},
+        ],
+    }
+    r1 = client.post(f"/photos/{photo_id}/confirm", json=payload)
+    assert r1.status_code == 200
+    r2 = client.post(f"/photos/{photo_id}/confirm", json=payload)
+    assert r2.status_code == 200
+
+    items = r1.json()["items"]
+    assert len(items) == 2
+    item_ids = [i["item_id"] for i in items]
+
+    count_items = db.execute(
+        text("SELECT COUNT(*) FROM items WHERE name IN ('M3 screw','washer')")
+    ).scalar_one()
+    assert count_items == 2
+
+    count_bin_items = db.execute(
+        text("SELECT COUNT(*) FROM bin_items WHERE bin_id = :bin_id"),
+        {"bin_id": bin_id},
+    ).scalar_one()
+    assert count_bin_items == 2
+
+    count_links = db.execute(
+        text("SELECT COUNT(*) FROM photo_group_items WHERE photo_id = :photo_id"),
+        {"photo_id": photo_id},
+    ).scalar_one()
+    assert count_links == 2
+
+    stored_item_ids = db.execute(text("SELECT item_id FROM items ORDER BY item_id")).scalars().all()
+    assert all(i in stored_item_ids for i in item_ids)
+
+
 def test_soft_deleted_bin_hidden(client, db):
     bin_id = "BIN-DEL-0001"
     r_item = client.post(

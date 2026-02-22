@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query, Body
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
@@ -420,6 +420,62 @@ def groups_for_photo(
         repository.insert_detection_groups(db, photo_id, model, groups)
         db.commit()
     return {"photo_id": photo_id, "groups": groups}
+
+
+@app.post("/photos/{photo_id}/confirm")
+def confirm_photo_groups(
+    photo_id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    if not repository.photo_exists(db, photo_id):
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    bin_id = (payload.get("bin_id") or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    selected_groups = payload.get("selected_groups") or []
+    if not isinstance(selected_groups, list):
+        raise HTTPException(status_code=400, detail="selected_groups must be a list")
+
+    try:
+        repository.ensure_bin_active_or_create(db, bin_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    model = "stub"
+    items_out = []
+    try:
+        for g in selected_groups:
+            label = (g.get("label") or "").strip()
+            category = g.get("category")
+            if not label:
+                raise HTTPException(status_code=400, detail="label is required")
+            quantity = g.get("quantity")
+
+            item_id = repository.insert_item(db, label, category, None)
+            repository.insert_bin_item(db, bin_id, item_id, None, quantity)
+            repository.insert_photo_group_item(db, photo_id, model, label, category, item_id)
+
+            items_out.append(
+                {
+                    "item_id": item_id,
+                    "label": label,
+                    "category": category,
+                    "quantity": quantity,
+                }
+            )
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"confirm failed: {e}")
+
+    return {"photo_id": photo_id, "bin_id": bin_id, "items": items_out}
 
 
 @app.get("/search")
