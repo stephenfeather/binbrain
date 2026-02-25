@@ -442,13 +442,17 @@ _SUGGEST_MATCH_THRESHOLD = 0.5
 @app.get("/photos/{photo_id}/suggest")
 def suggest_for_photo(
     photo_id: int,
+    model: Optional[str] = Query(None, description="Override vision model for this request"),
     db: Session = Depends(get_db),
 ):
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
+    vision_model = model or OLLAMA_VISION_MODEL
     photo_path = repository.fetch_photo_path(db, photo_id)
-    vision_hits = describe_photo(photo_path, OLLAMA_URL, OLLAMA_VISION_MODEL) if photo_path else []
+    vision_hits, vision_elapsed_ms = (
+        describe_photo(photo_path, OLLAMA_URL, vision_model) if photo_path else ([], 0)
+    )
 
     seen_items: dict[int, dict] = {}  # item_id -> best suggestion
     raw_suggestions: list[dict] = []
@@ -498,13 +502,21 @@ def suggest_for_photo(
     suggestions.sort(key=lambda s: (-s["confidence"], s["name"] or ""))
 
     logger.info(
-        "event=photo_suggest request_id=%s photo_id=%s vision_hits=%s suggestions=%s",
+        "event=photo_suggest request_id=%s photo_id=%s model=%s vision_elapsed_ms=%s vision_hits=%s suggestions=%s",
         db.info.get("request_id"),
         photo_id,
+        vision_model,
+        vision_elapsed_ms,
         len(vision_hits),
         len(suggestions),
     )
-    return {"version": "1", "photo_id": photo_id, "suggestions": suggestions}
+    return {
+        "version": "1",
+        "photo_id": photo_id,
+        "model": vision_model,
+        "vision_elapsed_ms": vision_elapsed_ms,
+        "suggestions": suggestions,
+    }
 
 
 @app.post("/photos/{photo_id}/detect")
