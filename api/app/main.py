@@ -14,9 +14,13 @@ from fastembed import TextEmbedding
 
 from app.db import repository
 from app.services.detection import detect
+from app.services.vision import describe_photo
+
 DATABASE_URL = os.environ["DATABASE_URL"]
 PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -432,6 +436,9 @@ def list_bins(
     return {"version": "1", "bins": bins}
 
 
+_SUGGEST_MATCH_THRESHOLD = 0.5
+
+
 @app.get("/photos/{photo_id}/suggest")
 def suggest_for_photo(
     photo_id: int,
@@ -440,13 +447,63 @@ def suggest_for_photo(
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
+    photo_path = repository.fetch_photo_path(db, photo_id)
+    vision_hits = describe_photo(photo_path, OLLAMA_URL, OLLAMA_VISION_MODEL) if photo_path else []
+
+    seen_items: dict[int, dict] = {}  # item_id -> best suggestion
+    raw_suggestions: list[dict] = []
+
+    for hit in vision_hits:
+        name = (hit.get("name") or "").strip()
+        category = hit.get("category")
+        vision_conf = float(hit.get("confidence") or 0.5)
+        if not name:
+            continue
+
+        matches: list[dict] = []
+        try:
+            qvec = embed_text(canonical_item_text(name, category, None))
+            matches = repository.search_items_by_embedding(db, vec_to_pgvector(qvec), limit=3)
+        except Exception:
+            pass
+
+        matched = False
+        for m in matches:
+            score = float(m["score"])
+            if score < _SUGGEST_MATCH_THRESHOLD:
+                continue
+            item_id = m["item_id"]
+            combined = round(score * vision_conf, 4)
+            if item_id not in seen_items or combined > seen_items[item_id]["confidence"]:
+                seen_items[item_id] = {
+                    "item_id": item_id,
+                    "name": m["name"],
+                    "category": m["category"],
+                    "confidence": combined,
+                    "bins": list(m["bins"]) if m["bins"] else [],
+                }
+            matched = True
+            break  # one DB match per vision hit
+
+        if not matched:
+            raw_suggestions.append({
+                "item_id": None,
+                "name": name,
+                "category": category,
+                "confidence": round(vision_conf, 4),
+                "bins": [],
+            })
+
+    suggestions = list(seen_items.values()) + raw_suggestions
+    suggestions.sort(key=lambda s: (-s["confidence"], s["name"] or ""))
+
     logger.info(
-        "event=photo_suggest request_id=%s photo_id=%s",
+        "event=photo_suggest request_id=%s photo_id=%s vision_hits=%s suggestions=%s",
         db.info.get("request_id"),
         photo_id,
+        len(vision_hits),
+        len(suggestions),
     )
-    suggestions = []
-    suggestions.sort(key=lambda s: (-s.get("confidence", 0.0), s.get("name", "")))
     return {"version": "1", "photo_id": photo_id, "suggestions": suggestions}
 
 

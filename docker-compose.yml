@@ -25,6 +25,10 @@ services:
       DATABASE_URL: postgresql+psycopg://binbrain:${POSTGRES_PASSWORD}@db:5432/binbrain
       PHOTO_DIR: /data/photos
       EMBED_MODEL: BAAI/bge-small-en-v1.5
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen3-vl:4b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data/photos:/data/photos
       # Persist fastembed model cache so restarts don't redownload
