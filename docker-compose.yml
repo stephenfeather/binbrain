@@ -30,6 +30,7 @@ services:
       OLLAMA_MAX_IMAGE_PX: ${OLLAMA_MAX_IMAGE_PX:-1280}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "calebs-system:10.1.1.105"
     volumes:
       - ./data/photos:/data/photos
       # Persist fastembed model cache so restarts don't redownload

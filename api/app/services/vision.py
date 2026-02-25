@@ -59,6 +59,7 @@ def describe_photo(
             }
         ],
         "stream": False,
+        "keep_alive": -1,
     }
 
     t0 = time.monotonic()
@@ -69,7 +70,7 @@ def describe_photo(
             data=data,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=180) as resp:
             body = json.loads(resp.read())
     except Exception:
         return [], int((time.monotonic() - t0) * 1000)
