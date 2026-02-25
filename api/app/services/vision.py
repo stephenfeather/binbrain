@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import re
 import time
 import urllib.request
 from pathlib import Path
+
+from PIL import Image
 
 _PROMPT = (
     'Return ONLY valid JSON using the schema '
@@ -14,15 +17,35 @@ _PROMPT = (
 )
 
 
-def describe_photo(photo_path: str, ollama_url: str, model: str) -> tuple[list[dict], int]:
+def _load_and_resize(photo_path: str, max_px: int) -> bytes:
+    """Load image and downscale so the longest side is at most max_px.
+
+    Returns JPEG bytes. Never upscales. Raises OSError if the file can't be read.
+    """
+    with Image.open(photo_path) as img:
+        img = img.convert("RGB")
+        if max(img.width, img.height) > max_px:
+            img.thumbnail((max_px, max_px), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+
+
+def describe_photo(
+    photo_path: str,
+    ollama_url: str,
+    model: str,
+    max_px: int = 1280,
+) -> tuple[list[dict], int]:
     """Use Ollama vision model to identify items in a photo.
 
     Returns (suggestions, elapsed_ms). On any failure returns ([], elapsed_ms).
     elapsed_ms covers the full Ollama round-trip.
+    Image is downscaled to max_px on the longest side before sending.
     """
     try:
-        image_bytes = Path(photo_path).read_bytes()
-    except OSError:
+        image_bytes = _load_and_resize(photo_path, max_px)
+    except (OSError, Exception):
         return [], 0
 
     image_b64 = base64.b64encode(image_bytes).decode()

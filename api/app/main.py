@@ -21,6 +21,7 @@ PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
+OLLAMA_MAX_IMAGE_PX = int(os.environ.get("OLLAMA_MAX_IMAGE_PX", "1280"))
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -451,7 +452,7 @@ def suggest_for_photo(
     vision_model = model or OLLAMA_VISION_MODEL
     photo_path = repository.fetch_photo_path(db, photo_id)
     vision_hits, vision_elapsed_ms = (
-        describe_photo(photo_path, OLLAMA_URL, vision_model) if photo_path else ([], 0)
+        describe_photo(photo_path, OLLAMA_URL, vision_model, OLLAMA_MAX_IMAGE_PX) if photo_path else ([], 0)
     )
 
     seen_items: dict[int, dict] = {}  # item_id -> best suggestion
