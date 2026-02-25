@@ -4,3 +4,6 @@ api/binbrain_api.egg-info/
 __pycache__/
 *.pyc
 labels.pdf
+
+# Photo storage (binary uploads, not source)
+data/
