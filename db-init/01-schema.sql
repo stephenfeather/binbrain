@@ -1,0 +1,105 @@
+-- BinBrain database schema initialization
+-- Runs automatically on first container startup via /docker-entrypoint-initdb.d
+-- Database and role are created by the Docker image via POSTGRES_DB / POSTGRES_USER env vars.
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS bins (
+  bin_id text PRIMARY KEY,
+  deleted_at timestamptz,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS items (
+  item_id bigserial PRIMARY KEY,
+  name text NOT NULL,
+  category text,
+  notes text,
+  deleted_at timestamptz,
+  fingerprint text GENERATED ALWAYS AS (
+    lower(trim(name)) || '|' || coalesce(lower(trim(category)), '')
+  ) STORED,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS items_fingerprint_uq
+ON items (fingerprint);
+
+CREATE TABLE IF NOT EXISTS item_embeddings (
+  item_id bigint PRIMARY KEY REFERENCES items(item_id) ON DELETE CASCADE,
+  model text NOT NULL,
+  dims int NOT NULL,
+  embedding vector(384) NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS item_embeddings_hnsw_cos
+ON item_embeddings
+USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS bin_items (
+  id bigserial PRIMARY KEY,
+  bin_id text REFERENCES bins(bin_id) ON DELETE CASCADE,
+  item_id bigint REFERENCES items(item_id) ON DELETE CASCADE,
+  confidence float,
+  quantity float,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS bin_items_unique
+ON bin_items (bin_id, item_id);
+
+CREATE TABLE IF NOT EXISTS photos (
+  photo_id bigserial PRIMARY KEY,
+  bin_id text REFERENCES bins(bin_id) ON DELETE CASCADE,
+  path text NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS photo_labels (
+  id bigserial PRIMARY KEY,
+  photo_id bigint REFERENCES photos(photo_id) ON DELETE CASCADE,
+  model text NOT NULL,
+  label text NOT NULL,
+  category text,
+  confidence float NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS photo_detections (
+  id bigserial PRIMARY KEY,
+  photo_id bigint REFERENCES photos(photo_id) ON DELETE CASCADE,
+  model text NOT NULL,
+  label text NOT NULL,
+  category text,
+  confidence float NOT NULL,
+  x1 float NOT NULL,
+  y1 float NOT NULL,
+  x2 float NOT NULL,
+  y2 float NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS photo_detection_groups (
+  id bigserial PRIMARY KEY,
+  photo_id bigint REFERENCES photos(photo_id) ON DELETE CASCADE,
+  model text NOT NULL,
+  label text NOT NULL,
+  category text,
+  confidence_avg float NOT NULL,
+  count_estimate int NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS photo_group_items (
+  id bigserial PRIMARY KEY,
+  photo_id bigint REFERENCES photos(photo_id) ON DELETE CASCADE,
+  model text NOT NULL,
+  label text NOT NULL,
+  category text,
+  item_id bigint REFERENCES items(item_id) ON DELETE CASCADE,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS photo_group_items_uq
+ON photo_group_items (photo_id, model, label, category, item_id);

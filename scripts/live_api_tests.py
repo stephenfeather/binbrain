@@ -47,8 +47,8 @@ def main() -> None:
         r = client.get(f"{base}/bins")
         if r.status_code != 200:
             fail(f"/bins status {r.status_code}: {r.text}")
-        if not isinstance(r.json(), list):
-            fail("/bins response is not a list")
+        if not isinstance(r.json().get("bins"), list):
+            fail("/bins response missing 'bins' list")
 
     print("OK")
 
