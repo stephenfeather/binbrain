@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS items (
   name text NOT NULL,
   category text,
   notes text,
+  upc text,
   deleted_at timestamptz,
   fingerprint text GENERATED ALWAYS AS (
     lower(trim(name)) || '|' || coalesce(lower(trim(category)), '')
@@ -24,6 +25,14 @@ CREATE TABLE IF NOT EXISTS items (
 
 CREATE UNIQUE INDEX IF NOT EXISTS items_fingerprint_uq
 ON items (fingerprint);
+
+CREATE UNIQUE INDEX IF NOT EXISTS items_upc_uq
+ON items (upc)
+WHERE upc IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS items_upc_idx
+ON items (upc)
+WHERE upc IS NOT NULL AND deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS item_embeddings (
   item_id bigint PRIMARY KEY REFERENCES items(item_id) ON DELETE CASCADE,

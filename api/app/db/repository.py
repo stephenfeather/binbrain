@@ -21,42 +21,68 @@ def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
         raise ValueError("bin is deleted")
 
 
-def insert_item(db: Session, name: str, category: Optional[str], notes: Optional[str]) -> int:
+def find_item_by_upc(db: Session, upc: str) -> dict | None:
+    row = db.execute(
+        text(
+            """
+            SELECT item_id, name, category, upc
+            FROM items
+            WHERE upc = :upc AND deleted_at IS NULL
+            """
+        ),
+        {"upc": upc},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def insert_item(
+    db: Session,
+    name: str,
+    category: Optional[str],
+    notes: Optional[str],
+    upc: Optional[str] = None,
+) -> int:
     res = db.execute(
         text(
             """
-            INSERT INTO items (name, category, notes)
-            VALUES (:name, :category, :notes)
+            INSERT INTO items (name, category, notes, upc)
+            VALUES (:name, :category, :notes, :upc)
             ON CONFLICT (fingerprint) DO UPDATE
             SET name = EXCLUDED.name,
                 category = EXCLUDED.category,
                 notes = EXCLUDED.notes,
+                upc = COALESCE(EXCLUDED.upc, items.upc),
                 deleted_at = NULL
             RETURNING item_id
             """
         ),
-        {"name": name, "category": category, "notes": notes},
+        {"name": name, "category": category, "notes": notes, "upc": upc},
     )
     return int(res.scalar_one())
 
 
 def insert_item_with_status(
-    db: Session, name: str, category: Optional[str], notes: Optional[str]
+    db: Session,
+    name: str,
+    category: Optional[str],
+    notes: Optional[str],
+    upc: Optional[str] = None,
 ) -> tuple[int, bool]:
     res = db.execute(
         text(
             """
-            INSERT INTO items (name, category, notes)
-            VALUES (:name, :category, :notes)
+            INSERT INTO items (name, category, notes, upc)
+            VALUES (:name, :category, :notes, :upc)
             ON CONFLICT (fingerprint) DO UPDATE
             SET name = EXCLUDED.name,
                 category = EXCLUDED.category,
                 notes = EXCLUDED.notes,
+                upc = COALESCE(EXCLUDED.upc, items.upc),
                 deleted_at = NULL
             RETURNING item_id, (xmax = 0) AS inserted
             """
         ),
-        {"name": name, "category": category, "notes": notes},
+        {"name": name, "category": category, "notes": notes, "upc": upc},
     ).mappings().one()
     return int(res["item_id"]), bool(res["inserted"])
 
@@ -124,6 +150,7 @@ def fetch_bin_items(db: Session, bin_id: str) -> list[dict]:
               i.item_id,
               i.name,
               i.category,
+              i.upc,
               bi.quantity,
               bi.confidence
             FROM bin_items bi
