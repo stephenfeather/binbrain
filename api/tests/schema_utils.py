@@ -9,7 +9,7 @@ from referencing.jsonschema import DRAFT202012
 
 # Schema files live at the repo root (two levels above binbrain/api/).
 # Override with BINBRAIN_SCHEMA_DIR env var for non-standard layouts (e.g. Pi).
-_DEFAULT_SCHEMA_DIR = Path(__file__).resolve().parent.parent.parent.parent
+_DEFAULT_SCHEMA_DIR = Path(__file__).resolve().parent.parent.parent
 _SCHEMA_DIR = Path(os.environ.get("BINBRAIN_SCHEMA_DIR", str(_DEFAULT_SCHEMA_DIR)))
 
 

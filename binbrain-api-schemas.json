@@ -1,0 +1,266 @@
+[
+	{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/health.response.json",
+  "title": "HealthResponse",
+  "type": "object",
+  "required": ["version", "ok", "embed_model", "expected_dims"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "ok": { "type": "boolean", "const": true },
+    "embed_model": { "type": "string" },
+    "expected_dims": { "type": "integer", "const": 384 }
+  },
+  "additionalProperties": true
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/ingest.response.json",
+  "title": "IngestResponse",
+  "type": "object",
+  "required": ["version", "bin_id", "photos"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "bin_id": { "type": "string", "minLength": 1 },
+    "photos": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["photo_id", "path"],
+        "properties": {
+          "photo_id": { "type": "integer", "minimum": 1 },
+          "path": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/photo.suggest.response.json",
+  "title": "PhotoSuggestResponse",
+  "type": "object",
+  "required": ["version", "photo_id", "suggestions"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "photo_id": { "type": "integer", "minimum": 1 },
+    "model": { "type": "string" },
+    "vision_elapsed_ms": { "type": "integer", "minimum": 0 },
+    "suggestions": {
+      "type": "array",
+      "items": { "$ref": "https://binbrain.local/schemas/suggestion.item.json" }
+    }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/suggestion.item.json",
+  "title": "SuggestionItem",
+  "type": "object",
+  "required": ["name", "category", "confidence"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/photo.detect.response.json",
+  "title": "PhotoDetectResponse",
+  "type": "object",
+  "required": ["version", "photo_id", "model", "detections"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "photo_id": { "type": "integer", "minimum": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "detections": {
+      "type": "array",
+      "items": { "$ref": "https://binbrain.local/schemas/detection.item.json" }
+    }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/detection.item.json",
+  "title": "DetectionItem",
+  "type": "object",
+  "required": ["label", "category", "confidence", "bbox"],
+  "properties": {
+    "label": { "type": "string", "minLength": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "bbox": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "type": "number", "minimum": 0, "maximum": 1 }
+    }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/photo.groups.response.json",
+  "title": "PhotoGroupsResponse",
+  "type": "object",
+  "required": ["version", "photo_id", "model", "groups"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "photo_id": { "type": "integer", "minimum": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "groups": {
+      "type": "array",
+      "items": { "$ref": "https://binbrain.local/schemas/group.item.json" }
+    }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/group.item.json",
+  "title": "GroupItem",
+  "type": "object",
+  "required": ["group_key", "label", "category", "confidence", "count_estimate"],
+  "properties": {
+    "group_key": { "type": "string", "minLength": 1 },
+    "label": { "type": "string", "minLength": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "count_estimate": { "type": "integer", "minimum": 1 }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/photo.confirm.request.json",
+  "title": "PhotoConfirmRequest",
+  "type": "object",
+  "required": ["version", "bin_id", "selected_groups"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "bin_id": { "type": "string", "minLength": 1 },
+    "selected_groups": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["group_key", "label", "category", "quantity"],
+        "properties": {
+          "group_key": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "category": { "type": "string", "minLength": 1 },
+          "quantity": { "type": "number", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/photo.confirm.response.json",
+  "title": "PhotoConfirmResponse",
+  "type": "object",
+  "required": ["version", "photo_id", "bin_id", "results"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "photo_id": { "type": "integer", "minimum": 1 },
+    "bin_id": { "type": "string", "minLength": 1 },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["group_key", "item_id", "fingerprint", "status"],
+        "properties": {
+          "group_key": { "type": "string", "minLength": 1 },
+          "item_id": { "type": "integer", "minimum": 1 },
+          "fingerprint": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["created", "updated", "linked"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/items.post.response.json",
+  "title": "UpsertItemResponse",
+  "type": "object",
+  "required": ["version", "item_id", "fingerprint", "name", "category"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "item_id": { "type": "integer", "minimum": 1 },
+    "fingerprint": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "category": { "type": ["string", "null"] },
+    "notes": { "type": ["string", "null"] },
+    "upc": { "type": ["string", "null"] },
+    "bin_id": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/bin.get.response.json",
+  "title": "GetBinResponse",
+  "type": "object",
+  "required": ["version", "bin_id", "items", "photos"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "bin_id": { "type": "string", "minLength": 1 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["item_id", "name", "category", "quantity", "confidence"],
+        "properties": {
+          "item_id": { "type": "integer", "minimum": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "category": { "type": ["string", "null"] },
+          "upc": { "type": ["string", "null"] },
+          "quantity": { "type": ["number", "null"] },
+          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "photos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["photo_id", "path"],
+        "properties": {
+          "photo_id": { "type": "integer", "minimum": 1 },
+          "path": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/bins.list.response.json",
+  "title": "ListBinsResponse",
+  "type": "object",
+  "required": ["version", "bins"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "bins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["bin_id", "item_count", "photo_count", "last_updated"],
+        "properties": {
+          "bin_id": { "type": "string", "minLength": 1 },
+          "item_count": { "type": "integer", "minimum": 0 },
+          "photo_count": { "type": "integer", "minimum": 0 },
+          "last_updated": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+},
+]
