@@ -322,3 +322,171 @@ def test_soft_deleted_item_hidden_from_search(client, db):
     assert r_search.status_code == 200
     results = r_search.json()["results"]
     assert all(r["item_id"] != item_id for r in results)
+
+
+# ---------------------------------------------------------------------------
+# UPC tests
+# ---------------------------------------------------------------------------
+
+def test_create_item_with_upc(client, db):
+    resp = client.post("/items", data={"name": "UPC Widget", "category": "test", "upc": "111111111111"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["upc"] == "111111111111"
+    stored = db.execute(text("SELECT upc FROM items WHERE item_id = :id"), {"id": body["item_id"]}).scalar()
+    assert stored == "111111111111"
+
+
+def test_create_item_without_upc_unchanged(client):
+    resp = client.post("/items", data={"name": "No UPC Widget", "category": "test"})
+    assert resp.status_code == 200
+    assert resp.json()["upc"] is None
+
+
+def test_create_item_invalid_upc_rejected(client):
+    resp = client.post("/items", data={"name": "Bad UPC Item", "category": "test", "upc": "notaupc"})
+    assert resp.status_code == 400
+    assert "invalid UPC" in resp.json()["error"]["message"]
+
+
+def test_null_upcs_do_not_conflict(client):
+    r1 = client.post("/items", data={"name": "No UPC Alpha", "category": "test"})
+    r2 = client.post("/items", data={"name": "No UPC Beta", "category": "test"})
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r1.json()["item_id"] != r2.json()["item_id"]
+
+
+def test_upc_preserved_on_fingerprint_conflict(client, db):
+    # Insert item with UPC, then re-insert same name+category without UPC.
+    # The existing UPC must not be overwritten with NULL.
+    r1 = client.post("/items", data={"name": "Stable UPC Item", "category": "test", "upc": "222222222222"})
+    assert r1.status_code == 200
+    item_id = r1.json()["item_id"]
+
+    r2 = client.post("/items", data={"name": "Stable UPC Item", "category": "test"})
+    assert r2.status_code == 200
+    assert r2.json()["item_id"] == item_id
+
+    stored = db.execute(text("SELECT upc FROM items WHERE item_id = :id"), {"id": item_id}).scalar()
+    assert stored == "222222222222"
+
+
+def test_upc_lookup_invalid_format(client):
+    assert client.get("/upc/abc123").status_code == 400
+    assert client.get("/upc/123").status_code == 400
+    assert client.get("/upc/12345678901234").status_code == 400
+
+
+def test_upc_lookup_local_hit(client):
+    client.post("/items", data={"name": "Local UPC Item", "category": "test", "upc": "333333333333"})
+    resp = client.get("/upc/333333333333")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "local"
+    assert body["name"] == "Local UPC Item"
+    assert body["upc"] == "333333333333"
+    assert body["item_id"] is not None
+
+
+def test_upc_lookup_unknown_degrades_gracefully(client, monkeypatch):
+    import app.services.upc_lookup as upc_mod
+    monkeypatch.setattr(upc_mod, "_lookup_upcitemdb", lambda upc: None)
+    monkeypatch.setattr(upc_mod, "_lookup_goupc", lambda upc: None)
+
+    resp = client.get("/upc/999999999991")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "unknown"
+    assert body["item_id"] is None
+    assert body["name"] is None
+
+
+def test_upc_lookup_second_call_is_local(client, monkeypatch):
+    import app.services.upc_lookup as upc_mod
+    from app.services.upc_lookup import UPCResult
+
+    calls = []
+
+    def fake_lookup(upc):
+        calls.append(upc)
+        return UPCResult(name="Cached Product", category="Tools", brand=None, source="upcitemdb")
+
+    monkeypatch.setattr(upc_mod, "_lookup_upcitemdb", fake_lookup)
+
+    resp1 = client.get("/upc/444444444444")
+    assert resp1.json()["source"] == "upcitemdb"
+    assert len(calls) == 1
+
+    # Second call: item now cached locally, external should not be hit
+    resp2 = client.get("/upc/444444444444")
+    assert resp2.json()["source"] == "local"
+    assert len(calls) == 1  # still 1 — external not called again
+
+
+def test_add_to_bin_with_upc(client, db):
+    bin_id = "BIN-UPC-ADD-001"
+    resp = client.post(f"/bins/{bin_id}/add", data={
+        "name": "UPC Bin Item", "category": "test", "upc": "555555555555",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["upc"] == "555555555555"
+    stored = db.execute(text("SELECT upc FROM items WHERE item_id = :id"), {"id": body["item_id"]}).scalar()
+    assert stored == "555555555555"
+
+
+def test_add_to_bin_reuses_existing_upc(client, db):
+    # Create item with UPC via POST /items
+    r = client.post("/items", data={"name": "Original Name", "category": "test", "upc": "666666666666"})
+    assert r.status_code == 200
+    original_id = r.json()["item_id"]
+
+    # Add to bin with same UPC but different name — should reuse original item
+    bin_id = "BIN-UPC-REUSE-001"
+    resp = client.post(f"/bins/{bin_id}/add", data={
+        "name": "Different Name", "category": "other", "upc": "666666666666",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["item_id"] == original_id
+
+    # Only one item with this UPC in DB
+    count = db.execute(
+        text("SELECT COUNT(*) FROM items WHERE upc = '666666666666'")
+    ).scalar_one()
+    assert count == 1
+
+
+def test_bin_items_include_upc(client):
+    bin_id = "BIN-UPC-VIEW-001"
+    client.post("/items", data={
+        "name": "Bin UPC Item", "category": "test", "upc": "777777777777", "bin_id": bin_id,
+    })
+    resp = client.get(f"/bins/{bin_id}")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) >= 1
+    assert "upc" in items[0]
+    assert items[0]["upc"] == "777777777777"
+
+
+def test_search_results_include_upc(client):
+    client.post("/items", data={"name": "Searchable UPC Item", "category": "test", "upc": "888888888888"})
+    # Use limit=100 — stub embeddings are all identical so ordering is arbitrary
+    resp = client.get("/search", params={"q": "Searchable UPC Item", "limit": 100})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    match = next((r for r in results if r["name"] == "Searchable UPC Item"), None)
+    assert match is not None
+    assert match["upc"] == "888888888888"
+
+
+def test_search_results_include_upc_null_for_items_without(client):
+    client.post("/items", data={"name": "No UPC Search Item", "category": "test"})
+    resp = client.get("/search", params={"q": "No UPC Search Item", "limit": 100})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    match = next((r for r in results if r["name"] == "No UPC Search Item"), None)
+    assert match is not None
+    assert "upc" in match
+    assert match["upc"] is None
