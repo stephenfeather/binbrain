@@ -285,6 +285,7 @@ def create_item(
     name: str = Form(...),
     category: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
+    upc: Optional[str] = Form(None),
     bin_id: Optional[str] = Form(None),
     confidence: Optional[float] = Form(None),
     quantity: Optional[float] = Form(None),
@@ -294,9 +295,13 @@ def create_item(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
 
+    upc = (upc or "").strip() or None
+    if upc and not validate_upc(upc):
+        raise HTTPException(status_code=400, detail="invalid UPC format (expected 12 or 13 digits)")
+
     try:
         # 1) Insert item (no commit yet)
-        item_id = repository.insert_item(db, name, category, notes)
+        item_id = repository.insert_item(db, name, category, notes, upc=upc)
 
         # 2) Create embedding
         vec = embed_text(canonical_item_text(name, category, notes))
@@ -331,6 +336,7 @@ def create_item(
             "name": name,
             "category": category,
             "notes": notes,
+            "upc": upc,
             "bin_id": bin_id,
         }
 
@@ -376,6 +382,7 @@ async def add_to_bin(
     name: Optional[str] = Form(None),
     category: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
+    upc: Optional[str] = Form(None),
     confidence: Optional[float] = Form(None),
     quantity: Optional[float] = Form(None),
     photos: Optional[list[UploadFile]] = File(None),
@@ -389,6 +396,10 @@ async def add_to_bin(
     if name == "":
         name = None
 
+    upc = (upc or "").strip() or None
+    if upc and not validate_upc(upc):
+        raise HTTPException(status_code=400, detail="invalid UPC format (expected 12 or 13 digits)")
+
     try:
         try:
             repository.ensure_bin_active_or_create(db, bin_id)
@@ -396,8 +407,19 @@ async def add_to_bin(
             raise HTTPException(status_code=404, detail="bin not found")
 
         item_id = None
+        if upc and not name:
+            # UPC-only path: look up existing item, skip insert
+            existing = repository.find_item_by_upc(db, upc)
+            if existing:
+                item_id = existing["item_id"]
         if name:
-            item_id = repository.insert_item(db, name, category, notes)
+            # If UPC already exists on a different item, use that item
+            if upc:
+                existing = repository.find_item_by_upc(db, upc)
+                if existing:
+                    item_id = existing["item_id"]
+            if item_id is None:
+                item_id = repository.insert_item(db, name, category, notes, upc=upc)
 
             vec = embed_text(canonical_item_text(name, category, notes))
             dims = len(vec)
@@ -449,6 +471,7 @@ async def add_to_bin(
             "name": name,
             "category": category,
             "notes": notes,
+            "upc": upc,
             "photos": saved_photos,
         }
 
