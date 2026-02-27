@@ -410,13 +410,14 @@ def search_items_by_embedding(db: Session, qvec_str: str, limit: int) -> list[di
               i.item_id,
               i.name,
               i.category,
+              i.upc,
               1.0 - (e.embedding <=> CAST(:qvec AS vector)) AS score,
               array_remove(array_agg(bi.bin_id), NULL) AS bins
             FROM item_embeddings e
             JOIN items i ON i.item_id = e.item_id
             LEFT JOIN bin_items bi ON bi.item_id = i.item_id
             WHERE i.deleted_at IS NULL
-            GROUP BY i.item_id, i.name, i.category, e.embedding
+            GROUP BY i.item_id, i.name, i.category, i.upc, e.embedding
             ORDER BY e.embedding <=> CAST(:qvec AS vector)
             LIMIT :limit
             """
@@ -441,13 +442,14 @@ def search_items(
                   i.item_id,
                   i.name,
                   i.category,
+                  i.upc,
                   (e.embedding <=> CAST(:qvec AS vector)) AS distance,
                   array_remove(array_agg(bi.bin_id), NULL) AS bins
                 FROM item_embeddings e
                 JOIN items i ON i.item_id = e.item_id
                 LEFT JOIN bin_items bi ON bi.item_id = i.item_id
                 WHERE i.deleted_at IS NULL
-                GROUP BY i.item_id, i.name, i.category, e.embedding
+                GROUP BY i.item_id, i.name, i.category, i.upc, e.embedding
                 ORDER BY e.embedding <=> CAST(:qvec AS vector)
                 LIMIT :limit
                 OFFSET :offset
@@ -464,6 +466,7 @@ def search_items(
                   i.item_id,
                   i.name,
                   i.category,
+                  i.upc,
                   (e.embedding <=> CAST(:qvec AS vector)) AS distance,
                   array_remove(array_agg(bi.bin_id), NULL) AS bins
                 FROM item_embeddings e
@@ -471,7 +474,7 @@ def search_items(
                 LEFT JOIN bin_items bi ON bi.item_id = i.item_id
                 WHERE i.deleted_at IS NULL
                   AND (e.embedding <=> CAST(:qvec AS vector)) <= :max_distance
-                GROUP BY i.item_id, i.name, i.category, e.embedding
+                GROUP BY i.item_id, i.name, i.category, i.upc, e.embedding
                 ORDER BY e.embedding <=> CAST(:qvec AS vector)
                 LIMIT :limit
                 OFFSET :offset
