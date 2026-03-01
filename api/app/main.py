@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import os
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -529,67 +531,82 @@ _SUGGEST_MATCH_THRESHOLD = 0.5
 def suggest_for_photo(
     photo_id: int,
     model: Optional[str] = Query(None, description="Override vision model for this request"),
-    db: Session = Depends(get_db),
+    request: Request = None,
 ):
-    if not repository.photo_exists(db, photo_id):
-        raise HTTPException(status_code=404, detail="photo not found")
+    request_id = getattr(request.state, "request_id", None) if request else None
 
-    vision_model = model or OLLAMA_VISION_MODEL
-    photo_path = repository.fetch_photo_path(db, photo_id)
-    vision_hits, vision_elapsed_ms = (
-        describe_photo(photo_path, OLLAMA_URL, vision_model, OLLAMA_MAX_IMAGE_PX) if photo_path else ([], 0)
-    )
-
-    seen_items: dict[int, dict] = {}  # item_id -> best suggestion
-    raw_suggestions: list[dict] = []
-
-    for hit in vision_hits:
-        name = (hit.get("name") or "").strip()
-        category = hit.get("category")
-        vision_conf = float(hit.get("confidence") or 0.5)
-        if not name:
-            continue
-
-        matches: list[dict] = []
+    try:
+        # Phase 1: fetch photo path, then close DB to avoid idle connection timeout
+        # during the potentially long vision call
+        db1 = SessionLocal()
         try:
-            qvec = embed_text(canonical_item_text(name, category, None))
-            matches = repository.search_items_by_embedding(db, vec_to_pgvector(qvec), limit=3)
-        except Exception:
-            pass
+            if not repository.photo_exists(db1, photo_id):
+                raise HTTPException(status_code=404, detail="photo not found")
+            photo_path = repository.fetch_photo_path(db1, photo_id)
+        finally:
+            db1.close()
 
-        matched = False
-        for m in matches:
-            score = float(m["score"])
-            if score < _SUGGEST_MATCH_THRESHOLD:
+        logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
+        vision_model = model or OLLAMA_VISION_MODEL
+        vision_hits, vision_elapsed_ms = (
+            describe_photo(photo_path, OLLAMA_URL, vision_model, OLLAMA_MAX_IMAGE_PX) if photo_path else ([], 0)
+        )
+        logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("event=photo_suggest_crash request_id=%s photo_id=%s", request_id, photo_id)
+        raise
+
+    # Phase 2: fresh DB connection for embedding search
+    # Every vision hit becomes a suggestion. If there's a strong DB match,
+    # we annotate it with the existing item_id and bins.
+    db2 = SessionLocal()
+    try:
+        suggestions: list[dict] = []
+
+        for hit in vision_hits:
+            name = (hit.get("name") or "").strip()
+            category = hit.get("category")
+            vision_conf = float(hit.get("confidence") or 0.5)
+            if not name:
                 continue
-            item_id = m["item_id"]
-            combined = round(score * vision_conf, 4)
-            if item_id not in seen_items or combined > seen_items[item_id]["confidence"]:
-                seen_items[item_id] = {
-                    "item_id": item_id,
-                    "name": m["name"],
-                    "category": m["category"],
-                    "confidence": combined,
-                    "bins": list(m["bins"]) if m["bins"] else [],
-                }
-            matched = True
-            break  # one DB match per vision hit
 
-        if not matched:
-            raw_suggestions.append({
+            suggestion: dict = {
                 "item_id": None,
                 "name": name,
                 "category": category,
                 "confidence": round(vision_conf, 4),
                 "bins": [],
-            })
+                "match": None,
+            }
 
-    suggestions = list(seen_items.values()) + raw_suggestions
-    suggestions.sort(key=lambda s: (-s["confidence"], s["name"] or ""))
+            try:
+                qvec = embed_text(canonical_item_text(name, category, None))
+                matches = repository.search_items_by_embedding(db2, vec_to_pgvector(qvec), limit=1)
+                if matches:
+                    m = matches[0]
+                    score = float(m["score"])
+                    if score >= _SUGGEST_MATCH_THRESHOLD:
+                        suggestion["match"] = {
+                            "item_id": m["item_id"],
+                            "name": m["name"],
+                            "category": m["category"],
+                            "score": round(score, 4),
+                            "bins": list(m["bins"]) if m["bins"] else [],
+                        }
+            except Exception:
+                pass
+
+            suggestions.append(suggestion)
+
+        suggestions.sort(key=lambda s: (-s["confidence"], s["name"] or ""))
+    finally:
+        db2.close()
 
     logger.info(
         "event=photo_suggest request_id=%s photo_id=%s model=%s vision_elapsed_ms=%s vision_hits=%s suggestions=%s",
-        db.info.get("request_id"),
+        request_id,
         photo_id,
         vision_model,
         vision_elapsed_ms,
