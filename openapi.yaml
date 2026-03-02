@@ -147,6 +147,7 @@ components:
         item_id:    { type: integer, minimum: 1 }
         name:       { type: string }
         category:   { type: ["string", "null"] }
+        upc:        { type: ["string", "null"], description: "UPC barcode (12 or 13 digits) if known." }
         quantity:   { type: ["number", "null"], minimum: 0 }
         confidence: { type: ["number", "null"], minimum: 0, maximum: 1 }
       additionalProperties: false
@@ -357,11 +358,12 @@ components:
     # Search
     SearchResultItem:
       type: object
-      required: [item_id, name, distance]
+      required: [item_id, name, distance, bins]
       properties:
         item_id:  { type: integer, minimum: 1 }
         name:     { type: string }
         category: { type: ["string", "null"] }
+        upc:      { type: ["string", "null"] }
         distance:
           type: number
           minimum: 0
@@ -370,12 +372,14 @@ components:
         bins:
           type: array
           items: { type: string }
+          description: "bin_ids where this item appears."
       additionalProperties: false
 
     SearchResponse:
       type: object
-      required: [q, limit, offset, results]
+      required: [version, q, limit, offset, results]
       properties:
+        version:   { type: string, enum: ["1"] }
         q:         { type: string }
         limit:     { type: integer }
         offset:    { type: integer }

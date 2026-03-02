@@ -45,6 +45,28 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("binbrain")
 
 
+@app.on_event("startup")
+def warmup_vision_model():
+    """Pre-load the default vision model into Ollama on API startup."""
+    logger.info("event=warmup_start model=%s ollama_url=%s", _active_vision_model, OLLAMA_URL)
+    try:
+        payload = json.dumps({
+            "model": _active_vision_model,
+            "prompt": "",
+            "keep_alive": -1,
+        }).encode()
+        req = urllib.request.Request(
+            f"{OLLAMA_URL}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            resp.read()
+        logger.info("event=warmup_done model=%s", _active_vision_model)
+    except Exception as e:
+        logger.warning("event=warmup_failed model=%s error=%s", _active_vision_model, str(e)[:200])
+
+
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
@@ -922,6 +944,7 @@ def search(
         len(rows),
     )
     return {
+        "version": "1",
         "q": q,
         "limit": limit,
         "offset": offset,
