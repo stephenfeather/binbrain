@@ -797,6 +797,36 @@ paths:
                     match: null
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /photos/{photo_id}/file:
+    get:
+      summary: Serve a photo file (original or resized)
+      operationId: getPhotoFile
+      tags: [Photos]
+      description: |
+        Returns the raw image bytes for the given photo. By default the
+        original file is served. Pass `?w=<pixels>` to get a JPEG thumbnail
+        resized to the specified width (aspect ratio preserved).
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+        - name: w
+          in: query
+          required: false
+          schema: { type: integer, minimum: 16, maximum: 4096 }
+          description: "Resize to this width in pixels (aspect ratio preserved). Omit for original file."
+      responses:
+        "200":
+          description: Image file bytes.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /photos/{photo_id}/detect:
     post:
       summary: Run object detection on a photo

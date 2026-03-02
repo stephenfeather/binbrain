@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query, Body, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
@@ -620,6 +620,51 @@ def suggest_for_photo(
         "vision_elapsed_ms": vision_elapsed_ms,
         "suggestions": suggestions,
     }
+
+
+_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+}
+
+
+@app.get("/photos/{photo_id}/file")
+def get_photo_file(
+    photo_id: int,
+    w: Optional[int] = Query(None, ge=16, le=4096, description="Resize to this width (aspect ratio preserved). Omit for original."),
+    db: Session = Depends(get_db),
+):
+    if not repository.photo_exists(db, photo_id):
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    photo_path = repository.fetch_photo_path(db, photo_id)
+    if not photo_path:
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    fpath = Path(photo_path)
+    if not fpath.is_file():
+        raise HTTPException(status_code=404, detail="photo file missing from disk")
+
+    ext = fpath.suffix.lower()
+    content_type = _MIME_TYPES.get(ext, "application/octet-stream")
+
+    if w is None:
+        return Response(content=fpath.read_bytes(), media_type=content_type)
+
+    from PIL import Image
+    import io
+    with Image.open(fpath) as img:
+        img = img.convert("RGB")
+        ratio = w / img.width
+        h = int(img.height * ratio)
+        img = img.resize((w, h), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return Response(content=buf.getvalue(), media_type="image/jpeg")
 
 
 @app.post("/photos/{photo_id}/detect")
