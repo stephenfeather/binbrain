@@ -958,6 +958,35 @@ def list_models(request: Request = None):
     }
 
 
+@app.get("/models/running")
+def running_models(request: Request = None):
+    """List models currently loaded in Ollama VRAM/memory."""
+    request_id = getattr(request.state, "request_id", None) if request else None
+    try:
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/ps")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        logger.warning("event=models_running_failed request_id=%s error=%s", request_id, str(e)[:200])
+        raise HTTPException(status_code=502, detail=f"cannot reach Ollama: {e}")
+
+    models = []
+    for m in data.get("models", []):
+        models.append({
+            "name": m.get("name"),
+            "size": m.get("size"),
+            "size_vram": m.get("size_vram"),
+            "expires_at": m.get("expires_at"),
+        })
+
+    logger.info("event=models_running request_id=%s count=%s", request_id, len(models))
+    return {
+        "version": "1",
+        "active_model": _active_vision_model,
+        "models": models,
+    }
+
+
 @app.post("/models/select")
 def select_model(
     payload: dict = Body(...),

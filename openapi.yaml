@@ -406,6 +406,27 @@ components:
           items: { $ref: "#/components/schemas/OllamaModel" }
       additionalProperties: false
 
+    RunningModel:
+      type: object
+      required: [name]
+      properties:
+        name:        { type: string, example: "qwen3-vl:4b" }
+        size:        { type: ["integer", "null"], description: "Total model size in bytes." }
+        size_vram:   { type: ["integer", "null"], description: "Bytes loaded in VRAM/GPU memory." }
+        expires_at:  { type: ["string", "null"], format: date-time, description: "When the model will be unloaded (null if keep_alive=-1)." }
+      additionalProperties: false
+
+    RunningModelsResponse:
+      type: object
+      required: [version, active_model, models]
+      properties:
+        version:      { type: string, enum: ["1"] }
+        active_model: { type: string, description: "Currently selected vision model." }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/RunningModel" }
+      additionalProperties: false
+
     SelectModelResponse:
       type: object
       required: [version, previous_model, active_model]
@@ -1109,6 +1130,35 @@ paths:
                 models:
                   - { name: "qwen3-vl:4b", size: 2700000000, modified_at: "2025-02-20T10:00:00Z" }
                   - { name: "llava:7b", size: 4500000000, modified_at: "2025-02-18T08:30:00Z" }
+        "502":
+          description: Ollama server is unreachable.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /models/running:
+    get:
+      summary: List models currently loaded in Ollama memory
+      operationId: runningModels
+      tags: [Models]
+      description: |
+        Proxies Ollama's `GET /api/ps` endpoint. Returns models currently
+        loaded in VRAM/memory, their size, and when they expire.
+      responses:
+        "200":
+          description: Currently loaded models.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunningModelsResponse" }
+              example:
+                version: "1"
+                active_model: "qwen3-vl:4b"
+                models:
+                  - { name: "qwen3-vl:4b", size: 3295636135, size_vram: 3295636135, expires_at: null }
         "502":
           description: Ollama server is unreachable.
           headers:
