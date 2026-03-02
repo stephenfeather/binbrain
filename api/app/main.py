@@ -524,6 +524,69 @@ def list_bins(
     return {"version": "1", "bins": bins}
 
 
+@app.delete("/bins/{bin_id}/items/{item_id}")
+def remove_item_from_bin(
+    bin_id: str,
+    item_id: int,
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    if not repository.bin_exists(db, bin_id):
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    removed = repository.delete_bin_item(db, bin_id, item_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="item not in bin")
+
+    db.commit()
+    logger.info(
+        "event=bin_item_delete request_id=%s bin_id=%s item_id=%s",
+        db.info.get("request_id"),
+        bin_id,
+        item_id,
+    )
+    return {"version": "1", "bin_id": bin_id, "item_id": item_id, "removed": True}
+
+
+@app.patch("/bins/{bin_id}/items/{item_id}")
+def update_item_in_bin(
+    bin_id: str,
+    item_id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    if not repository.bin_exists(db, bin_id):
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    quantity = payload.get("quantity")
+    confidence = payload.get("confidence")
+
+    if quantity is None and confidence is None:
+        raise HTTPException(status_code=400, detail="at least one of quantity or confidence is required")
+
+    updated = repository.update_bin_item(db, bin_id, item_id, quantity=quantity, confidence=confidence)
+    if not updated:
+        raise HTTPException(status_code=404, detail="item not in bin")
+
+    db.commit()
+    logger.info(
+        "event=bin_item_update request_id=%s bin_id=%s item_id=%s quantity=%s confidence=%s",
+        db.info.get("request_id"),
+        bin_id,
+        item_id,
+        quantity,
+        confidence,
+    )
+    return {"version": "1", "bin_id": bin_id, "item_id": item_id, "quantity": quantity, "confidence": confidence}
+
+
 _SUGGEST_MATCH_THRESHOLD = 0.5
 
 

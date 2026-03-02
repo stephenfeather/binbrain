@@ -125,6 +125,38 @@ def insert_bin_item(
     return res.scalar() is not None
 
 
+def delete_bin_item(db: Session, bin_id: str, item_id: int) -> bool:
+    res = db.execute(
+        text(
+            "DELETE FROM bin_items WHERE bin_id = :bin_id AND item_id = :item_id RETURNING id"
+        ),
+        {"bin_id": bin_id, "item_id": item_id},
+    )
+    return res.scalar() is not None
+
+
+def update_bin_item(
+    db: Session,
+    bin_id: str,
+    item_id: int,
+    quantity: Optional[float] = None,
+    confidence: Optional[float] = None,
+) -> bool:
+    sets: list[str] = []
+    params: dict = {"bin_id": bin_id, "item_id": item_id}
+    if quantity is not None:
+        sets.append("quantity = :quantity")
+        params["quantity"] = quantity
+    if confidence is not None:
+        sets.append("confidence = :confidence")
+        params["confidence"] = confidence
+    if not sets:
+        return False
+    sql = f"UPDATE bin_items SET {', '.join(sets)} WHERE bin_id = :bin_id AND item_id = :item_id RETURNING id"
+    res = db.execute(text(sql), params)
+    return res.scalar() is not None
+
+
 def insert_photo(db: Session, bin_id: str, path: str) -> int:
     res = db.execute(
         text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path) RETURNING photo_id"),

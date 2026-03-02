@@ -737,6 +737,103 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /bins/{bin_id}/items/{item_id}:
+    delete:
+      summary: Remove an item from a bin
+      operationId: removeItemFromBin
+      tags: [Bins]
+      description: |
+        Removes the association between an item and a bin. The item itself
+        is not deleted from the catalogue — only its presence in this bin
+        is removed.
+      parameters:
+        - { $ref: "#/components/parameters/BinIdPath" }
+        - name: item_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Item removed from bin.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, bin_id, item_id, removed]
+                properties:
+                  version:  { type: string, enum: ["1"] }
+                  bin_id:   { type: string }
+                  item_id:  { type: integer, minimum: 1 }
+                  removed:  { type: boolean, const: true }
+                additionalProperties: false
+              example:
+                version: "1"
+                bin_id: "B-42"
+                item_id: 12
+                removed: true
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      summary: Update an item's quantity or confidence in a bin
+      operationId: updateItemInBin
+      tags: [Bins]
+      description: |
+        Updates the `quantity` and/or `confidence` of an item within a bin.
+        At least one field must be provided.
+      parameters:
+        - { $ref: "#/components/parameters/BinIdPath" }
+        - name: item_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quantity:
+                  type: number
+                  minimum: 0
+                  description: "Updated quantity in the bin."
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: "Updated confidence score."
+              additionalProperties: false
+            example:
+              quantity: 25
+      responses:
+        "200":
+          description: Item updated in bin.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, bin_id, item_id]
+                properties:
+                  version:    { type: string, enum: ["1"] }
+                  bin_id:     { type: string }
+                  item_id:    { type: integer, minimum: 1 }
+                  quantity:   { type: ["number", "null"] }
+                  confidence: { type: ["number", "null"] }
+                additionalProperties: false
+              example:
+                version: "1"
+                bin_id: "B-42"
+                item_id: 12
+                quantity: 25
+                confidence: null
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ── Photos ──────────────────────────────────────────────────────────────────
   /photos/{photo_id}/suggest:
     get:
