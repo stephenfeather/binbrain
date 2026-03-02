@@ -223,6 +223,14 @@ def photo_exists(db: Session, photo_id: int) -> bool:
     )
 
 
+def delete_photo(db: Session, photo_id: int) -> str | None:
+    """Delete a photo row and return its path, or None if not found."""
+    return db.execute(
+        text("DELETE FROM photos WHERE photo_id = :photo_id RETURNING path"),
+        {"photo_id": photo_id},
+    ).scalar()
+
+
 def fetch_photo_path(db: Session, photo_id: int) -> str | None:
     return db.execute(
         text("SELECT path FROM photos WHERE photo_id = :photo_id"),

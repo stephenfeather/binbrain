@@ -730,6 +730,31 @@ def get_photo_file(
         return Response(content=buf.getvalue(), media_type="image/jpeg")
 
 
+@app.delete("/photos/{photo_id}")
+def delete_photo(
+    photo_id: int,
+    db: Session = Depends(get_db),
+):
+    deleted_path = repository.delete_photo(db, photo_id)
+    if not deleted_path:
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    db.commit()
+
+    # Remove file from disk
+    fpath = Path(deleted_path)
+    if fpath.is_file():
+        fpath.unlink()
+
+    logger.info(
+        "event=photo_delete request_id=%s photo_id=%s path=%s",
+        db.info.get("request_id"),
+        photo_id,
+        deleted_path,
+    )
+    return {"version": "1", "photo_id": photo_id, "deleted": True}
+
+
 @app.post("/photos/{photo_id}/detect")
 def detect_for_photo(
     photo_id: int,

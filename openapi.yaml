@@ -835,6 +835,38 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   # ── Photos ──────────────────────────────────────────────────────────────────
+  /photos/{photo_id}:
+    delete:
+      summary: Delete a photo
+      operationId: deletePhoto
+      tags: [Photos]
+      description: |
+        Hard-deletes a photo record and removes the image file from disk.
+        All associated detections, detection groups, labels, and group items
+        are cascade-deleted automatically.
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+      responses:
+        "200":
+          description: Photo deleted.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, photo_id, deleted]
+                properties:
+                  version:  { type: string, enum: ["1"] }
+                  photo_id: { type: integer, minimum: 1 }
+                  deleted:  { type: boolean, const: true }
+                additionalProperties: false
+              example:
+                version: "1"
+                photo_id: 7
+                deleted: true
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /photos/{photo_id}/suggest:
     get:
       summary: Suggest items for a photo using vision inference
