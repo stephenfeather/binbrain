@@ -106,6 +106,7 @@ components:
         name:        { type: string }
         category:    { type: ["string", "null"] }
         notes:       { type: ["string", "null"] }
+        upc:         { type: ["string", "null"], description: "UPC barcode (12 or 13 digits) if provided." }
         bin_id:      { type: ["string", "null"] }
       additionalProperties: false
 
@@ -178,6 +179,7 @@ components:
         name:     { type: ["string", "null"] }
         category: { type: ["string", "null"] }
         notes:    { type: ["string", "null"] }
+        upc:      { type: ["string", "null"], description: "UPC barcode if provided." }
         photos:
           type: array
           items: { $ref: "#/components/schemas/PhotoRecord" }
@@ -637,6 +639,54 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  # ── UPC Lookup ──────────────────────────────────────────────────────────────
+  /upc/{upc}:
+    get:
+      summary: Look up an item by UPC barcode
+      operationId: upcLookup
+      tags: [Items]
+      description: |
+        Looks up a UPC barcode. Checks the local database first; if not found,
+        queries external UPC databases. Results from external lookups are cached
+        locally with an embedding for future searches.
+
+        The `source` field indicates where the data came from:
+        - `local` – found in the local database.
+        - `openfoodfacts`, `upcitemdb`, etc. – external API.
+        - `unknown` – no match found anywhere.
+      parameters:
+        - name: upc
+          in: path
+          required: true
+          schema: { type: string, pattern: "^\\d{12,13}$" }
+          description: "UPC-A (12 digits) or EAN-13 (13 digits) barcode."
+      responses:
+        "200":
+          description: Lookup result.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, upc, source]
+                properties:
+                  version:  { type: string, enum: ["1"] }
+                  item_id:  { type: ["integer", "null"], minimum: 1, description: "Local item_id if cached, null otherwise." }
+                  name:     { type: ["string", "null"] }
+                  category: { type: ["string", "null"] }
+                  upc:      { type: string }
+                  source:   { type: string, description: "Where the data came from (local, openfoodfacts, upcitemdb, unknown)." }
+                additionalProperties: false
+              example:
+                version: "1"
+                item_id: 12
+                name: "Coca-Cola Classic 12oz"
+                category: "beverage"
+                upc: "049000042566"
+                source: "local"
+        "400": { $ref: "#/components/responses/BadRequest" }
+
   # ── Associate ───────────────────────────────────────────────────────────────
   /associate:
     post:
@@ -759,6 +809,9 @@ paths:
                   type: string
                 notes:
                   type: string
+                upc:
+                  type: string
+                  description: "UPC barcode (12 or 13 digits). If provided without name, looks up existing item."
                 confidence:
                   type: number
                   minimum: 0

@@ -87,6 +87,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         415: "unsupported_media_type",
         429: "rate_limited",
         500: "internal_error",
+        502: "service_unavailable",
         503: "service_unavailable",
     }
     error_code = code_map.get(status_code, "bad_request" if status_code == 422 else "internal_error")
@@ -859,6 +860,8 @@ def confirm_photo_groups(
     selected_groups = payload.get("selected_groups") or []
     if not isinstance(selected_groups, list):
         raise HTTPException(status_code=400, detail="selected_groups must be a list")
+    if not selected_groups:
+        raise HTTPException(status_code=400, detail="selected_groups must not be empty")
 
     try:
         repository.ensure_bin_active_or_create(db, bin_id)
