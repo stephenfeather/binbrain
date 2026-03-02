@@ -385,6 +385,36 @@ components:
           items: { $ref: "#/components/schemas/SearchResultItem" }
       additionalProperties: false
 
+    # Models
+    OllamaModel:
+      type: object
+      required: [name]
+      properties:
+        name:        { type: string, example: "qwen3-vl:4b" }
+        size:        { type: ["integer", "null"], description: "Model size in bytes." }
+        modified_at: { type: ["string", "null"], format: date-time }
+      additionalProperties: false
+
+    ListModelsResponse:
+      type: object
+      required: [version, active_model, models]
+      properties:
+        version:      { type: string, enum: ["1"] }
+        active_model: { type: string, description: "Currently selected vision model." }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/OllamaModel" }
+      additionalProperties: false
+
+    SelectModelResponse:
+      type: object
+      required: [version, previous_model, active_model]
+      properties:
+        version:        { type: string, enum: ["1"] }
+        previous_model: { type: string, description: "Model that was active before the switch." }
+        active_model:   { type: string, description: "Newly selected and warmed-up model." }
+      additionalProperties: false
+
   # ── Reusable responses ──────────────────────────────────────────────────────
   responses:
     BadRequest:
@@ -1056,6 +1086,85 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  # ── Models ──────────────────────────────────────────────────────────────────
+  /models:
+    get:
+      summary: List available Ollama vision models
+      operationId: listModels
+      tags: [Models]
+      description: |
+        Queries the Ollama server for all downloaded models and reports
+        which one is currently active for vision inference.
+      responses:
+        "200":
+          description: Available models and the currently active one.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListModelsResponse" }
+              example:
+                version: "1"
+                active_model: "qwen3-vl:4b"
+                models:
+                  - { name: "qwen3-vl:4b", size: 2700000000, modified_at: "2025-02-20T10:00:00Z" }
+                  - { name: "llava:7b", size: 4500000000, modified_at: "2025-02-18T08:30:00Z" }
+        "502":
+          description: Ollama server is unreachable.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /models/select:
+    post:
+      summary: Select and warm up a vision model
+      operationId: selectModel
+      tags: [Models]
+      description: |
+        Sets the active vision model used by `/photos/{photo_id}/suggest`.
+        The model is warmed up on the Ollama server with `keep_alive: -1`
+        so it stays loaded in memory indefinitely.
+
+        This endpoint blocks until the warmup completes (typically 5–30 s
+        depending on model size and whether it was already loaded).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model:
+                  type: string
+                  minLength: 1
+                  description: "Model name as listed by `GET /models` (e.g. `qwen3-vl:4b`)."
+              additionalProperties: false
+            example:
+              model: "qwen3-vl:4b"
+      responses:
+        "200":
+          description: Model selected and warmed up.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SelectModelResponse" }
+              example:
+                version: "1"
+                previous_model: "llava:7b"
+                active_model: "qwen3-vl:4b"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "502":
+          description: Failed to warm up model on Ollama server.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   # ── Search ──────────────────────────────────────────────────────────────────
   /search:
     get:
@@ -1123,5 +1232,7 @@ tags:
     description: Item catalogue management.
   - name: Bins
     description: Bin management and item association.
+  - name: Models
+    description: Ollama vision model management.
   - name: Search
     description: Semantic search over the item catalogue.

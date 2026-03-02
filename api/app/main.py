@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 import os
+import urllib.request
 import uuid
 from functools import partial
 from pathlib import Path
@@ -23,8 +25,10 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
 OLLAMA_MAX_IMAGE_PX = int(os.environ.get("OLLAMA_MAX_IMAGE_PX", "1280"))
+
+# Mutable at runtime via POST /models/select
+_active_vision_model = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -610,7 +614,7 @@ def suggest_for_photo(
             db1.close()
 
         logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
-        vision_model = model or OLLAMA_VISION_MODEL
+        vision_model = model or _active_vision_model
         vision_hits, vision_elapsed_ms = (
             describe_photo(photo_path, OLLAMA_URL, vision_model, OLLAMA_MAX_IMAGE_PX) if photo_path else ([], 0)
         )
@@ -923,4 +927,75 @@ def search(
         "offset": offset,
         "min_score": min_score,
         "results": rows,
+    }
+
+
+@app.get("/models")
+def list_models(request: Request = None):
+    """List vision models available on the Ollama server."""
+    request_id = getattr(request.state, "request_id", None) if request else None
+    try:
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        logger.warning("event=models_list_failed request_id=%s error=%s", request_id, str(e)[:200])
+        raise HTTPException(status_code=502, detail=f"cannot reach Ollama: {e}")
+
+    models = []
+    for m in data.get("models", []):
+        models.append({
+            "name": m.get("name"),
+            "size": m.get("size"),
+            "modified_at": m.get("modified_at"),
+        })
+
+    logger.info("event=models_list request_id=%s count=%s active=%s", request_id, len(models), _active_vision_model)
+    return {
+        "version": "1",
+        "active_model": _active_vision_model,
+        "models": models,
+    }
+
+
+@app.post("/models/select")
+def select_model(
+    payload: dict = Body(...),
+    request: Request = None,
+):
+    """Select a vision model and warm it up on the Ollama server."""
+    global _active_vision_model
+    request_id = getattr(request.state, "request_id", None) if request else None
+
+    model_name = (payload.get("model") or "").strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="model is required")
+
+    # Warm up the model by sending a lightweight generate request with keep_alive=-1
+    try:
+        warmup_payload = json.dumps({
+            "model": model_name,
+            "prompt": "",
+            "keep_alive": -1,
+        }).encode()
+        req = urllib.request.Request(
+            f"{OLLAMA_URL}/api/generate",
+            data=warmup_payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            # Read the streamed response to completion
+            resp.read()
+    except Exception as e:
+        logger.warning("event=model_select_warmup_failed request_id=%s model=%s error=%s", request_id, model_name, str(e)[:200])
+        raise HTTPException(status_code=502, detail=f"failed to warm up model: {e}")
+
+    previous = _active_vision_model
+    _active_vision_model = model_name
+
+    logger.info("event=model_select request_id=%s previous=%s active=%s", request_id, previous, _active_vision_model)
+    return {
+        "version": "1",
+        "previous_model": previous,
+        "active_model": _active_vision_model,
     }
