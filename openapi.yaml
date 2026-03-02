@@ -1272,6 +1272,78 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  # ── Settings ────────────────────────────────────────────────────────────────
+  /settings/image-size:
+    get:
+      summary: Get the current max image size for vision inference
+      operationId: getImageSize
+      tags: [Settings]
+      description: |
+        Returns the current maximum image dimension (longest side in pixels)
+        used when resizing photos before sending to the vision model.
+      responses:
+        "200":
+          description: Current image size setting.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, max_image_px]
+                properties:
+                  version:      { type: string, enum: ["1"] }
+                  max_image_px: { type: integer, minimum: 128, maximum: 4096 }
+                additionalProperties: false
+              example:
+                version: "1"
+                max_image_px: 1280
+
+    post:
+      summary: Set the max image size for vision inference
+      operationId: setImageSize
+      tags: [Settings]
+      description: |
+        Sets the maximum image dimension (longest side in pixels) used when
+        resizing photos before sending to the vision model. Smaller values
+        reduce inference time; larger values preserve more detail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [max_image_px]
+              properties:
+                max_image_px:
+                  type: integer
+                  minimum: 128
+                  maximum: 4096
+                  description: "Max longest side in pixels (128–4096)."
+              additionalProperties: false
+            example:
+              max_image_px: 800
+      responses:
+        "200":
+          description: Image size updated.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, previous_max_image_px, max_image_px]
+                properties:
+                  version:               { type: string, enum: ["1"] }
+                  previous_max_image_px: { type: integer }
+                  max_image_px:          { type: integer }
+                additionalProperties: false
+              example:
+                version: "1"
+                previous_max_image_px: 1280
+                max_image_px: 800
+        "400": { $ref: "#/components/responses/BadRequest" }
+
   # ── Search ──────────────────────────────────────────────────────────────────
   /search:
     get:
@@ -1341,5 +1413,7 @@ tags:
     description: Bin management and item association.
   - name: Models
     description: Ollama vision model management.
+  - name: Settings
+    description: Runtime configuration.
   - name: Search
     description: Semantic search over the item catalogue.

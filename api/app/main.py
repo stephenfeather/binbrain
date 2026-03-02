@@ -25,7 +25,8 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MAX_IMAGE_PX = int(os.environ.get("OLLAMA_MAX_IMAGE_PX", "1280"))
+# Mutable at runtime via POST /settings/image-size
+_max_image_px = int(os.environ.get("OLLAMA_MAX_IMAGE_PX", "1280"))
 
 # Mutable at runtime via POST /models/select
 _active_vision_model = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
@@ -639,7 +640,7 @@ def suggest_for_photo(
         logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
         vision_model = model or _active_vision_model
         vision_hits, vision_elapsed_ms = (
-            describe_photo(photo_path, OLLAMA_URL, vision_model, OLLAMA_MAX_IMAGE_PX) if photo_path else ([], 0)
+            describe_photo(photo_path, OLLAMA_URL, vision_model, _max_image_px) if photo_path else ([], 0)
         )
         logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
     except HTTPException:
@@ -1053,4 +1054,43 @@ def select_model(
         "version": "1",
         "previous_model": previous,
         "active_model": _active_vision_model,
+    }
+
+
+@app.get("/settings/image-size")
+def get_image_size(request: Request = None):
+    """Return the current max image size used for vision inference."""
+    return {
+        "version": "1",
+        "max_image_px": _max_image_px,
+    }
+
+
+@app.post("/settings/image-size")
+def set_image_size(
+    payload: dict = Body(...),
+    request: Request = None,
+):
+    """Set the max image size (longest side in pixels) for vision inference."""
+    global _max_image_px
+    request_id = getattr(request.state, "request_id", None) if request else None
+
+    value = payload.get("max_image_px")
+    if value is None:
+        raise HTTPException(status_code=400, detail="max_image_px is required")
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="max_image_px must be an integer")
+    if value < 128 or value > 4096:
+        raise HTTPException(status_code=400, detail="max_image_px must be between 128 and 4096")
+
+    previous = _max_image_px
+    _max_image_px = value
+
+    logger.info("event=image_size_set request_id=%s previous=%s new=%s", request_id, previous, _max_image_px)
+    return {
+        "version": "1",
+        "previous_max_image_px": previous,
+        "max_image_px": _max_image_px,
     }
