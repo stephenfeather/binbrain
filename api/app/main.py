@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import threading
 import urllib.request
 import uuid
 from functools import partial
@@ -75,6 +77,67 @@ async def request_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["x-request-id"] = request_id
     return response
+
+
+_AUTH_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json"}
+
+
+@app.middleware("http")
+async def api_key_auth_middleware(request: Request, call_next):
+    if request.url.path in _AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+
+    raw_key = request.headers.get("x-api-key")
+    request_id = getattr(request.state, "request_id", None)
+
+    if not raw_key:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "version": "1",
+                "error": {
+                    "code": "unauthorized",
+                    "message": "Missing X-API-Key header",
+                    "request_id": request_id,
+                },
+            },
+            headers={"x-request-id": request_id or ""},
+        )
+
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    db = SessionLocal()
+    try:
+        key_row = repository.validate_api_key(db, key_hash)
+    finally:
+        db.close()
+
+    if not key_row:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "version": "1",
+                "error": {
+                    "code": "unauthorized",
+                    "message": "Invalid or revoked API key",
+                    "request_id": request_id,
+                },
+            },
+            headers={"x-request-id": request_id or ""},
+        )
+
+    request.state.api_key_id = key_row["id"]
+
+    # Fire-and-forget last_used update
+    def _touch():
+        s = SessionLocal()
+        try:
+            repository.touch_api_key_last_used(s, key_row["id"])
+            s.commit()
+        finally:
+            s.close()
+    threading.Thread(target=_touch, daemon=True).start()
+
+    return await call_next(request)
 
 
 @app.exception_handler(HTTPException)
@@ -1094,3 +1157,57 @@ def set_image_size(
         "previous_max_image_px": previous,
         "max_image_px": _max_image_px,
     }
+
+
+# ── Admin: API Key Management ─────────────────────────────────────────────────
+
+
+@app.post("/admin/api-keys")
+def admin_create_api_key(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    key_hash, raw_key = repository.create_api_key(db, name)
+    db.commit()
+
+    logger.info(
+        "event=api_key_create request_id=%s name=%s",
+        db.info.get("request_id"),
+        name,
+    )
+    return {
+        "version": "1",
+        "key": raw_key,
+        "name": name,
+        "message": "Save this key — it will not be shown again.",
+    }
+
+
+@app.get("/admin/api-keys")
+def admin_list_api_keys(
+    db: Session = Depends(get_db),
+):
+    keys = repository.list_api_keys(db)
+    return {"version": "1", "keys": keys}
+
+
+@app.delete("/admin/api-keys/{key_id}")
+def admin_revoke_api_key(
+    key_id: int,
+    db: Session = Depends(get_db),
+):
+    revoked = repository.revoke_api_key(db, key_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="key not found or already revoked")
+    db.commit()
+
+    logger.info(
+        "event=api_key_revoke request_id=%s key_id=%s",
+        db.info.get("request_id"),
+        key_id,
+    )
+    return {"version": "1", "key_id": key_id, "revoked": True}

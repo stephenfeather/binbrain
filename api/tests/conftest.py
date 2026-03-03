@@ -1,5 +1,7 @@
+import hashlib
 import importlib
 import os
+import secrets
 import sys
 import types
 
@@ -149,6 +151,17 @@ def _init_schema(engine) -> None:
 
     CREATE UNIQUE INDEX photo_group_items_uq
     ON photo_group_items (photo_id, model, label, category, item_id);
+
+    DROP TABLE IF EXISTS api_keys CASCADE;
+    CREATE TABLE api_keys (
+        id          bigserial PRIMARY KEY,
+        key_hash    text NOT NULL UNIQUE,
+        name        text NOT NULL,
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        revoked_at  timestamptz,
+        last_used   timestamptz
+    );
+    CREATE INDEX idx_api_keys_hash ON api_keys(key_hash);
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))
@@ -179,9 +192,28 @@ def app_module():
     return main
 
 
+@pytest.fixture(scope="session")
+def test_api_key(app_module):
+    """Create a test API key and return the raw key string."""
+    raw_key = "bb_" + secrets.token_urlsafe(32)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    db = app_module.SessionLocal()
+    try:
+        db.execute(
+            text("INSERT INTO api_keys (key_hash, name) VALUES (:key_hash, :name)"),
+            {"key_hash": key_hash, "name": "test-fixture"},
+        )
+        db.commit()
+    finally:
+        db.close()
+    return raw_key
+
+
 @pytest.fixture()
-def client(app_module):
-    return TestClient(app_module.app)
+def client(app_module, test_api_key):
+    c = TestClient(app_module.app)
+    c.headers["X-API-Key"] = test_api_key
+    return c
 
 
 @pytest.fixture()

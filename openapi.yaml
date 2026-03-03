@@ -20,11 +20,21 @@ servers:
   - url: http://localhost:8000
     description: Local Docker Compose stack
 
-# No authentication is currently enforced. API key auth is planned.
-security: []
+security:
+  - ApiKeyAuth: []
 
 # ── Reusable components ────────────────────────────────────────────────────────
 components:
+
+  # ── Security Schemes ─────────────────────────────────────────────────────────
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API key for authentication. Obtain via `POST /admin/api-keys` or the
+        bootstrap CLI script `scripts/create_api_key.py`.
 
   # ── Headers ─────────────────────────────────────────────────────────────────
   headers:
@@ -57,6 +67,7 @@ components:
             code:
               type: string
               enum:
+                - unauthorized
                 - bad_request
                 - not_found
                 - conflict
@@ -444,6 +455,20 @@ components:
 
   # ── Reusable responses ──────────────────────────────────────────────────────
   responses:
+    Unauthorized:
+      description: Missing, invalid, or revoked API key.
+      headers:
+        x-request-id: { $ref: "#/components/headers/XRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            version: "1"
+            error:
+              code: unauthorized
+              message: "Missing X-API-Key header"
+              request_id: "a1b2c3"
+
     BadRequest:
       description: Validation or input error.
       headers:
@@ -512,6 +537,7 @@ paths:
       summary: Health check
       operationId: getHealth
       tags: [Utility]
+      security: []
       description: |
         Returns `200` when the API and database are reachable.
         Returns `503` when the database is unavailable.
@@ -1401,6 +1427,103 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  # ── Admin: API Key Management ────────────────────────────────────────────────
+  /admin/api-keys:
+    post:
+      summary: Create an API key
+      operationId: createApiKey
+      tags: [Admin]
+      description: |
+        Create a new API key. The raw key is returned **once** in the response;
+        only the SHA-256 hash is stored server-side.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, description: "Human label for this key." }
+      responses:
+        "200":
+          description: Key created successfully.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, key, name, message]
+                properties:
+                  version: { type: string, enum: ["1"] }
+                  key:     { type: string, description: "The raw API key — save this, it will not be shown again." }
+                  name:    { type: string }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+    get:
+      summary: List all API keys
+      operationId: listApiKeys
+      tags: [Admin]
+      description: |
+        List all API keys with metadata. Key hashes are **never** returned.
+      responses:
+        "200":
+          description: Key list.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, keys]
+                properties:
+                  version: { type: string, enum: ["1"] }
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, created_at]
+                      properties:
+                        id:         { type: integer }
+                        name:       { type: string }
+                        created_at: { type: string, format: date-time }
+                        revoked_at: { type: ["string", "null"], format: date-time }
+                        last_used:  { type: ["string", "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/api-keys/{key_id}:
+    delete:
+      summary: Revoke an API key
+      operationId: revokeApiKey
+      tags: [Admin]
+      description: |
+        Soft-revoke a key by setting `revoked_at`. The key row is preserved for
+        audit purposes.
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Key revoked.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, key_id, revoked]
+                properties:
+                  version: { type: string, enum: ["1"] }
+                  key_id:  { type: integer }
+                  revoked: { type: boolean, const: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
 # ── Tags ───────────────────────────────────────────────────────────────────────
 tags:
   - name: Utility
@@ -1417,3 +1540,5 @@ tags:
     description: Runtime configuration.
   - name: Search
     description: Semantic search over the item catalogue.
+  - name: Admin
+    description: API key management.
