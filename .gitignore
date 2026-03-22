@@ -7,3 +7,6 @@ labels.pdf
 
 # Photo storage (binary uploads, not source)
 data/
+
+# Downloaded model weights
+*.pt
