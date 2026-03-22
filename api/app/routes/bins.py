@@ -1,0 +1,284 @@
+import os
+import uuid
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Form, Body, UploadFile, File
+from sqlalchemy.orm import Session
+
+from app.db import repository
+from app.deps import (
+    get_db, embed_text, canonical_item_text, fingerprint_for,
+    vec_to_pgvector, photo_root, EMBED_MODEL_NAME, logger,
+)
+from app.services.upc_lookup import validate_upc
+
+router = APIRouter()
+
+
+@router.post("/ingest")
+async def ingest(
+    bin_id: str = Form(...),
+    photos: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    bin_id = bin_id.strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    # Ensure bin exists
+    try:
+        repository.ensure_bin_active_or_create(db, bin_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="bin not found")
+    db.commit()
+
+    logger.info(
+        "event=ingest_start request_id=%s bin_id=%s count=%s",
+        db.info.get("request_id"),
+        bin_id,
+        len(photos),
+    )
+
+    saved = []
+    bin_dir = photo_root / bin_id
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    for up in photos:
+        ext = os.path.splitext(up.filename or "")[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"):
+            ext = ext if ext else ".bin"
+
+        fname = f"{uuid.uuid4().hex}{ext}"
+        fpath = bin_dir / fname
+        fpath.write_bytes(await up.read())
+
+        photo_id = repository.insert_photo(db, bin_id, str(fpath))
+        db.commit()
+
+        saved.append({"photo_id": photo_id, "path": str(fpath)})
+
+    logger.info(
+        "event=ingest_complete request_id=%s bin_id=%s saved=%s",
+        db.info.get("request_id"),
+        bin_id,
+        len(saved),
+    )
+
+    if saved:
+        logger.info(
+            "event=ingest_photo_ids request_id=%s bin_id=%s photo_ids=%s",
+            db.info.get("request_id"),
+            bin_id,
+            [p["photo_id"] for p in saved],
+        )
+
+    return {"version": "1", "bin_id": bin_id, "photos": saved}
+
+
+@router.post("/bins/{bin_id}/add")
+async def add_to_bin(
+    bin_id: str,
+    name: Optional[str] = Form(None),
+    category: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    upc: Optional[str] = Form(None),
+    confidence: Optional[float] = Form(None),
+    quantity: Optional[float] = Form(None),
+    photos: Optional[list[UploadFile]] = File(None),
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    name = (name or "").strip() if name is not None else None
+    if name == "":
+        name = None
+
+    upc = (upc or "").strip() or None
+    if upc and not validate_upc(upc):
+        raise HTTPException(status_code=400, detail="invalid UPC format (expected 12 or 13 digits)")
+
+    try:
+        try:
+            repository.ensure_bin_active_or_create(db, bin_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="bin not found")
+
+        item_id = None
+        if upc and not name:
+            # UPC-only path: look up existing item, skip insert
+            existing = repository.find_item_by_upc(db, upc)
+            if existing:
+                item_id = existing["item_id"]
+        if name:
+            # If UPC already exists on a different item, use that item
+            if upc:
+                existing = repository.find_item_by_upc(db, upc)
+                if existing:
+                    item_id = existing["item_id"]
+            if item_id is None:
+                item_id = repository.insert_item(db, name, category, notes, upc=upc)
+
+            vec = embed_text(canonical_item_text(name, category, notes))
+            dims = len(vec)
+            if dims != 384:
+                raise HTTPException(status_code=500, detail=f"unexpected embedding dims {dims}, expected 384")
+            vec_str = vec_to_pgvector(vec)
+
+            repository.upsert_item_embedding(db, item_id, EMBED_MODEL_NAME, dims, vec_str)
+
+        saved_photos = []
+        if photos:
+            bin_dir = photo_root / bin_id
+            bin_dir.mkdir(parents=True, exist_ok=True)
+
+            for up in photos:
+                ext = os.path.splitext(up.filename or "")[1].lower()
+                if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"):
+                    ext = ext if ext else ".bin"
+
+                fname = f"{uuid.uuid4().hex}{ext}"
+                fpath = bin_dir / fname
+                fpath.write_bytes(await up.read())
+
+                photo_id = repository.insert_photo(db, bin_id, str(fpath))
+                saved_photos.append({"photo_id": photo_id, "path": str(fpath)})
+
+        if item_id is not None:
+            repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
+
+        db.commit()
+
+        logger.info(
+            "event=bin_add request_id=%s bin_id=%s item_id=%s photos=%s",
+            db.info.get("request_id"),
+            bin_id,
+            item_id,
+            len(saved_photos),
+        )
+        if saved_photos:
+            logger.info(
+                "event=bin_add_photo_ids request_id=%s bin_id=%s photo_ids=%s",
+                db.info.get("request_id"),
+                bin_id,
+                [p["photo_id"] for p in saved_photos],
+            )
+        return {
+            "bin_id": bin_id,
+            "item_id": item_id,
+            "name": name,
+            "category": category,
+            "notes": notes,
+            "upc": upc,
+            "photos": saved_photos,
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"add_to_bin failed: {e}")
+
+
+@router.get("/bins/{bin_id}")
+def get_bin(
+    bin_id: str,
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    exists = repository.bin_exists(db, bin_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    items = repository.fetch_bin_items(db, bin_id)
+    photos = repository.fetch_bin_photos(db, bin_id)
+
+    logger.info(
+        "event=bin_get request_id=%s bin_id=%s items=%s photos=%s",
+        db.info.get("request_id"),
+        bin_id,
+        len(items),
+        len(photos),
+    )
+    return {"version": "1", "bin_id": bin_id, "items": items, "photos": photos}
+
+
+@router.get("/bins")
+def list_bins(
+    db: Session = Depends(get_db),
+):
+    bins = repository.list_bins(db)
+    logger.info(
+        "event=bins_list request_id=%s count=%s",
+        db.info.get("request_id"),
+        len(bins),
+    )
+    return {"version": "1", "bins": bins}
+
+
+@router.delete("/bins/{bin_id}/items/{item_id}")
+def remove_item_from_bin(
+    bin_id: str,
+    item_id: int,
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    if not repository.bin_exists(db, bin_id):
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    removed = repository.delete_bin_item(db, bin_id, item_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="item not in bin")
+
+    db.commit()
+    logger.info(
+        "event=bin_item_delete request_id=%s bin_id=%s item_id=%s",
+        db.info.get("request_id"),
+        bin_id,
+        item_id,
+    )
+    return {"version": "1", "bin_id": bin_id, "item_id": item_id, "removed": True}
+
+
+@router.patch("/bins/{bin_id}/items/{item_id}")
+def update_item_in_bin(
+    bin_id: str,
+    item_id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    if not repository.bin_exists(db, bin_id):
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    quantity = payload.get("quantity")
+    confidence = payload.get("confidence")
+
+    if quantity is None and confidence is None:
+        raise HTTPException(status_code=400, detail="at least one of quantity or confidence is required")
+
+    updated = repository.update_bin_item(db, bin_id, item_id, quantity=quantity, confidence=confidence)
+    if not updated:
+        raise HTTPException(status_code=404, detail="item not in bin")
+
+    db.commit()
+    logger.info(
+        "event=bin_item_update request_id=%s bin_id=%s item_id=%s quantity=%s confidence=%s",
+        db.info.get("request_id"),
+        bin_id,
+        item_id,
+        quantity,
+        confidence,
+    )
+    return {"version": "1", "bin_id": bin_id, "item_id": item_id, "quantity": quantity, "confidence": confidence}

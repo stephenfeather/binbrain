@@ -1,0 +1,87 @@
+import logging
+import os
+from pathlib import Path
+from typing import Optional
+
+from fastapi import Request
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+
+from fastembed import TextEmbedding
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
+EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+# Mutable at runtime via POST /settings/image-size
+_max_image_px = int(os.environ.get("OLLAMA_MAX_IMAGE_PX", "1280"))
+
+# Mutable at runtime via POST /models/select
+_active_vision_model = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+photo_root = Path(PHOTO_DIR)
+photo_root.mkdir(parents=True, exist_ok=True)
+
+# Local CPU text embeddings (bge-small-en-v1.5 => 384 dims)
+embedder = TextEmbedding(model_name=EMBED_MODEL_NAME)
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger("binbrain")
+
+
+def get_db(request: Request):
+    db = SessionLocal()
+    try:
+        db.info["request_id"] = getattr(request.state, "request_id", None)
+        yield db
+    finally:
+        db.close()
+
+
+def canonical_item_text(name: str, category: Optional[str], notes: Optional[str]) -> str:
+    parts = [f"name: {name}"]
+    if category:
+        parts.append(f"category: {category}")
+    if notes:
+        parts.append(f"notes: {notes}")
+    return "\n".join(parts)
+
+
+def fingerprint_for(name: str, category: Optional[str]) -> str:
+    name_part = (name or "").strip().lower()
+    cat_part = (category or "").strip().lower()
+    return f"{name_part}|{cat_part}"
+
+
+def embed_text(s: str) -> list[float]:
+    s = (s or "").strip()
+    if not s:
+        raise ValueError("empty text")
+    vec = next(embedder.embed([s]))
+    return vec.tolist()
+
+
+def vec_to_pgvector(vec: list[float]) -> str:
+    # pgvector accepts a string like: [0.1,0.2,...]
+    return "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
+
+
+def get_active_vision_model() -> str:
+    return _active_vision_model
+
+
+def set_active_vision_model(model: str):
+    global _active_vision_model
+    _active_vision_model = model
+
+
+def get_max_image_px() -> int:
+    return _max_image_px
+
+
+def set_max_image_px(value: int):
+    global _max_image_px
+    _max_image_px = value
