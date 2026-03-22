@@ -9,6 +9,7 @@ from app.deps import (
     get_db, SessionLocal, OLLAMA_URL, logger,
     get_active_vision_model, set_active_vision_model,
     get_max_image_px, set_max_image_px,
+    get_detection_model, set_detection_model,
 )
 
 router = APIRouter()
@@ -165,6 +166,49 @@ def set_image_size(
         "version": "1",
         "previous_max_image_px": previous,
         "max_image_px": value,
+    }
+
+
+# ── Detection Model Settings ──────────────────────────────────────────
+
+
+@router.get("/settings/detection-model")
+def get_detection_model_setting(request: Request = None):
+    """Return the current detection model (YOLO weights file)."""
+    return {
+        "version": "1",
+        "detection_model": get_detection_model(),
+    }
+
+
+@router.post("/settings/detection-model")
+def set_detection_model_setting(
+    payload: dict = Body(...),
+    request: Request = None,
+):
+    """Set the detection model (YOLO weights file, e.g. yolo11s.pt)."""
+    request_id = getattr(request.state, "request_id", None) if request else None
+
+    model_name = (payload.get("detection_model") or "").strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="detection_model is required")
+
+    previous = get_detection_model()
+    set_detection_model(model_name)
+
+    try:
+        settings_db = SessionLocal()
+        repository.set_setting(settings_db, "detection_model", model_name)
+        settings_db.commit()
+        settings_db.close()
+    except Exception as e:
+        logger.warning("event=setting_persist_failed key=detection_model error=%s", str(e)[:200])
+
+    logger.info("event=detection_model_set request_id=%s previous=%s new=%s", request_id, previous, model_name)
+    return {
+        "version": "1",
+        "previous_detection_model": previous,
+        "detection_model": model_name,
     }
 
 

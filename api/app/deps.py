@@ -87,6 +87,19 @@ def set_max_image_px(value: int):
     _max_image_px = value
 
 
+# Mutable at runtime via POST /settings/detection-model
+_detection_model = os.environ.get("YOLO_MODEL_PATH", "yolo11s.pt")
+
+
+def get_detection_model() -> str:
+    return _detection_model
+
+
+def set_detection_model(value: str):
+    global _detection_model
+    _detection_model = value
+
+
 def load_settings_from_db() -> None:
     """Load persisted settings from DB, falling back to env/defaults."""
     from app.db import repository
@@ -105,6 +118,11 @@ def load_settings_from_db() -> None:
                 logger.info("event=settings_loaded key=max_image_px value=%s", max_px)
             except (TypeError, ValueError):
                 logger.warning("event=settings_load_invalid key=max_image_px value=%s", max_px)
+
+        det_model = repository.get_setting(db, "detection_model")
+        if det_model:
+            set_detection_model(det_model)
+            logger.info("event=settings_loaded key=detection_model value=%s", det_model)
     except Exception as e:
         logger.warning("event=settings_load_failed error=%s", str(e)[:200])
     finally:

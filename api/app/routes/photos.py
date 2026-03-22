@@ -12,7 +12,7 @@ from app.deps import (
     get_active_vision_model, get_max_image_px,
     OLLAMA_URL, logger,
 )
-from app.services.detection import detect
+from app.services.detection import detect, get_model_name
 from app.services.vision import describe_photo
 
 router = APIRouter()
@@ -197,7 +197,7 @@ def detect_for_photo(
         raise HTTPException(status_code=404, detail="photo not found")
 
     detections = detect(photo_path)
-    model = "stub"
+    model = get_model_name()
     repository.insert_photo_detections(db, photo_id, model, detections)
     repository.clear_detection_groups(db, photo_id, model)
     db.commit()
@@ -225,7 +225,7 @@ def groups_for_photo(
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
-    model = "stub"
+    model = get_model_name()
     groups = repository.fetch_cached_groups(db, photo_id, model)
     if not groups:
         groups = repository.compute_groups_from_detections(db, photo_id, model)
@@ -270,7 +270,7 @@ def confirm_photo_groups(
     except ValueError:
         raise HTTPException(status_code=404, detail="bin not found")
 
-    model = "stub"
+    model = get_model_name()
     results = []
     try:
         for g in selected_groups:
