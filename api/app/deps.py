@@ -85,3 +85,27 @@ def get_max_image_px() -> int:
 def set_max_image_px(value: int):
     global _max_image_px
     _max_image_px = value
+
+
+def load_settings_from_db() -> None:
+    """Load persisted settings from DB, falling back to env/defaults."""
+    from app.db import repository
+
+    db = SessionLocal()
+    try:
+        vision_model = repository.get_setting(db, "active_vision_model")
+        if vision_model:
+            set_active_vision_model(vision_model)
+            logger.info("event=settings_loaded key=active_vision_model value=%s", vision_model)
+
+        max_px = repository.get_setting(db, "max_image_px")
+        if max_px:
+            try:
+                set_max_image_px(int(max_px))
+                logger.info("event=settings_loaded key=max_image_px value=%s", max_px)
+            except (TypeError, ValueError):
+                logger.warning("event=settings_load_invalid key=max_image_px value=%s", max_px)
+    except Exception as e:
+        logger.warning("event=settings_load_failed error=%s", str(e)[:200])
+    finally:
+        db.close()

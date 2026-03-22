@@ -584,3 +584,28 @@ def touch_api_key_last_used(db: Session, key_id: int) -> None:
         text("UPDATE api_keys SET last_used = now() WHERE id = :key_id"),
         {"key_id": key_id},
     )
+
+
+# ── Settings ──────────────────────────────────────────────────────────
+
+
+def get_setting(db: Session, key: str) -> Optional[str]:
+    row = db.execute(
+        text("SELECT value FROM settings WHERE key = :key"),
+        {"key": key},
+    ).scalar()
+    return row
+
+
+def set_setting(db: Session, key: str, value: str) -> None:
+    db.execute(
+        text(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (:key, :value, now())
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = now()
+            """
+        ),
+        {"key": key, "value": value},
+    )

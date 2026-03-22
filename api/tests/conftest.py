@@ -162,6 +162,13 @@ def _init_schema(engine) -> None:
         last_used   timestamptz
     );
     CREATE INDEX idx_api_keys_hash ON api_keys(key_hash);
+
+    DROP TABLE IF EXISTS settings CASCADE;
+    CREATE TABLE settings (
+        key   text PRIMARY KEY,
+        value text NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now()
+    );
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))

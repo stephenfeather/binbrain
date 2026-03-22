@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from app.db import repository
 from app.deps import (
     SessionLocal, OLLAMA_URL, logger,
-    get_active_vision_model,
+    get_active_vision_model, load_settings_from_db,
 )
 from app.routes import health, items, bins, photos, upc, admin
 
@@ -21,7 +21,8 @@ app = FastAPI(title="BinBrain API")
 
 @app.on_event("startup")
 def warmup_vision_model():
-    """Pre-load the default vision model into Ollama on API startup."""
+    """Load persisted settings, then pre-load the vision model into Ollama."""
+    load_settings_from_db()
     model = get_active_vision_model()
     logger.info("event=warmup_start model=%s ollama_url=%s", model, OLLAMA_URL)
     try:

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import repository
 from app.deps import (
-    get_db, OLLAMA_URL, logger,
+    get_db, SessionLocal, OLLAMA_URL, logger,
     get_active_vision_model, set_active_vision_model,
     get_max_image_px, set_max_image_px,
 )
@@ -106,6 +106,14 @@ def select_model(
     previous = get_active_vision_model()
     set_active_vision_model(model_name)
 
+    try:
+        settings_db = SessionLocal()
+        repository.set_setting(settings_db, "active_vision_model", model_name)
+        settings_db.commit()
+        settings_db.close()
+    except Exception as e:
+        logger.warning("event=setting_persist_failed key=active_vision_model error=%s", str(e)[:200])
+
     logger.info("event=model_select request_id=%s previous=%s active=%s", request_id, previous, model_name)
     return {
         "version": "1",
@@ -143,6 +151,14 @@ def set_image_size(
 
     previous = get_max_image_px()
     set_max_image_px(value)
+
+    try:
+        settings_db = SessionLocal()
+        repository.set_setting(settings_db, "max_image_px", str(value))
+        settings_db.commit()
+        settings_db.close()
+    except Exception as e:
+        logger.warning("event=setting_persist_failed key=max_image_px error=%s", str(e)[:200])
 
     logger.info("event=image_size_set request_id=%s previous=%s new=%s", request_id, previous, value)
     return {
