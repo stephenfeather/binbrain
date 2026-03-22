@@ -1,19 +1,37 @@
-FROM python:3.12-slim
+# ── Builder ──────────────────────────────────
+FROM python:3.12-slim AS builder
+WORKDIR /build
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml /build/pyproject.toml
+
+# CPU-only torch first (saves ~600MB vs default CUDA bundle),
+# then install the rest of the project dependencies.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir .
+
+# Strip packages that are build/optional deps not needed at runtime.
+# matplotlib, fontTools, sympy are only used by ultralytics for plotting.
+# polars is pulled in by fastembed but unused at runtime.
+RUN pip uninstall -y matplotlib fonttools polars 2>/dev/null; \
+    rm -rf /usr/local/lib/python3.12/site-packages/matplotlib* \
+           /usr/local/lib/python3.12/site-packages/fontTools* \
+           /usr/local/lib/python3.12/site-packages/_polars_runtime* \
+           /usr/local/lib/python3.12/site-packages/polars* \
+           /usr/local/lib/python3.12/site-packages/torch/test
+
+# ── Runtime ──────────────────────────────────
+FROM python:3.12-slim
 WORKDIR /app
 
-# Needed to compile packages like PyStemmer on ARM64
+# OpenCV runtime deps (libGL + glib)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    build-essential \
-    libgl1 \
-    libglib2.0-0 \
-  && rm -rf /var/lib/apt/lists/*
+    libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml /app/pyproject.toml
-
-RUN pip install --no-cache-dir .
-
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app /app/app
 
 EXPOSE 8000
