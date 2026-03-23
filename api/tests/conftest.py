@@ -199,14 +199,16 @@ def app_module():
 
     _stub_fastembed()
 
-    if "app.main" in sys.modules:
-        del sys.modules["app.main"]
+    for mod in [m for m in sys.modules if m.startswith("app.")]:
+        del sys.modules[mod]
 
     import app.main as main
+    import app.deps as deps
+    importlib.reload(deps)
     importlib.reload(main)
 
     try:
-        _init_schema(main.engine)
+        _init_schema(deps.engine)
     except Exception as exc:
         pytest.skip(f"database setup failed: {exc}")
 
@@ -216,9 +218,11 @@ def app_module():
 @pytest.fixture(scope="session")
 def test_api_key(app_module):
     """Create a test API key and return the raw key string."""
+    from app.deps import SessionLocal
+
     raw_key = "bb_" + secrets.token_urlsafe(32)
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-    db = app_module.SessionLocal()
+    db = SessionLocal()
     try:
         db.execute(
             text("INSERT INTO api_keys (key_hash, name) VALUES (:key_hash, :name)"),
@@ -239,7 +243,9 @@ def client(app_module, test_api_key):
 
 @pytest.fixture()
 def db(app_module):
-    db = app_module.SessionLocal()
+    from app.deps import SessionLocal
+
+    db = SessionLocal()
     try:
         yield db
     finally:
