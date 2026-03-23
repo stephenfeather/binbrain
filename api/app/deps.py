@@ -88,7 +88,10 @@ def set_max_image_px(value: int):
 
 
 # Mutable at runtime via POST /settings/detection-model
-_detection_model = os.environ.get("YOLO_MODEL_PATH", "yolo11s.pt")
+_detection_model = os.environ.get("YOLO_MODEL_PATH", "yolov8s-worldv2.pt")
+
+# YOLO-World confidence threshold (lower than YOLO11s due to zero-shot)
+_yolo_world_conf = float(os.environ.get("YOLO_WORLD_CONF", "0.15"))
 
 
 def get_detection_model() -> str:
@@ -98,6 +101,15 @@ def get_detection_model() -> str:
 def set_detection_model(value: str):
     global _detection_model
     _detection_model = value
+
+
+def get_yolo_world_conf() -> float:
+    return _yolo_world_conf
+
+
+def set_yolo_world_conf(value: float):
+    global _yolo_world_conf
+    _yolo_world_conf = value
 
 
 def load_settings_from_db() -> None:

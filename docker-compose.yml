@@ -30,6 +30,7 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen3-vl:2b}
       OLLAMA_MAX_IMAGE_PX: ${OLLAMA_MAX_IMAGE_PX:-1280}
+      YOLO_WORLD_CONF: ${YOLO_WORLD_CONF:-0.15}
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "calebs-system:10.1.1.105"

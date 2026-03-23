@@ -169,6 +169,20 @@ def _init_schema(engine) -> None:
         value text NOT NULL,
         updated_at timestamptz NOT NULL DEFAULT now()
     );
+
+    DROP TABLE IF EXISTS confirmed_classes CASCADE;
+    CREATE TABLE confirmed_classes (
+        id          bigserial PRIMARY KEY,
+        class_name  text NOT NULL,
+        category    text,
+        source      text NOT NULL,
+        confirmed_by text,
+        confirmed_at timestamptz NOT NULL DEFAULT now(),
+        removed_at   timestamptz
+    );
+    CREATE UNIQUE INDEX confirmed_classes_name_uq
+    ON confirmed_classes (lower(trim(class_name)))
+    WHERE removed_at IS NULL;
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))

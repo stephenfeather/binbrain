@@ -14,7 +14,7 @@ from app.deps import (
     SessionLocal, OLLAMA_URL, logger,
     get_active_vision_model, load_settings_from_db,
 )
-from app.routes import health, items, bins, photos, upc, admin
+from app.routes import health, items, bins, photos, upc, admin, classes
 
 app = FastAPI(title="BinBrain API")
 
@@ -23,6 +23,17 @@ app = FastAPI(title="BinBrain API")
 def warmup_vision_model():
     """Load persisted settings, then pre-load the vision model into Ollama."""
     load_settings_from_db()
+
+    # Load confirmed classes and initialize YOLO-World
+    from app.services import class_registry, detection
+    db = SessionLocal()
+    try:
+        class_registry.load_from_db(db)
+        class_registry.set_reload_callback(detection.reload_classes)
+        detection.initialize_model(class_registry.get_classes())
+    finally:
+        db.close()
+
     model = get_active_vision_model()
     logger.info("event=warmup_start model=%s ollama_url=%s", model, OLLAMA_URL)
     try:
@@ -187,3 +198,4 @@ app.include_router(bins.router)
 app.include_router(photos.router)
 app.include_router(upc.router)
 app.include_router(admin.router)
+app.include_router(classes.router)
