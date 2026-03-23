@@ -485,7 +485,7 @@ def search_items(
                   i.name,
                   i.category,
                   i.upc,
-                  (e.embedding <=> CAST(:qvec AS vector)) AS distance,
+                  1.0 - (e.embedding <=> CAST(:qvec AS vector)) AS score,
                   array_remove(array_agg(bi.bin_id), NULL) AS bins
                 FROM item_embeddings e
                 JOIN items i ON i.item_id = e.item_id
@@ -509,7 +509,7 @@ def search_items(
                   i.name,
                   i.category,
                   i.upc,
-                  (e.embedding <=> CAST(:qvec AS vector)) AS distance,
+                  1.0 - (e.embedding <=> CAST(:qvec AS vector)) AS score,
                   array_remove(array_agg(bi.bin_id), NULL) AS bins
                 FROM item_embeddings e
                 JOIN items i ON i.item_id = e.item_id
