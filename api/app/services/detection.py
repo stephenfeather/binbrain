@@ -21,15 +21,15 @@ _model_lock = threading.RLock()
 
 
 def _get_model():
-    """Lazy-load YOLOWorld model, reloading if the configured model changes."""
+    """Lazy-load YOLOE model, reloading if the configured model changes."""
     global _model, _model_path
-    from ultralytics import YOLOWorld
+    from ultralytics import YOLOE
     from app.deps import get_detection_model
 
     desired_path = get_detection_model()
     if _model is None or _model_path != desired_path:
-        logger.info("event=yolo_world_load model=%s", desired_path)
-        _model = YOLOWorld(desired_path)
+        logger.info("event=yoloe_load model=%s", desired_path)
+        _model = YOLOE(desired_path)
         _model_path = desired_path
     return _model
 
@@ -39,23 +39,23 @@ def initialize_model(classes: list[str]) -> None:
     with _model_lock:
         model = _get_model()
         if classes:
-            logger.info("event=yolo_world_set_classes count=%d", len(classes))
+            logger.info("event=yoloe_set_classes count=%d", len(classes))
             model.set_classes(classes)
 
 
 def reload_classes(classes: list[str]) -> None:
-    """Re-encode CLIP text embeddings for the new class list.
+    """Re-encode text embeddings for the new class list.
 
     Called from a background thread by class_registry on mutations.
     """
     with _model_lock:
         model = _get_model()
         if classes:
-            logger.warning("event=yolo_world_reload_start count=%d", len(classes))
+            logger.warning("event=yoloe_reload_start count=%d", len(classes))
             model.set_classes(classes)
-            logger.warning("event=yolo_world_reload_done count=%d", len(classes))
+            logger.warning("event=yoloe_reload_done count=%d", len(classes))
         else:
-            logger.warning("event=yolo_world_reload_empty")
+            logger.warning("event=yoloe_reload_empty")
 
 
 def get_device() -> str:
@@ -72,7 +72,7 @@ def get_model_name() -> str:
 
 
 def detect(photo_path: str) -> list[Detection]:
-    """Detect objects in the given photo using YOLO-World.
+    """Detect objects in the given photo using YOLOE.
 
     Returns a list of detections with label, category, confidence, and
     bounding box in [x1, y1, x2, y2] pixel coordinates.

@@ -30,10 +30,21 @@ BASE_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BASE_DIR / "data" / "benchmark_results"
 SUPPORTED_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 
+# Classes for text-prompt models (matches benchmark image content)
+BENCHMARK_CLASSES = [
+    "battery", "bottle", "calculator", "coffee mug", "flashlight",
+    "glasses", "glue stick", "hammer", "headphones", "keys",
+    "light bulb", "marker", "mouse", "pliers", "ruler",
+    "scissors", "screwdriver", "tape measure", "tape roll",
+    "usb cable", "wrench", "bolt", "capacitor", "book",
+]
+
 # Models to benchmark — add new ones here
 MODEL_REGISTRY = {
     "yolo11s.pt": {"type": "YOLO", "dataset": "COCO", "classes": 80},
+    "yoloe-v8s-seg.pt": {"type": "YOLOE", "dataset": "LVIS+Objects365", "classes": "text-prompt"},
     "yoloe-v8s-seg-pf.pt": {"type": "YOLOE", "dataset": "LVIS+Objects365", "classes": 4585},
+    "yolov8s-worldv2.pt": {"type": "YOLOWorld", "dataset": "text-prompt", "classes": "text-prompt"},
     "yolo11n_object365.pt": {"type": "YOLO", "dataset": "Objects365", "classes": 365, "path": "api/yolo11n_object365.pt"},
 }
 
@@ -60,6 +71,9 @@ def load_model(model_key: str):
     if info["type"] == "YOLOE":
         from ultralytics import YOLOE
         return YOLOE(model_path)
+    elif info["type"] == "YOLOWorld":
+        from ultralytics import YOLOWorld
+        return YOLOWorld(model_path)
     else:
         from ultralytics import YOLO
         return YOLO(model_path)
@@ -129,6 +143,9 @@ def run_benchmark(model_keys: list[str], image_dir: str) -> dict:
         print(f"\n--- {model_key} ({info['dataset']}, {info['classes']} classes) ---")
 
         model = load_model(model_key)
+        if info.get("classes") == "text-prompt":
+            print(f"  Setting {len(BENCHMARK_CLASSES)} text-prompt classes")
+            model.set_classes(BENCHMARK_CLASSES)
         model_results = {
             "info": info,
             "images": {},
