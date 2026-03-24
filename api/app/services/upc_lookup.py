@@ -50,6 +50,8 @@ def _simplify_category(raw: str | None) -> str | None:
 
 def _lookup_upcitemdb(upc: str) -> UPCResult | None:
     """Query upcitemdb.com free tier. Returns UPCResult or None on any failure."""
+    if not upc.isdigit():
+        return None
     url = f"{_UPCITEMDB_URL}?upc={upc}"
     req = urllib.request.Request(
         url,
