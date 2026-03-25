@@ -37,7 +37,7 @@ services:
     volumes:
       - ./data/photos:/data/photos
       # Persist fastembed model cache so restarts don't redownload
-      - binbrain_cache:/root/.cache
+      - binbrain_cache:/home/app/.cache
     depends_on:
       db:
         condition: service_healthy

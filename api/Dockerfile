@@ -35,6 +35,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app /app/app
 
 RUN addgroup --system app && adduser --system --ingroup app app
+RUN mkdir -p /home/app/.cache /data/photos && chown -R app:app /home/app /data/photos
 USER app
 
 EXPOSE 8000
