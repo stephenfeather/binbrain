@@ -42,9 +42,24 @@ def _init_schema(engine) -> None:
     DROP TABLE IF EXISTS photos CASCADE;
     DROP TABLE IF EXISTS items CASCADE;
     DROP TABLE IF EXISTS bins CASCADE;
+    DROP TABLE IF EXISTS locations CASCADE;
+
+    CREATE TABLE locations (
+        location_id serial PRIMARY KEY,
+        name        text NOT NULL,
+        description text,
+        parent_id   integer REFERENCES locations(location_id),
+        deleted_at  timestamptz,
+        created_at  timestamptz DEFAULT now()
+    );
+
+    CREATE UNIQUE INDEX locations_name_uq
+    ON locations (lower(trim(name)))
+    WHERE deleted_at IS NULL;
 
     CREATE TABLE bins (
       bin_id text PRIMARY KEY,
+      location_id integer REFERENCES locations(location_id),
       deleted_at timestamptz,
       created_at timestamptz DEFAULT now()
     );
