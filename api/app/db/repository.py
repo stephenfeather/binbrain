@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 from typing import Optional
 
@@ -159,10 +160,18 @@ def update_bin_item(
     return res.scalar() is not None
 
 
-def insert_photo(db: Session, bin_id: str, path: str) -> int:
+def insert_photo(db: Session, bin_id: str, path: str, device_metadata: dict | None = None) -> int:
     res = db.execute(
-        text("INSERT INTO photos (bin_id, path) VALUES (:bin_id, :path) RETURNING photo_id"),
-        {"bin_id": bin_id, "path": path},
+        text(
+            "INSERT INTO photos (bin_id, path, device_metadata) "
+            "VALUES (:bin_id, :path, CAST(:device_metadata AS jsonb)) "
+            "RETURNING photo_id"
+        ),
+        {
+            "bin_id": bin_id,
+            "path": path,
+            "device_metadata": json.dumps(device_metadata) if device_metadata else None,
+        },
     )
     return int(res.scalar_one())
 
@@ -205,7 +214,8 @@ def fetch_bin_photos(db: Session, bin_id: str) -> list[dict]:
             """
             SELECT
               photo_id,
-              path
+              path,
+              device_metadata
             FROM photos
             WHERE bin_id = :bin_id
             ORDER BY photo_id

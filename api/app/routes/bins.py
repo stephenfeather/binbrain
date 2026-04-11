@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 from typing import Optional
@@ -24,11 +25,20 @@ router = APIRouter()
 async def ingest(
     bin_id: str = Form(...),
     photos: list[UploadFile] = File(...),
+    device_metadata: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     bin_id = bin_id.strip()
     if not bin_id:
         raise HTTPException(status_code=400, detail="bin_id is required")
+
+    # Parse device_metadata once (same metadata applies to all photos in this batch)
+    parsed_metadata = None
+    if device_metadata:
+        try:
+            parsed_metadata = json.loads(device_metadata)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="device_metadata must be valid JSON")
 
     # Ensure bin exists
     try:
@@ -57,7 +67,7 @@ async def ingest(
         fpath = bin_dir / fname
         fpath.write_bytes(await up.read())
 
-        photo_id = repository.insert_photo(db, bin_id, str(fpath))
+        photo_id = repository.insert_photo(db, bin_id, str(fpath), device_metadata=parsed_metadata)
         db.commit()
 
         saved.append({"photo_id": photo_id, "path": str(fpath)})

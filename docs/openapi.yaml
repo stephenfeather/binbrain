@@ -53,6 +53,9 @@ components:
       properties:
         photo_id: { type: integer, minimum: 1 }
         path:     { type: string, description: "Absolute filesystem path inside the container." }
+        device_metadata:
+          type: ["object", "null"]
+          description: "On-device processing metadata from iOS client, if submitted."
       additionalProperties: false
 
     Location:
@@ -633,6 +636,12 @@ paths:
                     format: binary
                   minItems: 1
                   description: "Image files to upload."
+                device_metadata:
+                  type: string
+                  description: >
+                    JSON string containing on-device processing metadata
+                    (OCR results, barcode detections, classifications, quality scores).
+                    Applied to all photos in the batch.
       responses:
         "200":
           description: Photos saved and associated with the bin.
