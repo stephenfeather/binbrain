@@ -14,7 +14,7 @@ from app.deps import (
     SessionLocal, OLLAMA_URL, logger,
     get_active_vision_model, load_settings_from_db,
 )
-from app.routes import health, items, bins, photos, upc, admin, classes
+from app.routes import health, items, bins, photos, upc, admin, classes, locations
 
 app = FastAPI(title="BinBrain API")
 
@@ -199,3 +199,4 @@ app.include_router(photos.router)
 app.include_router(upc.router)
 app.include_router(admin.router)
 app.include_router(classes.router)
+app.include_router(locations.router)
