@@ -246,7 +246,7 @@ generate_random_password() {
     if command -v openssl >/dev/null 2>&1; then
         openssl rand -hex 16
     else
-        tr -dc 'a-f0-9' < /dev/urandom 2>/dev/null | head -c 32
+        dd if=/dev/urandom bs=512 count=1 2>/dev/null | tr -dc 'a-f0-9' | head -c 32
     fi
 }
 
@@ -269,6 +269,9 @@ generate_env() {
         printf 'OLLAMA_VISION_MODEL=qwen3-vl:2b\n'
         printf 'OLLAMA_MAX_IMAGE_PX=1280\n'
         printf 'YOLO_WORLD_CONF=0.15\n'
+        if [[ "${DEV_MODE}" == true ]]; then
+            printf 'BINBRAIN_ENV=development\n'
+        fi
     } > "${ENV_FILE}"
 
     step_done "Generated .env"
@@ -493,7 +496,7 @@ backup_database() {
     mkdir -p "${BACKUPS_DIR}"
     local timestamp
     timestamp="$(date '+%Y%m%d_%H%M%S')"
-    local backup_file="${BACKUPS_DIR}/binbrain_${timestamp}.sql"
+    local backup_file="${BACKUPS_DIR}/binbrain-pre-upgrade-${timestamp}.sql"
 
     docker exec "${DB_CONTAINER}" pg_dump -U "${DB_USER}" "${DB_NAME}" > "${backup_file}" 2>> "${LOG_FILE}"
     step_done "Database backed up to ${backup_file}"
@@ -561,6 +564,8 @@ main() {
         stage_env_additions
         backup_database
         build_images
+        # Ensure DB is ready before migrating (may be stopped)
+        wait_for_db
         # Run migrations against the still-running DB before restarting
         run_migrations
         start_services
