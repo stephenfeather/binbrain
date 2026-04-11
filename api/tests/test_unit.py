@@ -56,10 +56,12 @@ def test_simplify_category_empty():
 
 
 def test_embedding_dimension_validation(client, app_module, monkeypatch):
+    import app.routes.items as items_mod
+
     def bad_embed(_):
         return [0.0] * 10
 
-    monkeypatch.setattr(app_module, "embed_text", bad_embed)
+    monkeypatch.setattr(items_mod, "embed_text", bad_embed)
     resp = client.post(
         "/items",
         data={"name": "test item", "category": "test", "notes": "n"},

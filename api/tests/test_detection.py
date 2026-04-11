@@ -22,11 +22,24 @@ if "app.deps" not in sys.modules:
 if "app.services.class_registry" not in sys.modules:
     sys.modules.setdefault("app.services.class_registry", _mock_registry)
 
-from app.services.detection import (
-    detect,
-    get_device,
-    get_model_name,
-)
+# Import for standalone runs (no conftest). These references may go stale
+# after conftest reloads modules, so tests use _live_*() helpers instead.
+from app.services.detection import get_device  # noqa: E402
+
+
+def _live_deps():
+    """Get the current app.deps module (may change after conftest reload)."""
+    return sys.modules.get("app.deps", _mock_deps)
+
+
+def _live_registry():
+    """Get the current class_registry module (may change after conftest reload)."""
+    return sys.modules.get("app.services.class_registry", _mock_registry)
+
+
+def _live_detection():
+    """Get the current detection module (may change after conftest reload)."""
+    return sys.modules["app.services.detection"]
 
 
 class TestGetDevice:
@@ -54,8 +67,10 @@ class TestGetDevice:
 
 class TestGetModelName:
     def test_returns_configured_model(self):
-        with patch.object(_mock_deps, "get_detection_model", return_value="yolov8s-worldv2.pt"):
-            assert get_model_name() == "yolov8s-worldv2.pt"
+        deps = _live_deps()
+        det = _live_detection()
+        with patch.object(deps, "get_detection_model", return_value="yolov8s-worldv2.pt"):
+            assert det.get_model_name() == "yolov8s-worldv2.pt"
 
 
 class TestDetect:
@@ -83,8 +98,11 @@ class TestDetect:
         result.boxes = boxes
         return result
 
-    @patch("app.services.detection._get_model")
-    def test_detect_returns_detections(self, mock_get_model):
+    def test_detect_returns_detections(self):
+        det = _live_detection()
+        deps = _live_deps()
+        registry = _live_registry()
+
         mock_model = MagicMock()
         mock_model.names = {0: "scissors", 1: "bottle"}
         mock_model.predict.return_value = [
@@ -93,20 +111,15 @@ class TestDetect:
                 {"cls": 1, "conf": 0.85, "xyxy": [150.0, 50.0, 300.0, 250.0]},
             ])
         ]
-        mock_get_model.return_value = mock_model
 
         category_map = {"scissors": "tools", "bottle": "household"}
-        _mock_deps.get_yolo_world_conf = lambda: 0.15
 
-        # Patch the real class_registry module (may have replaced the stub)
-        cr_mod = sys.modules.get("app.services.class_registry", _mock_registry)
-        orig = getattr(cr_mod, "get_category", None)
-        cr_mod.get_category = lambda name: category_map.get(name)
-        try:
-            results = detect("/fake/photo.jpg")
-        finally:
-            if orig is not None:
-                cr_mod.get_category = orig
+        with (
+            patch.object(det, "_get_model", return_value=mock_model),
+            patch.object(deps, "get_yolo_world_conf", return_value=0.15),
+            patch.object(registry, "get_category", side_effect=lambda name: category_map.get(name)),
+        ):
+            results = det.detect("/fake/photo.jpg")
 
         assert len(results) == 2
         assert results[0]["label"] == "scissors"
@@ -116,21 +129,27 @@ class TestDetect:
         assert results[1]["label"] == "bottle"
         assert results[1]["category"] == "household"
 
-    @patch("app.services.detection._get_model")
-    def test_detect_empty_photo(self, mock_get_model):
+    def test_detect_empty_photo(self):
+        det = _live_detection()
+        deps = _live_deps()
+
         mock_model = MagicMock()
         result = MagicMock()
         result.boxes = None
         mock_model.predict.return_value = [result]
-        mock_get_model.return_value = mock_model
 
-        _mock_deps.get_yolo_world_conf = lambda: 0.15
-
-        results = detect("/fake/empty.jpg")
+        with (
+            patch.object(det, "_get_model", return_value=mock_model),
+            patch.object(deps, "get_yolo_world_conf", return_value=0.15),
+        ):
+            results = det.detect("/fake/empty.jpg")
         assert results == []
 
-    @patch("app.services.detection._get_model")
-    def test_detect_unknown_category(self, mock_get_model):
+    def test_detect_unknown_category(self):
+        det = _live_detection()
+        deps = _live_deps()
+        registry = _live_registry()
+
         mock_model = MagicMock()
         mock_model.names = {0: "person"}
         mock_model.predict.return_value = [
@@ -138,27 +157,32 @@ class TestDetect:
                 {"cls": 0, "conf": 0.95, "xyxy": [5.0, 10.0, 50.0, 80.0]},
             ])
         ]
-        mock_get_model.return_value = mock_model
 
-        _mock_deps.get_yolo_world_conf = lambda: 0.15
-        _mock_registry.get_category = lambda name: None
+        with (
+            patch.object(det, "_get_model", return_value=mock_model),
+            patch.object(deps, "get_yolo_world_conf", return_value=0.15),
+            patch.object(registry, "get_category", return_value=None),
+        ):
+            results = det.detect("/fake/person.jpg")
 
-        results = detect("/fake/person.jpg")
         assert len(results) == 1
         assert results[0]["label"] == "person"
         assert results[0]["category"] is None
 
-    @patch("app.services.detection._get_model")
-    def test_detect_passes_conf_and_iou(self, mock_get_model):
+    def test_detect_passes_conf_and_iou(self):
+        det = _live_detection()
+        deps = _live_deps()
+
         mock_model = MagicMock()
         result = MagicMock()
         result.boxes = None
         mock_model.predict.return_value = [result]
-        mock_get_model.return_value = mock_model
 
-        _mock_deps.get_yolo_world_conf = lambda: 0.15
-
-        detect("/fake/photo.jpg")
+        with (
+            patch.object(det, "_get_model", return_value=mock_model),
+            patch.object(deps, "get_yolo_world_conf", return_value=0.15),
+        ):
+            det.detect("/fake/photo.jpg")
 
         call_kwargs = mock_model.predict.call_args[1]
         assert call_kwargs["conf"] == 0.15

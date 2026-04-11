@@ -4,6 +4,7 @@ import logging
 import threading
 import urllib.request
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -16,11 +17,9 @@ from app.deps import (
 )
 from app.routes import health, items, bins, photos, upc, admin, classes, locations
 
-app = FastAPI(title="BinBrain API")
 
-
-@app.on_event("startup")
-def warmup_vision_model():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """Load persisted settings, then pre-load the vision model into Ollama."""
     load_settings_from_db()
 
@@ -30,8 +29,6 @@ def warmup_vision_model():
     try:
         class_registry.load_from_db(db)
         class_registry.set_reload_callback(detection.reload_classes)
-        # detection.initialize_model deferred — YOLOE lazy-loads on first use
-        # to reduce startup memory pressure
         detection.set_deferred_classes(class_registry.get_classes())
     finally:
         db.close()
@@ -54,6 +51,11 @@ def warmup_vision_model():
         logger.info("event=warmup_done model=%s", model)
     except Exception as e:
         logger.warning("event=warmup_failed model=%s error=%s", model, str(e)[:200])
+
+    yield
+
+
+app = FastAPI(title="BinBrain API", lifespan=lifespan)
 
 
 @app.middleware("http")

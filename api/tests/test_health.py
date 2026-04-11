@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 
 
 def test_health_db_ok(app_module):
@@ -14,18 +14,20 @@ def test_health_db_ok(app_module):
 
 
 def test_health_db_down(app_module):
+    import app.deps as deps
+
     client = TestClient(app_module.app)
-    original_engine = app_module.engine
+    original_engine = deps.engine
     try:
-        app_module.engine.dispose()
-        app_module.engine = app_module.create_engine("postgresql+psycopg://bad:bad@127.0.0.1:1/bad")
-        app_module.SessionLocal.configure(bind=app_module.engine)
+        deps.engine.dispose()
+        deps.engine = create_engine("postgresql+psycopg://bad:bad@127.0.0.1:1/bad")
+        deps.SessionLocal.configure(bind=deps.engine)
 
         resp = client.get("/health")
         assert resp.status_code == 503
         body = resp.json()
         assert body["error"]["code"] == "service_unavailable"
     finally:
-        app_module.engine.dispose()
-        app_module.engine = original_engine
-        app_module.SessionLocal.configure(bind=app_module.engine)
+        deps.engine.dispose()
+        deps.engine = original_engine
+        deps.SessionLocal.configure(bind=deps.engine)

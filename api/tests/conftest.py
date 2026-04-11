@@ -228,6 +228,12 @@ def app_module():
     except Exception as exc:
         pytest.skip(f"database setup failed: {exc}")
 
+    # Stub detection so integration tests don't need real YOLOE weights.
+    # Patch on the route module because it binds these at import time.
+    import app.routes.photos as photos_route
+    photos_route.detect = lambda photo_path: []
+    photos_route.get_model_name = lambda: "stub"
+
     return main
 
 
