@@ -1,0 +1,1544 @@
+openapi: "3.1.0"
+
+info:
+  title: BinBrain API
+  version: "1"
+  description: |
+    BinBrain is a storage-bin inventory API. It ingests photos of bins, uses
+    vision inference (Ollama qwen3-vl) to identify items, and maintains a
+    searchable item catalogue backed by pgvector embeddings.
+
+    **Envelope convention** – every success response (except `/associate` and
+    `/bins/{bin_id}/add`) includes `"version": "1"` at the top level.
+
+    **Correlation** – pass `x-request-id` on any request; it is echoed in every
+    response header (and generated automatically when absent).
+
+    **Error shape** – all 4xx/5xx responses share the `ErrorResponse` schema.
+
+servers:
+  - url: http://localhost:8000
+    description: Local Docker Compose stack
+
+security:
+  - ApiKeyAuth: []
+
+# ── Reusable components ────────────────────────────────────────────────────────
+components:
+
+  # ── Security Schemes ─────────────────────────────────────────────────────────
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API key for authentication. Obtain via `POST /admin/api-keys` or the
+        bootstrap CLI script `scripts/create_api_key.py`.
+
+  # ── Headers ─────────────────────────────────────────────────────────────────
+  headers:
+    XRequestId:
+      description: Correlation ID echoed from the request (or generated if absent).
+      schema:
+        type: string
+
+  # ── Schemas ─────────────────────────────────────────────────────────────────
+  schemas:
+
+    # Shared atoms
+    PhotoRecord:
+      type: object
+      required: [photo_id, path]
+      properties:
+        photo_id: { type: integer, minimum: 1 }
+        path:     { type: string, description: "Absolute filesystem path inside the container." }
+      additionalProperties: false
+
+    ErrorResponse:
+      type: object
+      required: [version, error]
+      properties:
+        version: { type: string, enum: ["1"] }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - unauthorized
+                - bad_request
+                - not_found
+                - conflict
+                - payload_too_large
+                - unsupported_media_type
+                - rate_limited
+                - internal_error
+                - service_unavailable
+            message:    { type: string }
+            details:    { description: "Structured validation details (present on 400 only)." }
+            request_id: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+
+    # Health
+    HealthResponse:
+      type: object
+      required: [version, ok, db_ok, embed_model, expected_dims]
+      properties:
+        version:       { type: string, enum: ["1"] }
+        ok:            { type: boolean, const: true }
+        db_ok:         { type: boolean }
+        embed_model:   { type: string, example: "BAAI/bge-small-en-v1.5" }
+        expected_dims: { type: integer, const: 384 }
+      additionalProperties: true
+
+    # Ingest
+    IngestResponse:
+      type: object
+      required: [version, bin_id, photos]
+      properties:
+        version: { type: string, enum: ["1"] }
+        bin_id:  { type: string }
+        photos:
+          type: array
+          items: { $ref: "#/components/schemas/PhotoRecord" }
+      additionalProperties: false
+
+    # Items
+    UpsertItemResponse:
+      type: object
+      required: [version, item_id, fingerprint, name]
+      properties:
+        version:     { type: string, enum: ["1"] }
+        item_id:     { type: integer, minimum: 1 }
+        fingerprint: { type: string, description: "Stable key derived from lowercased name|category." }
+        name:        { type: string }
+        category:    { type: ["string", "null"] }
+        notes:       { type: ["string", "null"] }
+        upc:         { type: ["string", "null"], description: "UPC barcode (12 or 13 digits) if provided." }
+        bin_id:      { type: ["string", "null"] }
+      additionalProperties: false
+
+    # Associate
+    AssociateResponse:
+      type: object
+      required: [ok, bin_id, item_id]
+      properties:
+        ok:      { type: boolean, const: true }
+        bin_id:  { type: string }
+        item_id: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    # Bins
+    BinSummary:
+      type: object
+      required: [bin_id, item_count, photo_count, last_updated]
+      properties:
+        bin_id:       { type: string }
+        item_count:   { type: integer, minimum: 0 }
+        photo_count:  { type: integer, minimum: 0 }
+        last_updated: { type: string, format: date-time }
+      additionalProperties: false
+
+    ListBinsResponse:
+      type: object
+      required: [version, bins]
+      properties:
+        version: { type: string, enum: ["1"] }
+        bins:
+          type: array
+          items: { $ref: "#/components/schemas/BinSummary" }
+      additionalProperties: false
+
+    BinItemRecord:
+      type: object
+      required: [item_id, name]
+      properties:
+        item_id:    { type: integer, minimum: 1 }
+        name:       { type: string }
+        category:   { type: ["string", "null"] }
+        upc:        { type: ["string", "null"], description: "UPC barcode (12 or 13 digits) if known." }
+        quantity:   { type: ["number", "null"], minimum: 0 }
+        confidence: { type: ["number", "null"], minimum: 0, maximum: 1 }
+      additionalProperties: false
+
+    GetBinResponse:
+      type: object
+      required: [version, bin_id, items, photos]
+      properties:
+        version: { type: string, enum: ["1"] }
+        bin_id:  { type: string }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BinItemRecord" }
+        photos:
+          type: array
+          items: { $ref: "#/components/schemas/PhotoRecord" }
+      additionalProperties: false
+
+    AddToBinResponse:
+      description: |
+        At least one of `item_id` or `photos` will be populated depending on
+        what was submitted.
+      type: object
+      required: [bin_id, photos]
+      properties:
+        bin_id:   { type: string }
+        item_id:  { type: ["integer", "null"], minimum: 1 }
+        name:     { type: ["string", "null"] }
+        category: { type: ["string", "null"] }
+        notes:    { type: ["string", "null"] }
+        upc:      { type: ["string", "null"], description: "UPC barcode if provided." }
+        photos:
+          type: array
+          items: { $ref: "#/components/schemas/PhotoRecord" }
+      additionalProperties: false
+
+    # Suggest
+    SuggestionMatch:
+      type: object
+      required: [item_id, name, score, bins]
+      properties:
+        item_id:  { type: integer, minimum: 1 }
+        name:     { type: string }
+        category: { type: ["string", "null"] }
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: "Cosine similarity score between the vision label embedding and the matched item embedding."
+        bins:
+          type: array
+          items: { type: string }
+          description: "bin_ids where the matched item already appears."
+      additionalProperties: false
+
+    SuggestionItem:
+      type: object
+      required: [name, confidence, bins]
+      properties:
+        item_id:
+          type: "null"
+          description: "Always `null`. Use `match.item_id` for DB-matched items."
+        name:
+          type: string
+          description: "Item name as identified by the vision model."
+        category:   { type: ["string", "null"] }
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: "Raw vision model confidence for this label."
+        bins:
+          type: array
+          items: { type: string }
+          description: "Always empty. Use `match.bins` for DB-matched items."
+        match:
+          oneOf:
+            - { $ref: "#/components/schemas/SuggestionMatch" }
+            - type: "null"
+          description: |
+            Best matching existing item from the catalogue (cosine similarity ≥ 0.5),
+            or `null` if no existing item matched above the threshold. The client
+            decides whether to use the existing item or create a new one.
+      additionalProperties: false
+
+    PhotoSuggestResponse:
+      type: object
+      required: [version, photo_id, model, vision_elapsed_ms, suggestions]
+      properties:
+        version:           { type: string, enum: ["1"] }
+        photo_id:          { type: integer, minimum: 1 }
+        model:             { type: string, example: "qwen3-vl:4b" }
+        vision_elapsed_ms: { type: integer, minimum: 0, description: "Full Ollama round-trip in milliseconds." }
+        suggestions:
+          type: array
+          items: { $ref: "#/components/schemas/SuggestionItem" }
+          description: |
+            All vision-identified items, sorted descending by confidence.
+            Each suggestion is a raw vision label. If a similar item already
+            exists in the catalogue, a `match` object is attached with the
+            existing item details and similarity score.
+      additionalProperties: false
+
+    # Detect
+    DetectionItem:
+      type: object
+      required: [label, confidence, bbox]
+      properties:
+        label:      { type: string }
+        category:   { type: ["string", "null"] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        bbox:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items: { type: number, minimum: 0, maximum: 1 }
+          description: "[x1, y1, x2, y2] normalised to [0, 1]."
+      additionalProperties: false
+
+    PhotoDetectResponse:
+      type: object
+      required: [version, photo_id, model, detections]
+      properties:
+        version:    { type: string, enum: ["1"] }
+        photo_id:   { type: integer, minimum: 1 }
+        model:      { type: string, example: "stub" }
+        detections:
+          type: array
+          items: { $ref: "#/components/schemas/DetectionItem" }
+      additionalProperties: false
+
+    # Groups
+    GroupItem:
+      type: object
+      required: [group_key, label, confidence, count_estimate]
+      properties:
+        group_key:
+          type: string
+          description: "Stable key: `label|category` (category may be empty)."
+        label:          { type: string }
+        category:       { type: ["string", "null"] }
+        confidence:     { type: number, minimum: 0, maximum: 1 }
+        count_estimate: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    PhotoGroupsResponse:
+      type: object
+      required: [version, photo_id, model, groups]
+      properties:
+        version:  { type: string, enum: ["1"] }
+        photo_id: { type: integer, minimum: 1 }
+        model:    { type: string }
+        groups:
+          type: array
+          items: { $ref: "#/components/schemas/GroupItem" }
+      additionalProperties: false
+
+    # Confirm
+    SelectedGroup:
+      type: object
+      required: [group_key, label, category]
+      properties:
+        group_key: { type: string }
+        label:     { type: string }
+        category:  { type: string }
+        quantity:  { type: ["number", "null"], minimum: 0 }
+      additionalProperties: false
+
+    PhotoConfirmRequest:
+      type: object
+      required: [version, bin_id, selected_groups]
+      properties:
+        version: { type: string, enum: ["1"] }
+        bin_id:  { type: string, minLength: 1 }
+        selected_groups:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/SelectedGroup" }
+      additionalProperties: false
+
+    ConfirmResult:
+      type: object
+      required: [group_key, item_id, fingerprint, status]
+      properties:
+        group_key:   { type: string }
+        item_id:     { type: integer, minimum: 1 }
+        fingerprint: { type: string }
+        status:
+          type: string
+          enum: [created, updated, linked]
+          description: |
+            `created` – new item row inserted.
+            `updated` – existing item (same fingerprint) refreshed.
+            `linked`  – item already existed and was already in this bin.
+      additionalProperties: false
+
+    PhotoConfirmResponse:
+      type: object
+      required: [version, photo_id, bin_id, results]
+      properties:
+        version:  { type: string, enum: ["1"] }
+        photo_id: { type: integer, minimum: 1 }
+        bin_id:   { type: string }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/ConfirmResult" }
+      additionalProperties: false
+
+    # Search
+    SearchResultItem:
+      type: object
+      required: [item_id, name, distance, bins]
+      properties:
+        item_id:  { type: integer, minimum: 1 }
+        name:     { type: string }
+        category: { type: ["string", "null"] }
+        upc:      { type: ["string", "null"] }
+        distance:
+          type: number
+          minimum: 0
+          maximum: 2
+          description: "Raw pgvector cosine distance (0–2, lower = more similar). To convert to a 0–1 similarity score: score = 1.0 − (distance / 2.0)."
+        bins:
+          type: array
+          items: { type: string }
+          description: "bin_ids where this item appears."
+      additionalProperties: false
+
+    SearchResponse:
+      type: object
+      required: [version, q, limit, offset, results]
+      properties:
+        version:   { type: string, enum: ["1"] }
+        q:         { type: string }
+        limit:     { type: integer }
+        offset:    { type: integer }
+        min_score: { type: ["number", "null"] }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/SearchResultItem" }
+      additionalProperties: false
+
+    # Models
+    OllamaModel:
+      type: object
+      required: [name]
+      properties:
+        name:        { type: string, example: "qwen3-vl:4b" }
+        size:        { type: ["integer", "null"], description: "Model size in bytes." }
+        modified_at: { type: ["string", "null"], format: date-time }
+      additionalProperties: false
+
+    ListModelsResponse:
+      type: object
+      required: [version, active_model, models]
+      properties:
+        version:      { type: string, enum: ["1"] }
+        active_model: { type: string, description: "Currently selected vision model." }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/OllamaModel" }
+      additionalProperties: false
+
+    RunningModel:
+      type: object
+      required: [name]
+      properties:
+        name:        { type: string, example: "qwen3-vl:4b" }
+        size:        { type: ["integer", "null"], description: "Total model size in bytes." }
+        size_vram:   { type: ["integer", "null"], description: "Bytes loaded in VRAM/GPU memory." }
+        expires_at:  { type: ["string", "null"], format: date-time, description: "When the model will be unloaded (null if keep_alive=-1)." }
+      additionalProperties: false
+
+    RunningModelsResponse:
+      type: object
+      required: [version, active_model, models]
+      properties:
+        version:      { type: string, enum: ["1"] }
+        active_model: { type: string, description: "Currently selected vision model." }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/RunningModel" }
+      additionalProperties: false
+
+    SelectModelResponse:
+      type: object
+      required: [version, previous_model, active_model]
+      properties:
+        version:        { type: string, enum: ["1"] }
+        previous_model: { type: string, description: "Model that was active before the switch." }
+        active_model:   { type: string, description: "Newly selected and warmed-up model." }
+      additionalProperties: false
+
+  # ── Reusable responses ──────────────────────────────────────────────────────
+  responses:
+    Unauthorized:
+      description: Missing, invalid, or revoked API key.
+      headers:
+        x-request-id: { $ref: "#/components/headers/XRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            version: "1"
+            error:
+              code: unauthorized
+              message: "Missing X-API-Key header"
+              request_id: "a1b2c3"
+
+    BadRequest:
+      description: Validation or input error.
+      headers:
+        x-request-id: { $ref: "#/components/headers/XRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            version: "1"
+            error:
+              code: bad_request
+              message: "bin_id is required"
+              request_id: "a1b2c3"
+
+    NotFound:
+      description: The requested resource does not exist (or is deleted).
+      headers:
+        x-request-id: { $ref: "#/components/headers/XRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            version: "1"
+            error:
+              code: not_found
+              message: "bin not found"
+              request_id: "a1b2c3"
+
+    InternalError:
+      description: Unexpected server error.
+      headers:
+        x-request-id: { $ref: "#/components/headers/XRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    ServiceUnavailable:
+      description: A backing service (database, Ollama) is unavailable.
+      headers:
+        x-request-id: { $ref: "#/components/headers/XRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ── Reusable parameters ─────────────────────────────────────────────────────
+  parameters:
+    BinIdPath:
+      name: bin_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+      description: "Alphanumeric bin identifier (e.g. `B-42`, `shelf-3`)."
+
+    PhotoIdPath:
+      name: photo_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Health ──────────────────────────────────────────────────────────────────
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      tags: [Utility]
+      security: []
+      description: |
+        Returns `200` when the API and database are reachable.
+        Returns `503` when the database is unavailable.
+      responses:
+        "200":
+          description: API and database are healthy.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthResponse" }
+              example:
+                version: "1"
+                ok: true
+                db_ok: true
+                embed_model: "BAAI/bge-small-en-v1.5"
+                expected_dims: 384
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ── Ingest ──────────────────────────────────────────────────────────────────
+  /ingest:
+    post:
+      summary: Upload photos to a bin
+      operationId: ingestPhotos
+      tags: [Photos]
+      description: |
+        Accepts one or more image files and associates them with `bin_id`.
+        The bin is created automatically if it does not yet exist.
+        Supported file types: `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic`, `.heif`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [bin_id, photos]
+              properties:
+                bin_id:
+                  type: string
+                  minLength: 1
+                  description: "Target bin identifier."
+                photos:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  minItems: 1
+                  description: "Image files to upload."
+      responses:
+        "200":
+          description: Photos saved and associated with the bin.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IngestResponse" }
+              example:
+                version: "1"
+                bin_id: "B-42"
+                photos:
+                  - { photo_id: 7, path: "/data/photos/B-42/abc123.jpg" }
+                  - { photo_id: 8, path: "/data/photos/B-42/def456.jpg" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Items ───────────────────────────────────────────────────────────────────
+  /items:
+    post:
+      summary: Create or upsert an item
+      operationId: createItem
+      tags: [Items]
+      description: |
+        Inserts a new item. If an item with the same `fingerprint`
+        (`lower(name)|lower(category)`) already exists it is updated in-place
+        (soft-restore if previously deleted).
+
+        A text embedding is generated and stored automatically.
+        Optionally associate the item with a bin in a single request.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                category:
+                  type: string
+                  description: "Item category (e.g. fastener, tool, electronics)."
+                notes:
+                  type: string
+                  description: "Free-text notes included in the embedding."
+                bin_id:
+                  type: string
+                  description: "If provided, the item is associated with this bin."
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: "Association confidence (meaningful only when bin_id is set)."
+                quantity:
+                  type: number
+                  minimum: 0
+                  description: "Quantity in the bin (meaningful only when bin_id is set)."
+      responses:
+        "200":
+          description: Item created or updated.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpsertItemResponse" }
+              example:
+                version: "1"
+                item_id: 12
+                fingerprint: "m3 screw|fastener"
+                name: "M3 Screw"
+                category: "fastener"
+                notes: null
+                bin_id: "B-42"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  # ── UPC Lookup ──────────────────────────────────────────────────────────────
+  /upc/{upc}:
+    get:
+      summary: Look up an item by UPC barcode
+      operationId: upcLookup
+      tags: [Items]
+      description: |
+        Looks up a UPC barcode. Checks the local database first; if not found,
+        queries external UPC databases. Results from external lookups are cached
+        locally with an embedding for future searches.
+
+        The `source` field indicates where the data came from:
+        - `local` – found in the local database.
+        - `openfoodfacts`, `upcitemdb`, etc. – external API.
+        - `unknown` – no match found anywhere.
+      parameters:
+        - name: upc
+          in: path
+          required: true
+          schema: { type: string, pattern: "^\\d{12,13}$" }
+          description: "UPC-A (12 digits) or EAN-13 (13 digits) barcode."
+      responses:
+        "200":
+          description: Lookup result.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, upc, source]
+                properties:
+                  version:  { type: string, enum: ["1"] }
+                  item_id:  { type: ["integer", "null"], minimum: 1, description: "Local item_id if cached, null otherwise." }
+                  name:     { type: ["string", "null"] }
+                  category: { type: ["string", "null"] }
+                  upc:      { type: string }
+                  source:   { type: string, description: "Where the data came from (local, openfoodfacts, upcitemdb, unknown)." }
+                additionalProperties: false
+              example:
+                version: "1"
+                item_id: 12
+                name: "Coca-Cola Classic 12oz"
+                category: "beverage"
+                upc: "049000042566"
+                source: "local"
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  # ── Associate ───────────────────────────────────────────────────────────────
+  /associate:
+    post:
+      summary: Associate an existing item with a bin
+      operationId: associateItem
+      tags: [Items]
+      description: |
+        Links an already-created item to a bin. Use this when the item already
+        exists and you only need to record its presence in a different bin.
+        Duplicate associations are silently ignored (`ON CONFLICT DO NOTHING`).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [bin_id, item_id]
+              properties:
+                bin_id:
+                  type: string
+                  minLength: 1
+                item_id:
+                  type: integer
+                  minimum: 1
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                quantity:
+                  type: number
+                  minimum: 0
+      responses:
+        "200":
+          description: Association created (or already existed).
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssociateResponse" }
+              example:
+                ok: true
+                bin_id: "B-42"
+                item_id: 12
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Bins ────────────────────────────────────────────────────────────────────
+  /bins:
+    get:
+      summary: List all bins
+      operationId: listBins
+      tags: [Bins]
+      description: |
+        Returns all active (non-deleted) bins ordered by most-recently-updated first.
+        Counts reflect non-deleted items only.
+      responses:
+        "200":
+          description: List of bins.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListBinsResponse" }
+              example:
+                version: "1"
+                bins:
+                  - bin_id: "B-42"
+                    item_count: 14
+                    photo_count: 3
+                    last_updated: "2025-02-25T12:00:00Z"
+
+  /bins/{bin_id}:
+    get:
+      summary: Get a bin's contents
+      operationId: getBin
+      tags: [Bins]
+      parameters:
+        - { $ref: "#/components/parameters/BinIdPath" }
+      responses:
+        "200":
+          description: Bin contents.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GetBinResponse" }
+              example:
+                version: "1"
+                bin_id: "B-42"
+                items:
+                  - { item_id: 12, name: "M3 Screw", category: "fastener", quantity: 50, confidence: 0.92 }
+                photos:
+                  - { photo_id: 7, path: "/data/photos/B-42/abc123.jpg" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /bins/{bin_id}/add:
+    post:
+      summary: Add an item and/or photos to a bin in one request
+      operationId: addToBin
+      tags: [Bins]
+      description: |
+        Convenience endpoint that combines item creation and photo ingestion.
+        The bin is created automatically if it does not yet exist.
+        At least one of `name` or `photos` should be provided; submitting
+        neither is accepted but results in a no-op.
+      parameters:
+        - { $ref: "#/components/parameters/BinIdPath" }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: "Item name. If omitted no item is created."
+                category:
+                  type: string
+                notes:
+                  type: string
+                upc:
+                  type: string
+                  description: "UPC barcode (12 or 13 digits). If provided without name, looks up existing item."
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                quantity:
+                  type: number
+                  minimum: 0
+                photos:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: "Optional image files."
+      responses:
+        "200":
+          description: Item and/or photos added to the bin.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AddToBinResponse" }
+              example:
+                bin_id: "B-42"
+                item_id: 13
+                name: "Arduino Nano"
+                category: "electronics"
+                notes: null
+                photos:
+                  - { photo_id: 9, path: "/data/photos/B-42/xyz789.jpg" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /bins/{bin_id}/items/{item_id}:
+    delete:
+      summary: Remove an item from a bin
+      operationId: removeItemFromBin
+      tags: [Bins]
+      description: |
+        Removes the association between an item and a bin. The item itself
+        is not deleted from the catalogue — only its presence in this bin
+        is removed.
+      parameters:
+        - { $ref: "#/components/parameters/BinIdPath" }
+        - name: item_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Item removed from bin.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, bin_id, item_id, removed]
+                properties:
+                  version:  { type: string, enum: ["1"] }
+                  bin_id:   { type: string }
+                  item_id:  { type: integer, minimum: 1 }
+                  removed:  { type: boolean, const: true }
+                additionalProperties: false
+              example:
+                version: "1"
+                bin_id: "B-42"
+                item_id: 12
+                removed: true
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      summary: Update an item's quantity or confidence in a bin
+      operationId: updateItemInBin
+      tags: [Bins]
+      description: |
+        Updates the `quantity` and/or `confidence` of an item within a bin.
+        At least one field must be provided.
+      parameters:
+        - { $ref: "#/components/parameters/BinIdPath" }
+        - name: item_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quantity:
+                  type: number
+                  minimum: 0
+                  description: "Updated quantity in the bin."
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: "Updated confidence score."
+              additionalProperties: false
+            example:
+              quantity: 25
+      responses:
+        "200":
+          description: Item updated in bin.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, bin_id, item_id]
+                properties:
+                  version:    { type: string, enum: ["1"] }
+                  bin_id:     { type: string }
+                  item_id:    { type: integer, minimum: 1 }
+                  quantity:   { type: ["number", "null"] }
+                  confidence: { type: ["number", "null"] }
+                additionalProperties: false
+              example:
+                version: "1"
+                bin_id: "B-42"
+                item_id: 12
+                quantity: 25
+                confidence: null
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Photos ──────────────────────────────────────────────────────────────────
+  /photos/{photo_id}:
+    delete:
+      summary: Delete a photo
+      operationId: deletePhoto
+      tags: [Photos]
+      description: |
+        Hard-deletes a photo record and removes the image file from disk.
+        All associated detections, detection groups, labels, and group items
+        are cascade-deleted automatically.
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+      responses:
+        "200":
+          description: Photo deleted.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, photo_id, deleted]
+                properties:
+                  version:  { type: string, enum: ["1"] }
+                  photo_id: { type: integer, minimum: 1 }
+                  deleted:  { type: boolean, const: true }
+                additionalProperties: false
+              example:
+                version: "1"
+                photo_id: 7
+                deleted: true
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /photos/{photo_id}/suggest:
+    get:
+      summary: Suggest items for a photo using vision inference
+      operationId: suggestForPhoto
+      tags: [Photos]
+      description: |
+        Sends the stored photo to an Ollama vision model (default `qwen3-vl:4b`
+        running on the configured `OLLAMA_URL`) and asks it to list up to 5
+        likely item types.
+
+        Every vision label is returned as a suggestion with its raw confidence.
+        Each suggestion is also matched against the item catalogue using
+        pgvector cosine similarity. If a match scores ≥ 0.5, a `match` object
+        is attached containing the existing item's `item_id`, `name`, `score`,
+        and `bins`. The client decides whether to use the existing item or
+        create a new one.
+
+        **Performance note** – cold-start inference on GPU takes ~30 s; warm
+        inference ~5 s. The `vision_elapsed_ms` field reports actual latency.
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+        - name: model
+          in: query
+          required: false
+          schema: { type: string }
+          description: "Override the vision model for this request (e.g. `qwen3-vl:2b`)."
+      responses:
+        "200":
+          description: Suggestions sorted by descending confidence.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhotoSuggestResponse" }
+              example:
+                version: "1"
+                photo_id: 7
+                model: "qwen3-vl:4b"
+                vision_elapsed_ms: 5200
+                suggestions:
+                  - item_id: null
+                    name: "M2.5 Brass Spacer Standoff"
+                    category: "fastener"
+                    confidence: 0.95
+                    bins: []
+                    match:
+                      item_id: 12
+                      name: "M3 Screw"
+                      category: "fastener"
+                      score: 0.72
+                      bins: ["B-42"]
+                  - item_id: null
+                    name: "Packaging Box"
+                    category: "label_packaging"
+                    confidence: 0.80
+                    bins: []
+                    match: null
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /photos/{photo_id}/file:
+    get:
+      summary: Serve a photo file (original or resized)
+      operationId: getPhotoFile
+      tags: [Photos]
+      description: |
+        Returns the raw image bytes for the given photo. By default the
+        original file is served. Pass `?w=<pixels>` to get a JPEG thumbnail
+        resized to the specified width (aspect ratio preserved).
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+        - name: w
+          in: query
+          required: false
+          schema: { type: integer, minimum: 16, maximum: 4096 }
+          description: "Resize to this width in pixels (aspect ratio preserved). Omit for original file."
+      responses:
+        "200":
+          description: Image file bytes.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /photos/{photo_id}/detect:
+    post:
+      summary: Run object detection on a photo
+      operationId: detectForPhoto
+      tags: [Photos]
+      description: |
+        Runs the configured detection model (currently a stub) against the
+        stored photo and persists the resulting bounding-box detections.
+        Previous detection groups for this photo+model are cleared and
+        recomputed.
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+      responses:
+        "200":
+          description: Detection results.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhotoDetectResponse" }
+              example:
+                version: "1"
+                photo_id: 7
+                model: "stub"
+                detections:
+                  - { label: "screw", category: "fastener", confidence: 0.91, bbox: [0.1, 0.2, 0.3, 0.4] }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /photos/{photo_id}/groups:
+    get:
+      summary: Get detection groups for a photo
+      operationId: groupsForPhoto
+      tags: [Photos]
+      description: |
+        Returns aggregated detection groups (label + category clusters).
+        Groups are computed lazily from `photo_detections` and cached in
+        `photo_detection_groups`. The cache is populated on the first call and
+        invalidated when `/detect` is re-run.
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+      responses:
+        "200":
+          description: Detection groups sorted by descending confidence.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhotoGroupsResponse" }
+              example:
+                version: "1"
+                photo_id: 7
+                model: "stub"
+                groups:
+                  - { group_key: "screw|fastener", label: "screw", category: "fastener", confidence: 0.91, count_estimate: 12 }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /photos/{photo_id}/confirm:
+    post:
+      summary: Confirm selected detection groups and create items in a bin
+      operationId: confirmPhotoGroups
+      tags: [Photos]
+      description: |
+        The client presents the user-selected subset of detection groups and
+        the target bin. For each group the API upserts an item, links it to the
+        bin, and records the photo→item association.
+
+        `status` in each result indicates:
+        - `created` – new item row was inserted.
+        - `updated` – item with the same fingerprint already existed and was refreshed.
+        - `linked`  – item already existed and was already present in this bin.
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PhotoConfirmRequest" }
+            example:
+              version: "1"
+              bin_id: "B-42"
+              selected_groups:
+                - { group_key: "screw|fastener", label: "screw", category: "fastener", quantity: 12 }
+      responses:
+        "200":
+          description: Items created / linked.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhotoConfirmResponse" }
+              example:
+                version: "1"
+                photo_id: 7
+                bin_id: "B-42"
+                results:
+                  - { group_key: "screw|fastener", item_id: 15, fingerprint: "screw|fastener", status: "created" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  # ── Models ──────────────────────────────────────────────────────────────────
+  /models:
+    get:
+      summary: List available Ollama vision models
+      operationId: listModels
+      tags: [Models]
+      description: |
+        Queries the Ollama server for all downloaded models and reports
+        which one is currently active for vision inference.
+      responses:
+        "200":
+          description: Available models and the currently active one.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListModelsResponse" }
+              example:
+                version: "1"
+                active_model: "qwen3-vl:4b"
+                models:
+                  - { name: "qwen3-vl:4b", size: 2700000000, modified_at: "2025-02-20T10:00:00Z" }
+                  - { name: "llava:7b", size: 4500000000, modified_at: "2025-02-18T08:30:00Z" }
+        "502":
+          description: Ollama server is unreachable.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /models/running:
+    get:
+      summary: List models currently loaded in Ollama memory
+      operationId: runningModels
+      tags: [Models]
+      description: |
+        Proxies Ollama's `GET /api/ps` endpoint. Returns models currently
+        loaded in VRAM/memory, their size, and when they expire.
+      responses:
+        "200":
+          description: Currently loaded models.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunningModelsResponse" }
+              example:
+                version: "1"
+                active_model: "qwen3-vl:4b"
+                models:
+                  - { name: "qwen3-vl:4b", size: 3295636135, size_vram: 3295636135, expires_at: null }
+        "502":
+          description: Ollama server is unreachable.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /models/select:
+    post:
+      summary: Select and warm up a vision model
+      operationId: selectModel
+      tags: [Models]
+      description: |
+        Sets the active vision model used by `/photos/{photo_id}/suggest`.
+        The model is warmed up on the Ollama server with `keep_alive: -1`
+        so it stays loaded in memory indefinitely.
+
+        This endpoint blocks until the warmup completes (typically 5–30 s
+        depending on model size and whether it was already loaded).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model:
+                  type: string
+                  minLength: 1
+                  description: "Model name as listed by `GET /models` (e.g. `qwen3-vl:4b`)."
+              additionalProperties: false
+            example:
+              model: "qwen3-vl:4b"
+      responses:
+        "200":
+          description: Model selected and warmed up.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SelectModelResponse" }
+              example:
+                version: "1"
+                previous_model: "llava:7b"
+                active_model: "qwen3-vl:4b"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "502":
+          description: Failed to warm up model on Ollama server.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ── Settings ────────────────────────────────────────────────────────────────
+  /settings/image-size:
+    get:
+      summary: Get the current max image size for vision inference
+      operationId: getImageSize
+      tags: [Settings]
+      description: |
+        Returns the current maximum image dimension (longest side in pixels)
+        used when resizing photos before sending to the vision model.
+      responses:
+        "200":
+          description: Current image size setting.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, max_image_px]
+                properties:
+                  version:      { type: string, enum: ["1"] }
+                  max_image_px: { type: integer, minimum: 128, maximum: 4096 }
+                additionalProperties: false
+              example:
+                version: "1"
+                max_image_px: 1280
+
+    post:
+      summary: Set the max image size for vision inference
+      operationId: setImageSize
+      tags: [Settings]
+      description: |
+        Sets the maximum image dimension (longest side in pixels) used when
+        resizing photos before sending to the vision model. Smaller values
+        reduce inference time; larger values preserve more detail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [max_image_px]
+              properties:
+                max_image_px:
+                  type: integer
+                  minimum: 128
+                  maximum: 4096
+                  description: "Max longest side in pixels (128–4096)."
+              additionalProperties: false
+            example:
+              max_image_px: 800
+      responses:
+        "200":
+          description: Image size updated.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, previous_max_image_px, max_image_px]
+                properties:
+                  version:               { type: string, enum: ["1"] }
+                  previous_max_image_px: { type: integer }
+                  max_image_px:          { type: integer }
+                additionalProperties: false
+              example:
+                version: "1"
+                previous_max_image_px: 1280
+                max_image_px: 800
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  # ── Search ──────────────────────────────────────────────────────────────────
+  /search:
+    get:
+      summary: Semantic item search
+      operationId: searchItems
+      tags: [Search]
+      description: |
+        Embeds the query string with the same model used at ingest time
+        (`BAAI/bge-small-en-v1.5`, 384 dims) and returns items ordered by
+        cosine distance ascending (most similar first).
+
+        The `distance` field in each result is the raw pgvector cosine
+        distance (range 0–2, lower = more similar). To convert to a 0–1
+        similarity score: `score = 1.0 − (distance / 2.0)`.
+
+        Use `min_score` to exclude weak matches. The `min_score` parameter
+        is a 0–1 similarity score; the backend converts it to a distance
+        threshold internally (`max_distance = 1.0 − min_score`).
+        Example: `min_score = 0.6` excludes results with `distance > 0.4`.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+          description: "Natural-language query (e.g. `m3 screw`, `arduino`)."
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: min_score
+          in: query
+          required: false
+          schema: { type: number, minimum: 0.0, maximum: 1.0 }
+          description: "Minimum cosine similarity score (0–1). Excludes results below this threshold."
+      responses:
+        "200":
+          description: Matching items ordered by ascending distance.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResponse" }
+              example:
+                q: "m3 screw"
+                limit: 20
+                offset: 0
+                min_score: null
+                results:
+                  - { item_id: 12, name: "M3 Screw", category: "fastener", distance: 0.04, bins: ["B-42"] }
+                  - { item_id: 7,  name: "M4 Bolt",  category: "fastener", distance: 0.31, bins: ["B-10", "B-42"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  # ── Admin: API Key Management ────────────────────────────────────────────────
+  /admin/api-keys:
+    post:
+      summary: Create an API key
+      operationId: createApiKey
+      tags: [Admin]
+      description: |
+        Create a new API key. The raw key is returned **once** in the response;
+        only the SHA-256 hash is stored server-side.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, description: "Human label for this key." }
+      responses:
+        "200":
+          description: Key created successfully.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, key, name, message]
+                properties:
+                  version: { type: string, enum: ["1"] }
+                  key:     { type: string, description: "The raw API key — save this, it will not be shown again." }
+                  name:    { type: string }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+    get:
+      summary: List all API keys
+      operationId: listApiKeys
+      tags: [Admin]
+      description: |
+        List all API keys with metadata. Key hashes are **never** returned.
+      responses:
+        "200":
+          description: Key list.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, keys]
+                properties:
+                  version: { type: string, enum: ["1"] }
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, created_at]
+                      properties:
+                        id:         { type: integer }
+                        name:       { type: string }
+                        created_at: { type: string, format: date-time }
+                        revoked_at: { type: ["string", "null"], format: date-time }
+                        last_used:  { type: ["string", "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/api-keys/{key_id}:
+    delete:
+      summary: Revoke an API key
+      operationId: revokeApiKey
+      tags: [Admin]
+      description: |
+        Soft-revoke a key by setting `revoked_at`. The key row is preserved for
+        audit purposes.
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Key revoked.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, key_id, revoked]
+                properties:
+                  version: { type: string, enum: ["1"] }
+                  key_id:  { type: integer }
+                  revoked: { type: boolean, const: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+# ── Tags ───────────────────────────────────────────────────────────────────────
+tags:
+  - name: Utility
+    description: Health and diagnostics.
+  - name: Photos
+    description: Photo ingestion, vision inference, detection, and confirmation.
+  - name: Items
+    description: Item catalogue management.
+  - name: Bins
+    description: Bin management and item association.
+  - name: Models
+    description: Ollama vision model management.
+  - name: Settings
+    description: Runtime configuration.
+  - name: Search
+    description: Semantic search over the item catalogue.
+  - name: Admin
+    description: API key management.
