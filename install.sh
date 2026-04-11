@@ -116,9 +116,13 @@ parse_args() {
             --dev)        DEV_MODE=true; shift ;;
             --api-port)
                 [[ -z "${2:-}" ]] && die "--api-port requires a PORT argument"
+                [[ "${2}" =~ ^[0-9]+$ ]] && [[ "${2}" -ge 1 ]] && [[ "${2}" -le 65535 ]] \
+                    || die "--api-port must be a number between 1 and 65535, got: $2"
                 API_PORT="$2"; shift 2 ;;
             --db-port)
                 [[ -z "${2:-}" ]] && die "--db-port requires a PORT argument"
+                [[ "${2}" =~ ^[0-9]+$ ]] && [[ "${2}" -ge 1 ]] && [[ "${2}" -le 65535 ]] \
+                    || die "--db-port must be a number between 1 and 65535, got: $2"
                 DB_PORT="$2"; shift 2 ;;
             --skip-backup) SKIP_BACKUP=true; shift ;;
             --pull-base)   PULL_BASE=true; shift ;;
@@ -379,7 +383,7 @@ health_check() {
         if docker exec "${API_CONTAINER}" python -c "
 import urllib.request, sys
 try:
-    r = urllib.request.urlopen('http://localhost:8000/health', timeout=5)
+    r = urllib.request.urlopen('http://localhost:${API_PORT}/health', timeout=5)
     sys.exit(0 if r.status == 200 else 1)
 except Exception:
     sys.exit(1)
@@ -414,6 +418,14 @@ db_exec_file() {
 
 # ── Migration functions ──────────────────────────────────────────────────────
 
+# Validate migration filename contains only safe characters (prevents SQL injection)
+validate_migration_filename() {
+    local fn="$1"
+    if [[ ! "${fn}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        die "Migration filename contains unsafe characters: ${fn}"
+    fi
+}
+
 ensure_migrations_table() {
     db_exec_quiet "CREATE TABLE IF NOT EXISTS schema_migrations (
         filename text PRIMARY KEY,
@@ -431,6 +443,7 @@ mark_all_migrations_applied() {
         [[ -f "${migration}" ]] || continue
         local filename
         filename="$(basename "${migration}")"
+        validate_migration_filename "${filename}"
         db_exec_quiet "INSERT INTO schema_migrations (filename) VALUES ('${filename}') ON CONFLICT DO NOTHING;" \
             >> "${LOG_FILE}" 2>&1
     done
@@ -450,6 +463,7 @@ run_migrations() {
         [[ -f "${migration}" ]] || continue
         local filename
         filename="$(basename "${migration}")"
+        validate_migration_filename "${filename}"
 
         # Check if already applied
         local exists
@@ -471,7 +485,7 @@ run_migrations() {
             # Run in a transaction: migration SQL + record in schema_migrations
             {
                 printf 'BEGIN;\n'
-                sed 's/$//' "${migration}"
+                cat "${migration}"
                 printf '\n'
                 printf "INSERT INTO schema_migrations (filename) VALUES ('%s');\n" "${filename}"
                 printf 'COMMIT;\n'
@@ -498,7 +512,12 @@ backup_database() {
     timestamp="$(date '+%Y%m%d_%H%M%S')"
     local backup_file="${BACKUPS_DIR}/binbrain-pre-upgrade-${timestamp}.sql"
 
-    docker exec "${DB_CONTAINER}" pg_dump -U "${DB_USER}" "${DB_NAME}" > "${backup_file}" 2>> "${LOG_FILE}"
+    local tmp_backup="${backup_file}.tmp"
+    if ! docker exec "${DB_CONTAINER}" pg_dump -U "${DB_USER}" "${DB_NAME}" > "${tmp_backup}" 2>> "${LOG_FILE}"; then
+        rm -f "${tmp_backup}"
+        die "pg_dump failed -- aborting upgrade to protect data"
+    fi
+    mv "${tmp_backup}" "${backup_file}"
     step_done "Database backed up to ${backup_file}"
 }
 
@@ -541,7 +560,7 @@ print_summary() {
 
 main() {
     # Initialize log
-    printf '=== BinBrain installer started %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "${LOG_FILE}"
+    printf '\n=== BinBrain installer started %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "${LOG_FILE}"
 
     parse_args "$@"
     detect_mode
@@ -564,7 +583,8 @@ main() {
         stage_env_additions
         backup_database
         build_images
-        # Ensure DB is ready before migrating (may be stopped)
+        # Ensure DB is running before migrating (may be stopped)
+        docker compose -f "${COMPOSE_FILE}" up -d "${DB_CONTAINER}" >> "${LOG_FILE}" 2>&1
         wait_for_db
         # Run migrations against the still-running DB before restarting
         run_migrations
