@@ -55,6 +55,49 @@ components:
         path:     { type: string, description: "Absolute filesystem path inside the container." }
       additionalProperties: false
 
+    Location:
+      type: object
+      required: [location_id, name, created_at]
+      properties:
+        location_id: { type: integer, minimum: 1 }
+        name:        { type: string }
+        description: { type: ["string", "null"] }
+        created_at:  { type: string, format: date-time }
+      additionalProperties: false
+
+    ListLocationsResponse:
+      type: object
+      required: [version, locations]
+      properties:
+        version: { type: string, enum: ["1"] }
+        locations:
+          type: array
+          items: { $ref: "#/components/schemas/Location" }
+      additionalProperties: false
+
+    CreateLocationResponse:
+      type: object
+      required: [version, location]
+      properties:
+        version:  { type: string, enum: ["1"] }
+        location: { $ref: "#/components/schemas/Location" }
+      additionalProperties: false
+
+    BinLocationUpdateRequest:
+      type: object
+      properties:
+        location_id: { type: ["integer", "null"], description: "Location ID to assign, or null to clear." }
+
+    BinLocationResponse:
+      type: object
+      required: [version, bin_id]
+      properties:
+        version:       { type: string, enum: ["1"] }
+        bin_id:        { type: string }
+        location_id:   { type: ["integer", "null"] }
+        location_name: { type: ["string", "null"] }
+      additionalProperties: false
+
     ErrorResponse:
       type: object
       required: [version, error]
@@ -136,10 +179,12 @@ components:
       type: object
       required: [bin_id, item_count, photo_count, last_updated]
       properties:
-        bin_id:       { type: string }
-        item_count:   { type: integer, minimum: 0 }
-        photo_count:  { type: integer, minimum: 0 }
-        last_updated: { type: string, format: date-time }
+        bin_id:        { type: string }
+        location_id:   { type: ["integer", "null"], description: "Assigned location ID, or null." }
+        location_name: { type: ["string", "null"], description: "Assigned location name, or null." }
+        item_count:    { type: integer, minimum: 0 }
+        photo_count:   { type: integer, minimum: 0 }
+        last_updated:  { type: string, format: date-time }
       additionalProperties: false
 
     ListBinsResponse:
@@ -168,8 +213,10 @@ components:
       type: object
       required: [version, bin_id, items, photos]
       properties:
-        version: { type: string, enum: ["1"] }
-        bin_id:  { type: string }
+        version:       { type: string, enum: ["1"] }
+        bin_id:        { type: string }
+        location_id:   { type: ["integer", "null"], description: "Assigned location ID, or null." }
+        location_name: { type: ["string", "null"], description: "Assigned location name, or null." }
         items:
           type: array
           items: { $ref: "#/components/schemas/BinItemRecord" }
@@ -780,6 +827,8 @@ paths:
                 version: "1"
                 bins:
                   - bin_id: "B-42"
+                    location_id: 1
+                    location_name: "Garage"
                     item_count: 14
                     photo_count: 3
                     last_updated: "2025-02-25T12:00:00Z"
@@ -802,6 +851,8 @@ paths:
               example:
                 version: "1"
                 bin_id: "B-42"
+                location_id: 1
+                location_name: "Garage"
                 items:
                   - { item_id: 12, name: "M3 Screw", category: "fastener", quantity: 50, confidence: 0.92 }
                 photos:
@@ -966,6 +1017,141 @@ paths:
                 quantity: 25
                 confidence: null
         "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Bin Location Assignment ──────────────────────────────────────────────────
+  /bins/{bin_id}/location:
+    patch:
+      summary: Assign, change, or clear a bin's location
+      operationId: updateBinLocation
+      tags: [Bins]
+      description: |
+        Set a bin's location by providing a `location_id`, or clear it by
+        sending `null`. The referenced location must be active (not soft-deleted).
+      parameters:
+        - { $ref: "#/components/parameters/BinIdPath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BinLocationUpdateRequest" }
+            examples:
+              assign:
+                summary: Assign a location
+                value: { location_id: 1 }
+              clear:
+                summary: Clear the location
+                value: { location_id: null }
+      responses:
+        "200":
+          description: Bin location updated.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BinLocationResponse" }
+              examples:
+                assigned:
+                  summary: Location assigned
+                  value: { version: "1", bin_id: "B-42", location_id: 1, location_name: "Garage" }
+                cleared:
+                  summary: Location cleared
+                  value: { version: "1", bin_id: "B-42", location_id: null, location_name: null }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Locations ──────────────────────────────────────────────────────────────────
+  /locations:
+    get:
+      summary: List all active locations
+      operationId: listLocations
+      tags: [Locations]
+      description: Returns all active (non-deleted) locations ordered alphabetically by name.
+      responses:
+        "200":
+          description: List of locations.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListLocationsResponse" }
+              example:
+                version: "1"
+                locations:
+                  - { location_id: 1, name: "Garage", description: "Detached garage, west side", created_at: "2026-04-10T19:30:00Z" }
+                  - { location_id: 2, name: "Kitchen Pantry", description: null, created_at: "2026-04-10T19:31:00Z" }
+    post:
+      summary: Create a new location
+      operationId: createLocation
+      tags: [Locations]
+      description: |
+        Creates a new location. The name must be unique (case-insensitive, trimmed).
+        Returns 409 Conflict if a location with the same name already exists.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:        { type: string, description: "Location name (unique, case-insensitive)." }
+                description: { type: string, description: "Optional description." }
+      responses:
+        "200":
+          description: Location created.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateLocationResponse" }
+              example:
+                version: "1"
+                location:
+                  location_id: 3
+                  name: "Workshop"
+                  description: "Detached building out back"
+                  created_at: "2026-04-10T19:35:00Z"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409":
+          description: Duplicate location name.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                version: "1"
+                error: { code: "conflict", message: "location with this name already exists", request_id: "abc123" }
+
+  /locations/{location_id}:
+    delete:
+      summary: Soft-delete a location
+      operationId: deleteLocation
+      tags: [Locations]
+      description: |
+        Soft-deletes a location by setting `deleted_at`. Also clears
+        `location_id` on any bins that reference this location.
+      parameters:
+        - name: location_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+          description: Location ID.
+      responses:
+        "200":
+          description: Location deleted.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, deleted]
+                properties:
+                  version: { type: string, enum: ["1"] }
+                  deleted: { type: boolean, const: true }
+              example: { version: "1", deleted: true }
         "404": { $ref: "#/components/responses/NotFound" }
 
   # ── Photos ──────────────────────────────────────────────────────────────────
@@ -1540,5 +1726,7 @@ tags:
     description: Runtime configuration.
   - name: Search
     description: Semantic search over the item catalogue.
+  - name: Locations
+    description: Physical location management for bins.
   - name: Admin
     description: API key management.
