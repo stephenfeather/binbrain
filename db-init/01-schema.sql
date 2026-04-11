@@ -158,6 +158,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS confirmed_classes_name_uq
 ON confirmed_classes (lower(trim(class_name)))
 WHERE removed_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    filename text PRIMARY KEY,
+    applied_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Seed useful classes from COCO vocabulary
 INSERT INTO confirmed_classes (class_name, category, source) VALUES
     ('scissors', 'tools', 'seed'),

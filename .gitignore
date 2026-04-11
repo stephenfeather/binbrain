@@ -10,3 +10,6 @@ data/
 
 # Downloaded model weights
 *.pt
+
+install.log
+backups/

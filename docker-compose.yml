@@ -10,7 +10,7 @@ services:
       - binbrain_pgdata:/var/lib/postgresql/data
       - ./db-init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5434:5432"
+      - "${DB_PORT:-5434}:5432"
     networks:
       - binbrain
     restart: unless-stopped
@@ -33,7 +33,6 @@ services:
       YOLO_WORLD_CONF: ${YOLO_WORLD_CONF:-0.15}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-      - "calebs-system:10.1.1.105"
     volumes:
       - ./data/photos:/data/photos
       # Persist fastembed model cache so restarts don't redownload
@@ -44,7 +43,7 @@ services:
     networks:
       - binbrain
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     restart: unless-stopped
 
 networks:
