@@ -669,3 +669,93 @@ def soft_delete_class(db: Session, class_name: str) -> bool:
         {"class_name": class_name},
     )
     return res.scalar() is not None
+
+
+# ── Locations ──────────────────────────────────────────────────────────
+
+
+def list_locations(db: Session) -> list[dict]:
+    rows = db.execute(
+        text(
+            """
+            SELECT location_id, name, description, created_at
+            FROM locations
+            WHERE deleted_at IS NULL
+            ORDER BY name
+            """
+        )
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def get_location(db: Session, location_id: int) -> dict | None:
+    row = db.execute(
+        text(
+            """
+            SELECT location_id, name, description, created_at
+            FROM locations
+            WHERE location_id = :location_id AND deleted_at IS NULL
+            """
+        ),
+        {"location_id": location_id},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def create_location(
+    db: Session,
+    name: str,
+    description: Optional[str],
+) -> dict | None:
+    row = db.execute(
+        text(
+            """
+            INSERT INTO locations (name, description)
+            VALUES (trim(:name), :description)
+            ON CONFLICT (lower(trim(name))) WHERE deleted_at IS NULL
+            DO NOTHING
+            RETURNING location_id, name, description, created_at
+            """
+        ),
+        {"name": name, "description": description},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def soft_delete_location(db: Session, location_id: int) -> bool:
+    res = db.execute(
+        text(
+            """
+            UPDATE locations
+            SET deleted_at = now()
+            WHERE location_id = :location_id
+              AND deleted_at IS NULL
+            RETURNING location_id
+            """
+        ),
+        {"location_id": location_id},
+    )
+    deleted = res.scalar() is not None
+    if deleted:
+        db.execute(
+            text(
+                "UPDATE bins SET location_id = NULL WHERE location_id = :location_id"
+            ),
+            {"location_id": location_id},
+        )
+    return deleted
+
+
+def update_bin_location(db: Session, bin_id: str, location_id: Optional[int]) -> bool:
+    res = db.execute(
+        text(
+            """
+            UPDATE bins
+            SET location_id = :location_id
+            WHERE bin_id = :bin_id AND deleted_at IS NULL
+            RETURNING bin_id
+            """
+        ),
+        {"bin_id": bin_id, "location_id": location_id},
+    )
+    return res.scalar() is not None
