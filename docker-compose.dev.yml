@@ -1,0 +1,10 @@
+# Dev mode overlay — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+services:
+  api:
+    volumes:
+      - ./api/app:/app/app
+    environment:
+      BINBRAIN_ENV: development
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: ["uvicorn", "app.main:app", "--host=0.0.0.0", "--port=8000", "--timeout-keep-alive=300", "--reload"]
