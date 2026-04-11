@@ -208,6 +208,8 @@
   "properties": {
     "version": { "type": "string", "enum": ["1"] },
     "bin_id": { "type": "string", "minLength": 1 },
+    "location_id": { "type": ["integer", "null"] },
+    "location_name": { "type": ["string", "null"] },
     "items": {
       "type": "array",
       "items": {
@@ -253,6 +255,8 @@
         "required": ["bin_id", "item_count", "photo_count", "last_updated"],
         "properties": {
           "bin_id": { "type": "string", "minLength": 1 },
+          "location_id": { "type": ["integer", "null"] },
+          "location_name": { "type": ["string", "null"] },
           "item_count": { "type": "integer", "minimum": 0 },
           "photo_count": { "type": "integer", "minimum": 0 },
           "last_updated": { "type": "string", "format": "date-time" }

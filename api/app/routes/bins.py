@@ -203,6 +203,23 @@ def get_bin(
     items = repository.fetch_bin_items(db, bin_id)
     photos = repository.fetch_bin_photos(db, bin_id)
 
+    # Fetch location info for this bin
+    from sqlalchemy import text as sa_text
+    loc_row = db.execute(
+        sa_text(
+            """
+            SELECT b.location_id, l.name AS location_name
+            FROM bins b
+            LEFT JOIN locations l ON l.location_id = b.location_id AND l.deleted_at IS NULL
+            WHERE b.bin_id = :bin_id
+            """
+        ),
+        {"bin_id": bin_id},
+    ).mappings().first()
+
+    location_id = loc_row["location_id"] if loc_row else None
+    location_name = loc_row["location_name"] if loc_row else None
+
     logger.info(
         "event=bin_get request_id=%s bin_id=%s items=%s photos=%s",
         db.info.get("request_id"),
@@ -210,7 +227,14 @@ def get_bin(
         len(items),
         len(photos),
     )
-    return {"version": "1", "bin_id": bin_id, "items": items, "photos": photos}
+    return {
+        "version": "1",
+        "bin_id": bin_id,
+        "location_id": location_id,
+        "location_name": location_name,
+        "items": items,
+        "photos": photos,
+    }
 
 
 @router.get("/bins")

@@ -426,6 +426,8 @@ def list_bins(db: Session) -> list[dict]:
             )
             SELECT
               b.bin_id,
+              b.location_id,
+              l.name AS location_name,
               COALESCE(ia.item_count, 0) AS item_count,
               COALESCE(pa.photo_count, 0) AS photo_count,
               GREATEST(
@@ -434,6 +436,7 @@ def list_bins(db: Session) -> list[dict]:
                 COALESCE(pa.last_photo_at, b.created_at)
               ) AS last_updated
             FROM bins b
+            LEFT JOIN locations l ON l.location_id = b.location_id AND l.deleted_at IS NULL
             LEFT JOIN item_agg ia ON ia.bin_id = b.bin_id
             LEFT JOIN photo_agg pa ON pa.bin_id = b.bin_id
             WHERE b.deleted_at IS NULL
