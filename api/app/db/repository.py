@@ -677,6 +677,22 @@ def soft_delete_class(db: Session, class_name: str) -> bool:
 # ── Locations ──────────────────────────────────────────────────────────
 
 
+def fetch_bin_location(db: Session, bin_id: str) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT b.location_id, l.name AS location_name
+            FROM bins b
+            LEFT JOIN locations l ON l.location_id = b.location_id AND l.deleted_at IS NULL
+            WHERE b.bin_id = :bin_id
+            """
+        ),
+        {"bin_id": bin_id},
+    ).mappings().first()
+    return {"location_id": row["location_id"] if row else None,
+            "location_name": row["location_name"] if row else None}
+
+
 def list_locations(db: Session) -> list[dict]:
     rows = db.execute(
         text(

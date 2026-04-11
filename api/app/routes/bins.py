@@ -203,22 +203,9 @@ def get_bin(
     items = repository.fetch_bin_items(db, bin_id)
     photos = repository.fetch_bin_photos(db, bin_id)
 
-    # Fetch location info for this bin
-    from sqlalchemy import text as sa_text
-    loc_row = db.execute(
-        sa_text(
-            """
-            SELECT b.location_id, l.name AS location_name
-            FROM bins b
-            LEFT JOIN locations l ON l.location_id = b.location_id AND l.deleted_at IS NULL
-            WHERE b.bin_id = :bin_id
-            """
-        ),
-        {"bin_id": bin_id},
-    ).mappings().first()
-
-    location_id = loc_row["location_id"] if loc_row else None
-    location_name = loc_row["location_name"] if loc_row else None
+    loc_info = repository.fetch_bin_location(db, bin_id)
+    location_id = loc_info["location_id"]
+    location_name = loc_info["location_name"]
 
     logger.info(
         "event=bin_get request_id=%s bin_id=%s items=%s photos=%s",
@@ -326,6 +313,7 @@ def update_bin_location(
     if not repository.bin_exists(db, bin_id):
         raise HTTPException(status_code=404, detail="bin not found")
 
+    loc = None
     if payload.location_id is not None:
         loc = repository.get_location(db, payload.location_id)
         if loc is None:
@@ -337,10 +325,7 @@ def update_bin_location(
 
     db.commit()
 
-    loc_name = None
-    if payload.location_id is not None:
-        loc = repository.get_location(db, payload.location_id)
-        loc_name = loc["name"] if loc else None
+    loc_name = loc["name"] if loc else None
 
     logger.info(
         "event=bin_location_update request_id=%s bin_id=%s location_id=%s",
