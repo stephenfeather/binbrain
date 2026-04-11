@@ -90,3 +90,54 @@ class TestLocationsAPI:
         client.delete(f"/locations/{loc_id}")
         row = db.execute(text("SELECT location_id FROM bins WHERE bin_id = 'BIN-API-DEL'")).scalar()
         assert row is None
+
+
+class TestBinLocationAPI:
+    """Tests for PATCH /bins/{bin_id}/location endpoint."""
+
+    def _cleanup(self, db):
+        db.execute(text("UPDATE bins SET location_id = NULL"))
+        db.execute(text("DELETE FROM locations"))
+        db.execute(text("DELETE FROM bin_items"))
+        db.execute(text("DELETE FROM bins"))
+        db.commit()
+
+    def test_assign_location_to_bin(self, client, db):
+        self._cleanup(db)
+        db.execute(text("INSERT INTO bins (bin_id) VALUES ('BIN-ASSIGN')"))
+        db.commit()
+        loc_resp = client.post("/locations", data={"name": "Garage"})
+        loc_id = loc_resp.json()["location"]["location_id"]
+
+        resp = client.patch("/bins/BIN-ASSIGN/location", json={"location_id": loc_id})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["version"] == "1"
+        assert body["bin_id"] == "BIN-ASSIGN"
+        assert body["location_id"] == loc_id
+        assert body["location_name"] == "Garage"
+
+    def test_clear_location_from_bin(self, client, db):
+        self._cleanup(db)
+        loc_resp = client.post("/locations", data={"name": "Temp"})
+        loc_id = loc_resp.json()["location"]["location_id"]
+        db.execute(text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-CLEAR', :loc_id)"),
+                   {"loc_id": loc_id})
+        db.commit()
+
+        resp = client.patch("/bins/BIN-CLEAR/location", json={"location_id": None})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["location_id"] is None
+        assert body["location_name"] is None
+
+    def test_assign_location_bin_not_found(self, client, db):
+        resp = client.patch("/bins/NONEXISTENT/location", json={"location_id": 1})
+        assert resp.status_code == 404
+
+    def test_assign_location_not_found(self, client, db):
+        self._cleanup(db)
+        db.execute(text("INSERT INTO bins (bin_id) VALUES ('BIN-BADLOC')"))
+        db.commit()
+        resp = client.patch("/bins/BIN-BADLOC/location", json={"location_id": 99999})
+        assert resp.status_code == 404

@@ -3,6 +3,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Form, Body, UploadFile, File
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import repository
@@ -11,6 +12,10 @@ from app.deps import (
     vec_to_pgvector, photo_root, EMBED_MODEL_NAME, logger,
 )
 from app.services.upc_lookup import validate_upc
+
+class BinLocationUpdate(BaseModel):
+    location_id: int | None = None
+
 
 router = APIRouter()
 
@@ -282,3 +287,46 @@ def update_item_in_bin(
         confidence,
     )
     return {"version": "1", "bin_id": bin_id, "item_id": item_id, "quantity": quantity, "confidence": confidence}
+
+
+@router.patch("/bins/{bin_id}/location")
+def update_bin_location(
+    bin_id: str,
+    payload: BinLocationUpdate,
+    db: Session = Depends(get_db),
+):
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    if not repository.bin_exists(db, bin_id):
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    if payload.location_id is not None:
+        loc = repository.get_location(db, payload.location_id)
+        if loc is None:
+            raise HTTPException(status_code=404, detail="location not found")
+
+    updated = repository.update_bin_location(db, bin_id, payload.location_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    db.commit()
+
+    loc_name = None
+    if payload.location_id is not None:
+        loc = repository.get_location(db, payload.location_id)
+        loc_name = loc["name"] if loc else None
+
+    logger.info(
+        "event=bin_location_update request_id=%s bin_id=%s location_id=%s",
+        db.info.get("request_id"),
+        bin_id,
+        payload.location_id,
+    )
+    return {
+        "version": "1",
+        "bin_id": bin_id,
+        "location_id": payload.location_id,
+        "location_name": loc_name,
+    }
