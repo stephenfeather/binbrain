@@ -24,13 +24,15 @@ def warmup_vision_model():
     """Load persisted settings, then pre-load the vision model into Ollama."""
     load_settings_from_db()
 
-    # Load confirmed classes and initialize YOLO-World
+    # Load confirmed classes; defer YOLO-World init to first detection request
     from app.services import class_registry, detection
     db = SessionLocal()
     try:
         class_registry.load_from_db(db)
         class_registry.set_reload_callback(detection.reload_classes)
-        detection.initialize_model(class_registry.get_classes())
+        # detection.initialize_model deferred — YOLOE lazy-loads on first use
+        # to reduce startup memory pressure
+        detection.set_deferred_classes(class_registry.get_classes())
     finally:
         db.close()
 

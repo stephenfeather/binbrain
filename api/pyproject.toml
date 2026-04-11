@@ -13,7 +13,7 @@ dependencies = [
   "psycopg[binary]==3.2.3",
   "python-multipart==0.0.12",
   "fastembed==0.3.6",
-  "ultralytics>=8.4.0",
+  "ultralytics==8.4.0",
   "Pillow>=10.0.0",
   "clip @ git+https://github.com/ultralytics/CLIP.git",
   "psutil>=5.9.0",

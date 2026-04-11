@@ -18,11 +18,19 @@ class Detection(TypedDict):
 _model = None
 _model_path: str | None = None
 _model_lock = threading.RLock()
+_deferred_classes: list[str] | None = None
+
+
+def set_deferred_classes(classes: list[str]) -> None:
+    """Store classes for deferred initialization on first model use."""
+    global _deferred_classes
+    _deferred_classes = classes
+    logger.info("event=yoloe_deferred_classes count=%d", len(classes))
 
 
 def _get_model():
     """Lazy-load YOLOE model, reloading if the configured model changes."""
-    global _model, _model_path
+    global _model, _model_path, _deferred_classes
     from ultralytics import YOLOE
     from app.deps import get_detection_model
 
@@ -31,6 +39,11 @@ def _get_model():
         logger.info("event=yoloe_load model=%s", desired_path)
         _model = YOLOE(desired_path)
         _model_path = desired_path
+        # Apply deferred classes on first load
+        if _deferred_classes:
+            logger.info("event=yoloe_set_classes count=%d", len(_deferred_classes))
+            _model.set_classes(_deferred_classes)
+            _deferred_classes = None
     return _model
 
 

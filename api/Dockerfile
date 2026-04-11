@@ -9,7 +9,7 @@ COPY pyproject.toml /build/pyproject.toml
 
 # CPU-only torch first (saves ~600MB vs default CUDA bundle),
 # then install the rest of the project dependencies.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+RUN pip install --no-cache-dir torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu \
  && pip install --no-cache-dir .
 
 # Strip packages that are build/optional deps not needed at runtime.
@@ -34,8 +34,9 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app /app/app
 
-RUN addgroup --system app && adduser --system --ingroup app app
-RUN mkdir -p /home/app/.cache /data/photos && chown -R app:app /home/app /data/photos
+RUN addgroup --system app && adduser --system --ingroup app --home /home/app app
+RUN mkdir -p /home/app/.cache /data/photos && chown -R app:app /home/app /data/photos /app
+ENV HOME=/home/app
 USER app
 
 EXPOSE 8000
