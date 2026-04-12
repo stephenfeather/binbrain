@@ -10,7 +10,7 @@ services:
       - binbrain_pgdata:/var/lib/postgresql/data
       - ./db-init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "${DB_PORT:-5434}:5432"
+      - "127.0.0.1:${DB_PORT:-5434}:5432"  # Bind to localhost only — do not expose DB to network
     networks:
       - binbrain
     restart: unless-stopped
@@ -43,7 +43,7 @@ services:
     networks:
       - binbrain
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"  # Bind to localhost; in production front with a TLS reverse proxy
     restart: unless-stopped
 
 networks:
