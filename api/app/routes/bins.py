@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
@@ -88,7 +89,11 @@ async def _stream_upload(up: UploadFile, dest: Path) -> None:
 
 
 def _validate_and_place(tmp: Path, final: Path) -> None:
-    """Validate image type, then rename tmp → final.  Unlinks tmp on rejection.
+    """Validate image type, then move tmp → final.  Unlinks tmp on rejection.
+
+    Creates final.parent lazily (only on success) so a rejected upload leaves
+    no empty directories under photo_root.  Uses shutil.move() to handle
+    cross-filesystem moves when tmp lives in the system temp dir.
 
     Raises HTTPException(415) if the file is not an allowed image type.
     """
@@ -100,7 +105,8 @@ def _validate_and_place(tmp: Path, final: Path) -> None:
             status_code=415,
             detail=f"Unsupported file type: {exc}",
         )
-    tmp.rename(final)
+    final.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(tmp), str(final))
 
 
 @router.post("/ingest")
@@ -142,9 +148,8 @@ async def ingest(
     )
 
     bin_dir = photo_root / bin_id
-    bin_dir.mkdir(parents=True, exist_ok=True)
 
-    # F-01: belt-and-suspenders path confinement after mkdir.
+    # F-01: belt-and-suspenders path confinement (checked before any I/O).
     _assert_within_photo_root(bin_dir)
 
     saved = []
@@ -154,7 +159,12 @@ async def ingest(
             ext = ".tmp"
 
         fname = f"{uuid.uuid4().hex}{ext}"
-        tmp_path = Path(tempfile.mktemp(dir=bin_dir, suffix=".upload_tmp"))
+        # F-05: write to system temp dir (outside photo_root) so a rejected
+        # upload leaves no residue under photo_root.  bin_dir is created
+        # lazily inside _validate_and_place only on success.
+        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".upload_tmp")
+        os.close(tmp_fd)
+        tmp_path = Path(tmp_name)
         final_path = bin_dir / fname
 
         # F-04: stream to temp; F-05: validate and rename.
@@ -184,7 +194,7 @@ async def ingest(
     return {"version": "1", "bin_id": bin_id, "photos": saved}
 
 
-@router.post("/bins/{bin_id}/add")
+@router.post("/bins/{bin_id:path}/add")
 async def add_to_bin(
     bin_id: str,
     name: Optional[str] = Form(None),
@@ -245,9 +255,8 @@ async def add_to_bin(
         saved_photos = []
         if photos:
             bin_dir = photo_root / bin_id
-            bin_dir.mkdir(parents=True, exist_ok=True)
 
-            # F-01: belt-and-suspenders path confinement.
+            # F-01: belt-and-suspenders path confinement (checked before any I/O).
             _assert_within_photo_root(bin_dir)
 
             for up in photos:
@@ -256,7 +265,11 @@ async def add_to_bin(
                     ext = ".tmp"
 
                 fname = f"{uuid.uuid4().hex}{ext}"
-                tmp_path = Path(tempfile.mktemp(dir=bin_dir, suffix=".upload_tmp"))
+                # F-05: write to system temp dir so rejected uploads leave no
+                # residue under photo_root.  bin_dir created lazily on success.
+                tmp_fd, tmp_name = tempfile.mkstemp(suffix=".upload_tmp")
+                os.close(tmp_fd)
+                tmp_path = Path(tmp_name)
                 final_path = bin_dir / fname
 
                 await _stream_upload(up, tmp_path)

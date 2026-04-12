@@ -11,11 +11,11 @@ def test_health_schema(app_module):
     validate_schema("https://binbrain.local/schemas/health.response.json", resp.json())
 
 
-def test_ingest_schema(client):
+def test_ingest_schema(client, valid_jpeg_bytes):
     resp = client.post(
         "/ingest",
         data={"bin_id": "BIN-SCHEMA-0001"},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert resp.status_code == 200
     validate_schema("https://binbrain.local/schemas/ingest.response.json", resp.json())
@@ -49,11 +49,11 @@ def test_bin_get_schema(client):
     validate_schema("https://binbrain.local/schemas/bin.get.response.json", r_bin.json())
 
 
-def test_photo_suggest_schema(client):
+def test_photo_suggest_schema(client, valid_jpeg_bytes):
     resp = client.post(
         "/ingest",
         data={"bin_id": "BIN-SCHEMA-SUGGEST-0001"},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     photo_id = resp.json()["photos"][0]["photo_id"]
 
@@ -62,11 +62,11 @@ def test_photo_suggest_schema(client):
     validate_schema("https://binbrain.local/schemas/photo.suggest.response.json", r.json())
 
 
-def test_photo_detect_schema(client):
+def test_photo_detect_schema(client, valid_jpeg_bytes):
     resp = client.post(
         "/ingest",
         data={"bin_id": "BIN-SCHEMA-DETECT-0001"},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     photo_id = resp.json()["photos"][0]["photo_id"]
 
@@ -75,11 +75,11 @@ def test_photo_detect_schema(client):
     validate_schema("https://binbrain.local/schemas/photo.detect.response.json", r.json())
 
 
-def test_photo_groups_schema(client, db):
+def test_photo_groups_schema(client, db, valid_jpeg_bytes):
     resp = client.post(
         "/ingest",
         data={"bin_id": "BIN-SCHEMA-GROUPS-0001"},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     photo_id = resp.json()["photos"][0]["photo_id"]
 
@@ -101,11 +101,11 @@ def test_photo_groups_schema(client, db):
     validate_schema("https://binbrain.local/schemas/photo.groups.response.json", r.json())
 
 
-def test_photo_confirm_schema(client):
+def test_photo_confirm_schema(client, valid_jpeg_bytes):
     resp = client.post(
         "/ingest",
         data={"bin_id": "BIN-SCHEMA-CONFIRM-0001"},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     photo_id = resp.json()["photos"][0]["photo_id"]
 

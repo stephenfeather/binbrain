@@ -273,3 +273,13 @@ def db(app_module):
         yield db
     finally:
         db.close()
+
+
+@pytest.fixture(scope="session")
+def valid_jpeg_bytes():
+    """Real 1×1 JPEG produced by Pillow — passes magic-byte + PIL.verify() checks."""
+    from io import BytesIO
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (1, 1), "red").save(buf, format="JPEG")
+    return buf.getvalue()
