@@ -13,6 +13,7 @@ from app.deps import (
     DETECTION_MODEL_ALLOWLIST,
 )
 from app.middleware import require_admin
+from app.services.rate_limiter import require_warmup_rate_limit
 
 router = APIRouter()
 
@@ -75,7 +76,7 @@ def running_models(request: Request = None):
     }
 
 
-@router.post("/models/select", dependencies=[Depends(require_admin)])
+@router.post("/models/select", dependencies=[Depends(require_admin), Depends(require_warmup_rate_limit)])
 def select_model(
     payload: dict = Body(...),
     request: Request = None,

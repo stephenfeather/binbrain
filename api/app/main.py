@@ -16,6 +16,7 @@ from app.deps import (
     MAX_REQUEST_BODY_BYTES, MODELS_DIR, photo_root,
 )
 from app.routes import health, items, bins, photos, upc, admin, classes, locations
+from app.services.rate_limiter import global_limiter, _ADMIN_MULTIPLIER
 
 
 @asynccontextmanager
@@ -104,6 +105,32 @@ async def limit_body_size_middleware(request: Request, call_next):
 
 
 _AUTH_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json"}
+
+
+# F-08: global rate limit — runs after auth middleware sets api_key_id / api_key_role.
+# Middleware registration is LIFO: this is defined before api_key_auth in code so it
+# executes AFTER auth in the request pipeline (auth is outermost).
+@app.middleware("http")
+async def global_rate_limit_middleware(request: Request, call_next):
+    if request.url.path in _AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+    key = str(getattr(request.state, "api_key_id", "anon"))
+    role = getattr(request.state, "api_key_role", "user")
+    multiplier = _ADMIN_MULTIPLIER if role == "admin" else 1.0
+    if not global_limiter.check(key, role_multiplier=multiplier):
+        request_id = getattr(request.state, "request_id", None)
+        return JSONResponse(
+            status_code=429,
+            content={
+                "version": "1",
+                "error": {
+                    "code": "rate_limited",
+                    "message": "rate limit exceeded",
+                    "request_id": request_id,
+                },
+            },
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")

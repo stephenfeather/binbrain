@@ -6,13 +6,13 @@ from app.deps import (
     get_db, embed_text, canonical_item_text, vec_to_pgvector,
     EMBED_MODEL_NAME, logger,
 )
-from app.services.rate_limiter import require_expensive_rate_limit
+from app.services.rate_limiter import require_upc_rate_limit
 from app.services.upc_lookup import validate_upc, lookup_upc
 
 router = APIRouter()
 
 
-@router.get("/upc/{upc}", dependencies=[Depends(require_expensive_rate_limit)])
+@router.get("/upc/{upc}", dependencies=[Depends(require_upc_rate_limit)])
 def upc_lookup(
     upc: str,
     db: Session = Depends(get_db),

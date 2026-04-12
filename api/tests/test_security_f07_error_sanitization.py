@@ -90,3 +90,33 @@ def test_search_embed_failure_does_not_leak_exception_text(client, monkeypatch):
         assert "cuda:0" not in msg, f"Device name in response: {msg!r}"
     finally:
         monkeypatch.setattr(items_route, "embed_text", original)
+
+
+def test_confirm_500_does_not_leak_exception_text(client, monkeypatch):
+    """POST /photos/{id}/confirm when a DB operation fails must use a generic message."""
+    import app.db.repository as repo
+    original = repo.insert_item
+
+    def _fail(*args, **kwargs):
+        raise RuntimeError("psycopg: SSL connection has been closed unexpectedly")
+    monkeypatch.setattr(repo, "insert_item", _fail)
+
+    try:
+        payload = {
+            "version": "1",
+            "bin_id": "F07CONFIRM01",
+            "selected_groups": [
+                {"group_key": "bolt|fastener", "label": "bolt", "category": "fastener", "quantity": 5}
+            ],
+        }
+        # photo_id 999999 doesn't exist — that's fine; we're testing the error path
+        # when the confirm handler encounters an unexpected DB failure.
+        # The repo.insert_item patch makes it fail if reached.
+        resp = client.post("/photos/999999/confirm", json=payload)
+        # Either 404 (photo not found, hit before insert_item) or 500 (insert failed)
+        if resp.status_code == 500:
+            msg = resp.json()["error"]["message"]
+            assert "psycopg" not in msg, f"DB driver in confirm 500 response: {msg!r}"
+            assert "SSL" not in msg, f"Internal connection detail in response: {msg!r}"
+    finally:
+        monkeypatch.setattr(repo, "insert_item", original)

@@ -1,14 +1,15 @@
-"""F-08 (Medium): No rate limiting — RED tests.
+"""F-08 (Medium): No rate limiting — tests for tiered budgets.
 
-Tests FAIL until:
-- app/services/rate_limiter.py exists with SlidingWindowRateLimiter
-- Expensive endpoints (/photos/{id}/detect, /photos/{id}/suggest, /upc/{upc})
-  apply require_expensive_rate_limit dependency
-- Rate limit exceeded returns 429
+Tests cover:
+- SlidingWindowRateLimiter class (unit, fake-clock injection)
+- Four named limiters: global, vision, warmup, upc
+- Role multiplier (admin keys get 4× the budget)
+- LRU/FIFO eviction (memory bound)
+- Integration: 429 returned on the correct endpoints
 """
 
 
-# ── Unit tests: RateLimiter class (no DB needed) ─────────────────────────────
+# ── Unit tests: SlidingWindowRateLimiter (no DB needed) ──────────────────────
 
 def test_rate_limiter_class_exists():
     from app.services.rate_limiter import SlidingWindowRateLimiter
@@ -59,49 +60,93 @@ def test_rate_limiter_reset_all_clears_all_keys():
     assert rl.check("key2") is True
 
 
-def test_rate_limiter_window_expires():
-    """Calls outside the time window are not counted."""
-    import time
+def test_rate_limiter_window_expires_with_fake_clock():
+    """Fake clock injection avoids real sleeps in test."""
     from app.services.rate_limiter import SlidingWindowRateLimiter
-    rl = SlidingWindowRateLimiter(max_calls=1, period=0.05)  # 50ms window
-    assert rl.check("key1") is True
-    assert rl.check("key1") is False   # within window — blocked
-    time.sleep(0.1)                    # wait for window to expire
+    now = [0.0]
+
+    def fake_clock():
+        return now[0]
+
+    rl = SlidingWindowRateLimiter(max_calls=1, period=10.0, time_fn=fake_clock)
+    assert rl.check("key1") is True    # allowed at t=0
+    assert rl.check("key1") is False   # blocked within window
+    now[0] = 11.0                      # advance past window
     assert rl.check("key1") is True    # old call expired — allowed again
 
 
-def test_module_level_expensive_limiter_exists():
-    from app.services.rate_limiter import expensive_limiter, SlidingWindowRateLimiter
-    assert isinstance(expensive_limiter, SlidingWindowRateLimiter)
+def test_admin_role_multiplier_increases_budget():
+    """Admin keys receive RATE_LIMIT_ADMIN_MULTIPLIER × the base limit."""
+    from app.services.rate_limiter import SlidingWindowRateLimiter, _ADMIN_MULTIPLIER
+    rl = SlidingWindowRateLimiter(max_calls=2, period=60.0)
+    effective_admin_limit = int(2 * _ADMIN_MULTIPLIER)
+    # User: 2 calls then blocked
+    for _ in range(2):
+        rl.check("user1")
+    assert rl.check("user1") is False
+    # Admin: effective_admin_limit calls allowed
+    for _ in range(effective_admin_limit):
+        assert rl.check("admin1", role_multiplier=_ADMIN_MULTIPLIER) is True
+    assert rl.check("admin1", role_multiplier=_ADMIN_MULTIPLIER) is False
 
 
-# ── Integration tests: endpoints return 429 when rate limit hit ───────────────
+def test_lru_cap_evicts_oldest_key():
+    """When _MAX_TRACKED_KEYS is reached, the oldest key is evicted (FIFO)."""
+    from app.services import rate_limiter as rl_mod
+    original_max = rl_mod._MAX_TRACKED_KEYS
+    rl_mod._MAX_TRACKED_KEYS = 3
+    try:
+        rl = rl_mod.SlidingWindowRateLimiter(max_calls=10, period=60.0)
+        rl.check("a")
+        rl.check("b")
+        rl.check("c")
+        # All three in dict; adding "d" should evict "a"
+        rl.check("d")
+        assert "a" not in rl._calls, "Oldest key 'a' should have been evicted"
+        assert "d" in rl._calls
+    finally:
+        rl_mod._MAX_TRACKED_KEYS = original_max
+
+
+def test_module_level_limiters_exist():
+    from app.services.rate_limiter import (
+        global_limiter, vision_limiter, warmup_limiter, upc_limiter,
+        SlidingWindowRateLimiter,
+    )
+    for lim in (global_limiter, vision_limiter, warmup_limiter, upc_limiter):
+        assert isinstance(lim, SlidingWindowRateLimiter)
+
+
+# ── Integration tests: endpoints return 429 when limit hit ───────────────────
+
+def _swap_limiter(rate_limiter_mod, attr: str, max_calls: int):
+    """Return (original, temp) — caller must restore original in finally."""
+    from app.services.rate_limiter import SlidingWindowRateLimiter
+    original = getattr(rate_limiter_mod, attr)
+    temp = SlidingWindowRateLimiter(max_calls=max_calls, period=60.0)
+    setattr(rate_limiter_mod, attr, temp)
+    return original, temp
+
 
 def test_detect_endpoint_returns_429_on_rate_limit(client, app_module):
-    """POST /photos/{id}/detect must return 429 when the rate limit is exceeded."""
+    """POST /photos/{id}/detect must return 429 when the vision limit is exceeded."""
     from app.services import rate_limiter
-    original = rate_limiter.expensive_limiter
-    rate_limiter.expensive_limiter = rate_limiter.SlidingWindowRateLimiter(max_calls=1, period=60.0)
+    original, _ = _swap_limiter(rate_limiter, "vision_limiter", max_calls=1)
     try:
-        # First request goes through (may be 404 — that's fine, not 429)
         resp1 = client.post("/photos/999999/detect")
-        assert resp1.status_code != 429, (
-            f"Rate limit already exceeded before test started: {resp1.text}"
-        )
-        # Second request must be rate-limited
+        assert resp1.status_code != 429, f"Already limited: {resp1.text}"
         resp2 = client.post("/photos/999999/detect")
         assert resp2.status_code == 429, (
             f"Expected 429 on 2nd request, got {resp2.status_code}: {resp2.text}"
         )
     finally:
-        rate_limiter.expensive_limiter = original
+        rate_limiter.vision_limiter = original
 
 
 def test_suggest_endpoint_returns_429_on_rate_limit(client, app_module):
-    """GET /photos/{id}/suggest must return 429 when the rate limit is exceeded."""
+    """GET /photos/{id}/suggest must return 429 when the vision limit is exceeded."""
     from app.services import rate_limiter
-    original = rate_limiter.expensive_limiter
-    rate_limiter.expensive_limiter = rate_limiter.SlidingWindowRateLimiter(max_calls=1, period=60.0)
+    original, _ = _swap_limiter(rate_limiter, "vision_limiter", max_calls=1)
     try:
         resp1 = client.get("/photos/999999/suggest")
         assert resp1.status_code != 429, f"Already limited: {resp1.text}"
@@ -110,20 +155,19 @@ def test_suggest_endpoint_returns_429_on_rate_limit(client, app_module):
             f"Expected 429 on 2nd request, got {resp2.status_code}: {resp2.text}"
         )
     finally:
-        rate_limiter.expensive_limiter = original
+        rate_limiter.vision_limiter = original
 
 
 def test_upc_endpoint_returns_429_on_rate_limit(client, app_module):
-    """GET /upc/{upc} must return 429 when the rate limit is exceeded."""
+    """GET /upc/{upc} must return 429 when the upc limit is exceeded."""
     from app.services import rate_limiter
-    original = rate_limiter.expensive_limiter
-    rate_limiter.expensive_limiter = rate_limiter.SlidingWindowRateLimiter(max_calls=1, period=60.0)
+    original, _ = _swap_limiter(rate_limiter, "upc_limiter", max_calls=1)
     try:
-        resp1 = client.get("/upc/012345678905")  # valid UPC-12 check digit
+        resp1 = client.get("/upc/012345678905")
         assert resp1.status_code != 429, f"Already limited: {resp1.text}"
         resp2 = client.get("/upc/012345678905")
         assert resp2.status_code == 429, (
             f"Expected 429 on 2nd request, got {resp2.status_code}: {resp2.text}"
         )
     finally:
-        rate_limiter.expensive_limiter = original
+        rate_limiter.upc_limiter = original

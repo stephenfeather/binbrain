@@ -100,11 +100,11 @@ def _validate_and_place(tmp: Path, final: Path) -> None:
     """
     try:
         validate_image_file(tmp)
-    except ValueError as exc:
+    except ValueError:
         tmp.unlink(missing_ok=True)
         raise HTTPException(
             status_code=415,
-            detail=f"Unsupported file type: {exc}",
+            detail="unsupported file type",
         )
     final.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(tmp), str(final))
@@ -313,9 +313,9 @@ async def add_to_bin(
     except HTTPException:
         db.rollback()
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="add_to_bin failed") from e
+        raise HTTPException(status_code=500, detail="internal error") from None
 
 
 @router.get("/bins/{bin_id}")
