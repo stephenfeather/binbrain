@@ -122,25 +122,39 @@ upc_limiter = SlidingWindowRateLimiter(
 """30 req/min per key; applies to /upc/{upc} (outbound HTTP lookup)."""
 
 
-# ── FastAPI dependency factories ─────────────────────────────────────────────
+# ── FastAPI dependency functions ──────────────────────────────────────────────
+#
+# IMPORTANT: these must be plain module-level functions (not closures from a
+# factory).  A factory like _make_dep(vision_limiter) captures the *object* at
+# import time; replacing `rate_limiter.vision_limiter` in tests then has no
+# effect on the closed-over reference.  Module-global functions look up the
+# name in this module's __dict__ at *call time*, so attribute-swaps in tests
+# (e.g. rate_limiter.vision_limiter = stub) are always visible.
 
-def _make_dep(limiter: SlidingWindowRateLimiter):
-    """Return a FastAPI dependency function for *limiter*.
-
-    Admin-role keys receive RATE_LIMIT_ADMIN_MULTIPLIER × the base limit.
-    """
-    def _dep(request: Request) -> None:
-        key = str(getattr(request.state, "api_key_id", "anon"))
-        role = getattr(request.state, "api_key_role", "user")
-        multiplier = _ADMIN_MULTIPLIER if role == "admin" else 1.0
-        if not limiter.check(key, role_multiplier=multiplier):
-            raise HTTPException(status_code=429, detail="rate limit exceeded")
-    return _dep
+def _limiter_key(request: Request) -> tuple[str, float]:
+    """Return (key, role_multiplier) for the current request."""
+    key = str(getattr(request.state, "api_key_id", "anon"))
+    role = getattr(request.state, "api_key_role", "user")
+    multiplier = _ADMIN_MULTIPLIER if role == "admin" else 1.0
+    return key, multiplier
 
 
-require_vision_rate_limit = _make_dep(vision_limiter)
-require_warmup_rate_limit = _make_dep(warmup_limiter)
-require_upc_rate_limit = _make_dep(upc_limiter)
+def require_vision_rate_limit(request: Request) -> None:
+    """Rate-limit dependency for /photos/{id}/suggest and /photos/{id}/detect."""
+    key, mult = _limiter_key(request)
+    if not vision_limiter.check(key, role_multiplier=mult):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
 
-# Kept for backward compatibility with existing route references; maps to vision.
-require_expensive_rate_limit = require_vision_rate_limit
+
+def require_warmup_rate_limit(request: Request) -> None:
+    """Rate-limit dependency for model-warmup and admin model routes."""
+    key, mult = _limiter_key(request)
+    if not warmup_limiter.check(key, role_multiplier=mult):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+
+
+def require_upc_rate_limit(request: Request) -> None:
+    """Rate-limit dependency for /upc/{upc} (outbound HTTP lookup)."""
+    key, mult = _limiter_key(request)
+    if not upc_limiter.check(key, role_multiplier=mult):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")

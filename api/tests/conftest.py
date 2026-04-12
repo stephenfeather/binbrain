@@ -264,6 +264,34 @@ def client(app_module, test_api_key):
     return c
 
 
+@pytest.fixture(scope="session")
+def user_api_key(app_module):
+    """Create a role='user' API key for tests that need non-admin rate limits."""
+    from app.deps import SessionLocal
+    from sqlalchemy import text
+
+    raw_key = "bb_user_" + secrets.token_urlsafe(24)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    db = SessionLocal()
+    try:
+        db.execute(
+            text("INSERT INTO api_keys (key_hash, name, role) VALUES (:key_hash, :name, 'user')"),
+            {"key_hash": key_hash, "name": "test-fixture-user"},
+        )
+        db.commit()
+    finally:
+        db.close()
+    return raw_key
+
+
+@pytest.fixture()
+def user_client(app_module, user_api_key):
+    """TestClient authenticated as a role='user' key (no admin 4× rate-limit multiplier)."""
+    c = TestClient(app_module.app)
+    c.headers["X-API-Key"] = user_api_key
+    return c
+
+
 @pytest.fixture()
 def db(app_module):
     from app.deps import SessionLocal
@@ -283,3 +311,27 @@ def valid_jpeg_bytes():
     buf = BytesIO()
     Image.new("RGB", (1, 1), "red").save(buf, format="JPEG")
     return buf.getvalue()
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiters():
+    """Reset all in-process rate limiter state before each test.
+
+    Without this, the 120/min global budget can be exhausted by earlier
+    integration tests (all using the same test API key), causing subsequent
+    tests to receive spurious 429s before their own rate-limit assertions run.
+
+    Also ensures the per-endpoint swap pattern used by F-08 tests starts from
+    a clean slate regardless of test execution order.
+
+    No app_module dependency: rate_limiter has no DB imports and is safe to
+    import at any point in the test session, including during pure unit tests.
+    """
+    try:
+        from app.services import rate_limiter
+        rate_limiter.global_limiter.reset()
+        rate_limiter.vision_limiter.reset()
+        rate_limiter.warmup_limiter.reset()
+        rate_limiter.upc_limiter.reset()
+    except (ImportError, AttributeError):
+        pass  # Rate limiter not yet loaded — nothing to reset
