@@ -19,6 +19,7 @@ from app.deps import (
 )
 from app.security import validate_bin_id
 from app.services.image_validation import validate_image_file
+from app.services.metadata_schema import validate_device_metadata
 from app.services.upc_lookup import validate_upc
 
 class BinLocationUpdate(BaseModel):
@@ -125,13 +126,15 @@ async def ingest(
             detail=f"Too many files: max {MAX_FILES_PER_REQUEST} per request",
         )
 
-    # Parse device_metadata once (same metadata applies to all photos in this batch)
+    # Parse and validate device_metadata (F-11: size cap + top-level key allowlist).
     parsed_metadata = None
     if device_metadata:
         try:
-            parsed_metadata = json.loads(device_metadata)
+            parsed_metadata = validate_device_metadata(device_metadata)
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="device_metadata must be valid JSON")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     # Ensure bin exists
     try:
