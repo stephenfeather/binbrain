@@ -5,19 +5,38 @@ from typing import Optional
 
 from fastapi import Request
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker
 
 from fastembed import TextEmbedding
+
+from app.config import (
+    MAX_REQUEST_BODY_BYTES, MAX_FILE_BYTES, MAX_FILES_PER_REQUEST,
+    MODELS_DIR, DETECTION_MODEL_ALLOWLIST, DEFAULT_DETECTION_MODEL_ID,
+)
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+
+# Re-export for callers that import these from app.deps (backwards compat).
+MAX_REQUEST_BODY_BYTES = MAX_REQUEST_BODY_BYTES
+MAX_FILE_BYTES = MAX_FILE_BYTES
+MAX_FILES_PER_REQUEST = MAX_FILES_PER_REQUEST
+MODELS_DIR = MODELS_DIR
+DETECTION_MODEL_ALLOWLIST = DETECTION_MODEL_ALLOWLIST
+
+# Mutable at runtime via POST /settings/detection-model
+_detection_model_id: str = DEFAULT_DETECTION_MODEL_ID
+
 # Mutable at runtime via POST /settings/image-size
 _max_image_px = int(os.environ.get("OLLAMA_MAX_IMAGE_PX", "1280"))
 
 # Mutable at runtime via POST /models/select
 _active_vision_model = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
+
+# YOLO-World confidence threshold (lower than YOLO11s due to zero-shot)
+_yolo_world_conf = float(os.environ.get("YOLO_WORLD_CONF", "0.15"))
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -87,20 +106,35 @@ def set_max_image_px(value: int):
     _max_image_px = value
 
 
-# Mutable at runtime via POST /settings/detection-model
-_detection_model = os.environ.get("YOLO_MODEL_PATH", "yoloe-v8s-seg.pt")
-
-# YOLO-World confidence threshold (lower than YOLO11s due to zero-shot)
-_yolo_world_conf = float(os.environ.get("YOLO_WORLD_CONF", "0.15"))
-
+# ── Detection model accessors (F-02) ─────────────────────────────────────────
 
 def get_detection_model() -> str:
-    return _detection_model
+    """Return the resolved filesystem path of the active detection model.
+
+    Always derived from the allowlist — never a raw user-supplied path.
+    """
+    filename = DETECTION_MODEL_ALLOWLIST[_detection_model_id]
+    return str(MODELS_DIR / filename)
 
 
-def set_detection_model(value: str):
-    global _detection_model
-    _detection_model = value
+def get_detection_model_id() -> str:
+    """Return the current detection model logical ID."""
+    return _detection_model_id
+
+
+def set_detection_model(model_id: str) -> None:
+    """Set the active detection model by logical ID.
+
+    Raises:
+        ValueError: if model_id is not in DETECTION_MODEL_ALLOWLIST.
+    """
+    global _detection_model_id
+    if model_id not in DETECTION_MODEL_ALLOWLIST:
+        raise ValueError(
+            f"model_id {model_id!r} is not in the detection model allowlist; "
+            f"allowed: {list(DETECTION_MODEL_ALLOWLIST)}"
+        )
+    _detection_model_id = model_id
 
 
 def get_yolo_world_conf() -> float:
@@ -133,8 +167,15 @@ def load_settings_from_db() -> None:
 
         det_model = repository.get_setting(db, "detection_model")
         if det_model:
-            set_detection_model(det_model)
-            logger.info("event=settings_loaded key=detection_model value=%s", det_model)
+            try:
+                set_detection_model(det_model)
+                logger.info("event=settings_loaded key=detection_model value=%s", det_model)
+            except ValueError:
+                logger.warning(
+                    "event=settings_load_invalid key=detection_model value=%s "
+                    "(not in allowlist; keeping default)",
+                    det_model,
+                )
     except Exception as e:
         logger.warning("event=settings_load_failed error=%s", str(e)[:200])
     finally:

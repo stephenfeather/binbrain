@@ -50,7 +50,7 @@ def test_error_shape_on_missing_bin(client):
     assert body["error"]["request_id"]
 
 
-def test_photo_suggest_shape(client, db):
+def test_photo_suggest_shape(client, db, valid_jpeg_bytes):
     bin_id = "BIN-PHOTO-0001"
     r = client.post(
         "/items",
@@ -61,7 +61,7 @@ def test_photo_suggest_shape(client, db):
     r_ingest = client.post(
         "/ingest",
         data={"bin_id": bin_id},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert r_ingest.status_code == 200
     body = r_ingest.json()
@@ -88,12 +88,12 @@ def test_photo_suggest_missing(client):
     assert body["error"]["code"] == "not_found"
 
 
-def test_ingest_multiple_photos_returns_ids(client):
+def test_ingest_multiple_photos_returns_ids(client, valid_jpeg_bytes):
     bin_id = "BIN-INGEST-0001"
     files = [
-        ("photos", ("a.jpg", b"aaa", "image/jpeg")),
-        ("photos", ("b.jpg", b"bbb", "image/jpeg")),
-        ("photos", ("c.jpg", b"ccc", "image/jpeg")),
+        ("photos", ("a.jpg", valid_jpeg_bytes, "image/jpeg")),
+        ("photos", ("b.jpg", valid_jpeg_bytes, "image/jpeg")),
+        ("photos", ("c.jpg", valid_jpeg_bytes, "image/jpeg")),
     ]
     resp = client.post("/ingest", data={"bin_id": bin_id}, files=files)
     assert resp.status_code == 200
@@ -106,12 +106,12 @@ def test_ingest_multiple_photos_returns_ids(client):
         assert "path" in entry
 
 
-def test_photo_detect_shape(client):
+def test_photo_detect_shape(client, valid_jpeg_bytes):
     bin_id = "BIN-DETECT-0001"
     resp = client.post(
         "/ingest",
         data={"bin_id": bin_id},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert resp.status_code == 200
     photo_id = resp.json()["photos"][0]["photo_id"]
@@ -131,12 +131,12 @@ def test_photo_detect_missing(client):
     assert body["error"]["code"] == "not_found"
 
 
-def test_photo_groups(client, db):
+def test_photo_groups(client, db, valid_jpeg_bytes):
     bin_id = "BIN-GROUP-0001"
     resp = client.post(
         "/ingest",
         data={"bin_id": bin_id},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert resp.status_code == 200
     photo_id = resp.json()["photos"][0]["photo_id"]
@@ -194,12 +194,12 @@ def test_photo_groups_missing(client):
     assert body["error"]["code"] == "not_found"
 
 
-def test_detection_cascade_delete(client, db):
+def test_detection_cascade_delete(client, db, valid_jpeg_bytes):
     bin_id = "BIN-DEL-DET-0001"
     resp = client.post(
         "/ingest",
         data={"bin_id": bin_id},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert resp.status_code == 200
     photo_id = resp.json()["photos"][0]["photo_id"]
@@ -239,12 +239,12 @@ def test_detection_cascade_delete(client, db):
     assert grp_count == 0
 
 
-def test_confirm_groups_idempotent(client, db):
+def test_confirm_groups_idempotent(client, db, valid_jpeg_bytes):
     bin_id = "BIN-CONFIRM-0001"
     resp = client.post(
         "/ingest",
         data={"bin_id": bin_id},
-        files={"photos": ("photo.jpg", b"fake", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert resp.status_code == 200
     photo_id = resp.json()["photos"][0]["photo_id"]

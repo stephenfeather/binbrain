@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.deps import get_db, logger
+from app.middleware import require_admin
 from app.services import class_registry
 
 router = APIRouter(prefix="/classes", tags=["classes"])
@@ -27,9 +28,9 @@ def list_classes(request: Request = None):
     }
 
 
-@router.post("/confirm")
+@router.post("/confirm", dependencies=[Depends(require_admin)])
 def confirm_class(body: ConfirmRequest, request: Request = None):
-    """Confirm a class name, adding it to the YOLO-World vocabulary."""
+    """Confirm a class name, adding it to the YOLO-World vocabulary. Requires admin."""
     request_id = getattr(request.state, "request_id", None) if request else None
     if not body.class_name.strip():
         raise HTTPException(status_code=400, detail="class_name cannot be empty")
@@ -54,9 +55,9 @@ def confirm_class(body: ConfirmRequest, request: Request = None):
     }
 
 
-@router.delete("/{class_name}")
+@router.delete("/{class_name}", dependencies=[Depends(require_admin)])
 def delete_class(class_name: str, request: Request = None):
-    """Soft-delete a class from the active list."""
+    """Soft-delete a class from the active list. Requires admin."""
     request_id = getattr(request.state, "request_id", None) if request else None
     db = next(get_db(request))
     removed = class_registry.remove_class(db, class_name)
@@ -74,9 +75,9 @@ def delete_class(class_name: str, request: Request = None):
     }
 
 
-@router.post("/reload")
+@router.post("/reload", dependencies=[Depends(require_admin)])
 def reload_classes(request: Request = None):
-    """Force a YOLO-World set_classes() reload from the current class list."""
+    """Force a YOLO-World set_classes() reload from the current class list. Requires admin."""
     request_id = getattr(request.state, "request_id", None) if request else None
     classes = class_registry.get_classes()
     from app.services.detection import reload_classes as _reload

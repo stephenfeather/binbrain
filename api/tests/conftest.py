@@ -173,6 +173,7 @@ def _init_schema(engine) -> None:
         id          bigserial PRIMARY KEY,
         key_hash    text NOT NULL UNIQUE,
         name        text NOT NULL,
+        role        text NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
         created_at  timestamptz NOT NULL DEFAULT now(),
         revoked_at  timestamptz,
         last_used   timestamptz
@@ -247,7 +248,7 @@ def test_api_key(app_module):
     db = SessionLocal()
     try:
         db.execute(
-            text("INSERT INTO api_keys (key_hash, name) VALUES (:key_hash, :name)"),
+            text("INSERT INTO api_keys (key_hash, name, role) VALUES (:key_hash, :name, 'admin')"),
             {"key_hash": key_hash, "name": "test-fixture"},
         )
         db.commit()
@@ -272,3 +273,13 @@ def db(app_module):
         yield db
     finally:
         db.close()
+
+
+@pytest.fixture(scope="session")
+def valid_jpeg_bytes():
+    """Real 1×1 JPEG produced by Pillow — passes magic-byte + PIL.verify() checks."""
+    from io import BytesIO
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (1, 1), "red").save(buf, format="JPEG")
+    return buf.getvalue()

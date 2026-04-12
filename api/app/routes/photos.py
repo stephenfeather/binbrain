@@ -5,10 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+import os
+
 from app.db import repository
 from app.deps import (
     get_db, embed_text, canonical_item_text, fingerprint_for,
-    vec_to_pgvector, SessionLocal,
+    vec_to_pgvector, SessionLocal, photo_root,
     get_active_vision_model, get_max_image_px,
     OLLAMA_URL, logger,
 )
@@ -170,8 +172,16 @@ def delete_photo(
 
     db.commit()
 
-    # Remove file from disk
+    # F-01: verify stored path is still within photo_root before unlinking.
     fpath = Path(deleted_path)
+    photo_root_resolved = photo_root.resolve()
+    fpath_resolved = fpath.resolve()
+    if not str(fpath_resolved).startswith(str(photo_root_resolved) + os.sep):
+        logger.error(
+            "event=photo_delete_path_escape photo_id=%s path=%s",
+            photo_id, deleted_path,
+        )
+        raise HTTPException(status_code=400, detail="photo path outside photo root")
     if fpath.is_file():
         fpath.unlink()
 

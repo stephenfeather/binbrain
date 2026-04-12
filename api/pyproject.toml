@@ -7,16 +7,22 @@ name = "binbrain-api"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-  "fastapi==0.115.8",
+  "fastapi>=0.115.8",
   "uvicorn[standard]==0.30.6",
   "sqlalchemy==2.0.36",
   "psycopg[binary]==3.2.3",
-  "python-multipart==0.0.12",
+  "python-multipart>=0.0.22",
   "fastembed==0.3.6",
   "ultralytics==8.4.0",
-  "Pillow>=10.0.0",
+  # TODO(F-06/CVE-2026-25990): Pillow 12.1.1 fixes this CVE but fastembed==0.3.6
+  # requires Pillow<11.0.0. Upgrade fastembed first, then bump Pillow to >=12.1.1.
+  "Pillow>=10.4.0,<11.0.0",
+  "aiofiles>=24.1.0",
   "clip @ git+https://github.com/ultralytics/CLIP.git",
   "psutil>=5.9.0",
+  "starlette>=0.49.1",
+  "requests>=2.33.0",
+  "onnx>=1.21.0",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +35,16 @@ scripts = [
   "qrcode[pil]==7.4.2",
   "reportlab==4.2.5",
   "psycopg[binary]==3.2.3",
+]
+
+[tool.uv]
+# BinBrain targets Python 3.12 on Linux/macOS (see api/Dockerfile: python:3.12-slim).
+# Restricting resolution environments to Python 3.12 on Linux/macOS avoids
+# fastembed==0.3.6's incompatibilities with onnx>=1.21.0 and Pillow>=12 that
+# only surface in Python 3.13+ resolution splits.
+environments = [
+    "python_full_version >= '3.12' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and python_full_version < '3.13' and sys_platform == 'linux'",
 ]
 
 [tool.pytest.ini_options]

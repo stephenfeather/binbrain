@@ -9,8 +9,10 @@ from app.deps import (
     get_db, SessionLocal, OLLAMA_URL, logger,
     get_active_vision_model, set_active_vision_model,
     get_max_image_px, set_max_image_px,
-    get_detection_model, set_detection_model,
+    get_detection_model_id, set_detection_model,
+    DETECTION_MODEL_ALLOWLIST,
 )
+from app.middleware import require_admin
 
 router = APIRouter()
 
@@ -73,12 +75,12 @@ def running_models(request: Request = None):
     }
 
 
-@router.post("/models/select")
+@router.post("/models/select", dependencies=[Depends(require_admin)])
 def select_model(
     payload: dict = Body(...),
     request: Request = None,
 ):
-    """Select a vision model and warm it up on the Ollama server."""
+    """Select a vision model and warm it up on the Ollama server. Requires admin."""
     request_id = getattr(request.state, "request_id", None) if request else None
 
     model_name = (payload.get("model") or "").strip()
@@ -98,7 +100,6 @@ def select_model(
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=120) as resp:
-            # Read the streamed response to completion
             resp.read()
     except Exception as e:
         logger.warning("event=model_select_warmup_failed request_id=%s model=%s error=%s", request_id, model_name, str(e)[:200])
@@ -132,12 +133,12 @@ def get_image_size(request: Request = None):
     }
 
 
-@router.post("/settings/image-size")
+@router.post("/settings/image-size", dependencies=[Depends(require_admin)])
 def set_image_size(
     payload: dict = Body(...),
     request: Request = None,
 ):
-    """Set the max image size (longest side in pixels) for vision inference."""
+    """Set the max image size (longest side in pixels) for vision inference. Requires admin."""
     request_id = getattr(request.state, "request_id", None) if request else None
 
     value = payload.get("max_image_px")
@@ -169,53 +170,67 @@ def set_image_size(
     }
 
 
-# ── Detection Model Settings ──────────────────────────────────────────
+# ── Detection Model Settings (F-02: allowlist enforced) ───────────────────────
 
 
 @router.get("/settings/detection-model")
 def get_detection_model_setting(request: Request = None):
-    """Return the current detection model (YOLO weights file)."""
+    """Return the current detection model logical ID and available options."""
     return {
         "version": "1",
-        "detection_model": get_detection_model(),
+        "detection_model": get_detection_model_id(),
+        "available_models": list(DETECTION_MODEL_ALLOWLIST.keys()),
     }
 
 
-@router.post("/settings/detection-model")
+@router.post("/settings/detection-model", dependencies=[Depends(require_admin)])
 def set_detection_model_setting(
     payload: dict = Body(...),
     request: Request = None,
 ):
-    """Set the detection model (YOLO weights file, e.g. yolo11s.pt)."""
+    """Set the detection model by logical ID (allowlisted). Requires admin.
+
+    Accepts only IDs from DETECTION_MODEL_ALLOWLIST; arbitrary paths are rejected
+    with 400 to prevent the authenticated RCE chain described in F-02.
+    """
     request_id = getattr(request.state, "request_id", None) if request else None
 
-    model_name = (payload.get("detection_model") or "").strip()
-    if not model_name:
+    model_id = (payload.get("detection_model") or "").strip()
+    if not model_id:
         raise HTTPException(status_code=400, detail="detection_model is required")
 
-    previous = get_detection_model()
-    set_detection_model(model_name)
+    if model_id not in DETECTION_MODEL_ALLOWLIST:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"detection_model {model_id!r} is not in the allowlist; "
+                f"allowed: {list(DETECTION_MODEL_ALLOWLIST)}"
+            ),
+        )
+
+    previous = get_detection_model_id()
+    set_detection_model(model_id)
 
     try:
         settings_db = SessionLocal()
-        repository.set_setting(settings_db, "detection_model", model_name)
+        repository.set_setting(settings_db, "detection_model", model_id)
         settings_db.commit()
         settings_db.close()
     except Exception as e:
         logger.warning("event=setting_persist_failed key=detection_model error=%s", str(e)[:200])
 
-    logger.info("event=detection_model_set request_id=%s previous=%s new=%s", request_id, previous, model_name)
+    logger.info("event=detection_model_set request_id=%s previous=%s new=%s", request_id, previous, model_id)
     return {
         "version": "1",
         "previous_detection_model": previous,
-        "detection_model": model_name,
+        "detection_model": model_id,
     }
 
 
-# ── API Key Management ─────────────────────────────────────────────────
+# ── API Key Management (F-03: admin required) ─────────────────────────────────
 
 
-@router.post("/admin/api-keys")
+@router.post("/admin/api-keys", dependencies=[Depends(require_admin)])
 def admin_create_api_key(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
@@ -224,23 +239,29 @@ def admin_create_api_key(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
 
-    key_hash, raw_key = repository.create_api_key(db, name)
+    role = (payload.get("role") or "user").strip()
+    if role not in ("user", "admin"):
+        raise HTTPException(status_code=400, detail="role must be 'user' or 'admin'")
+
+    key_hash, raw_key = repository.create_api_key(db, name, role=role)
     db.commit()
 
     logger.info(
-        "event=api_key_create request_id=%s name=%s",
+        "event=api_key_create request_id=%s name=%s role=%s",
         db.info.get("request_id"),
         name,
+        role,
     )
     return {
         "version": "1",
         "key": raw_key,
         "name": name,
+        "role": role,
         "message": "Save this key — it will not be shown again.",
     }
 
 
-@router.get("/admin/api-keys")
+@router.get("/admin/api-keys", dependencies=[Depends(require_admin)])
 def admin_list_api_keys(
     db: Session = Depends(get_db),
 ):
@@ -248,7 +269,7 @@ def admin_list_api_keys(
     return {"version": "1", "keys": keys}
 
 
-@router.delete("/admin/api-keys/{key_id}")
+@router.delete("/admin/api-keys/{key_id}", dependencies=[Depends(require_admin)])
 def admin_revoke_api_key(
     key_id: int,
     db: Session = Depends(get_db),

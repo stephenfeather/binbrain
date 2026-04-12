@@ -1,6 +1,5 @@
 import hashlib
 import json
-import logging
 import threading
 import urllib.request
 import uuid
@@ -14,14 +13,24 @@ from app.db import repository
 from app.deps import (
     SessionLocal, OLLAMA_URL, logger,
     get_active_vision_model, load_settings_from_db,
+    MAX_REQUEST_BODY_BYTES, MODELS_DIR, photo_root,
 )
 from app.routes import health, items, bins, photos, upc, admin, classes, locations
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load persisted settings, then pre-load the vision model into Ollama."""
+    """Load persisted settings, assert security invariants, then warm up Ollama."""
     load_settings_from_db()
+
+    # F-02: assert models directory is outside PHOTO_DIR to prevent path-confusion attacks.
+    models_resolved = MODELS_DIR.resolve()
+    photo_resolved = photo_root.resolve()
+    if str(models_resolved).startswith(str(photo_resolved)):
+        raise RuntimeError(
+            f"MODELS_DIR ({MODELS_DIR}) must not be inside PHOTO_DIR ({photo_root}). "
+            "Set MODELS_DIR to a directory outside the photo upload area."
+        )
 
     # Load confirmed classes; defer YOLO-World init to first detection request
     from app.services import class_registry, detection
@@ -65,6 +74,33 @@ async def request_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["x-request-id"] = request_id
     return response
+
+
+# F-04: reject oversized requests before any buffering occurs.
+@app.middleware("http")
+async def limit_body_size_middleware(request: Request, call_next):
+    content_length_header = request.headers.get("content-length")
+    if content_length_header:
+        try:
+            cl = int(content_length_header)
+        except ValueError:
+            cl = 0
+        if cl > MAX_REQUEST_BODY_BYTES:
+            request_id = getattr(request.state, "request_id", None)
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "version": "1",
+                    "error": {
+                        "code": "payload_too_large",
+                        "message": (
+                            f"Request body exceeds the {MAX_REQUEST_BODY_BYTES}-byte limit"
+                        ),
+                        "request_id": request_id,
+                    },
+                },
+            )
+    return await call_next(request)
 
 
 _AUTH_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json"}
@@ -114,6 +150,8 @@ async def api_key_auth_middleware(request: Request, call_next):
         )
 
     request.state.api_key_id = key_row["id"]
+    # F-03: attach role so require_admin dependency can enforce authorization.
+    request.state.api_key_role = key_row.get("role", "user")
 
     # Fire-and-forget last_used update
     def _touch():
@@ -133,6 +171,7 @@ async def http_exception_handler(request: Request, exc):
     status_code = exc.status_code
     code_map = {
         400: "bad_request",
+        403: "forbidden",
         404: "not_found",
         409: "conflict",
         413: "payload_too_large",
@@ -194,7 +233,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ── Register route modules ──────────────────────────────────────────────────
+# ── Register route modules ──────────────────────────────────────────────────────
 
 app.include_router(health.router)
 app.include_router(items.router)

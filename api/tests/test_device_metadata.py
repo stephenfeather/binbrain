@@ -31,12 +31,12 @@ SAMPLE_METADATA = {
 }
 
 
-def test_ingest_without_metadata_still_works(client):
+def test_ingest_without_metadata_still_works(client, valid_jpeg_bytes):
     """Existing behavior: ingest without device_metadata succeeds."""
     resp = client.post(
         "/ingest",
         data={"bin_id": "BIN-META-0001"},
-        files={"photos": ("photo.jpg", b"fake-jpeg", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -44,7 +44,7 @@ def test_ingest_without_metadata_still_works(client):
     assert len(body["photos"]) == 1
 
 
-def test_ingest_with_valid_metadata(client, db):
+def test_ingest_with_valid_metadata(client, db, valid_jpeg_bytes):
     """Ingest with valid device_metadata JSON stores it in the DB."""
     from sqlalchemy import text
 
@@ -54,7 +54,7 @@ def test_ingest_with_valid_metadata(client, db):
             "bin_id": "BIN-META-0002",
             "device_metadata": json.dumps(SAMPLE_METADATA),
         },
-        files={"photos": ("photo.jpg", b"fake-jpeg", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -83,7 +83,7 @@ def test_ingest_with_malformed_metadata_returns_400(client):
     assert "device_metadata" in resp.json()["error"]["message"].lower()
 
 
-def test_ingest_metadata_null_treated_as_absent(client, db):
+def test_ingest_metadata_null_treated_as_absent(client, db, valid_jpeg_bytes):
     """Ingest with empty string device_metadata stores NULL."""
     from sqlalchemy import text
 
@@ -93,7 +93,7 @@ def test_ingest_metadata_null_treated_as_absent(client, db):
             "bin_id": "BIN-META-0004",
             "device_metadata": "",
         },
-        files={"photos": ("photo.jpg", b"fake-jpeg", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert resp.status_code == 200
     photo_id = resp.json()["photos"][0]["photo_id"]
@@ -105,7 +105,7 @@ def test_ingest_metadata_null_treated_as_absent(client, db):
     assert row is None
 
 
-def test_get_bin_includes_device_metadata(client):
+def test_get_bin_includes_device_metadata(client, valid_jpeg_bytes):
     """GET /bins/{bin_id} includes device_metadata in photo objects."""
     bin_id = "BIN-META-0005"
     client.post(
@@ -114,7 +114,7 @@ def test_get_bin_includes_device_metadata(client):
             "bin_id": bin_id,
             "device_metadata": json.dumps(SAMPLE_METADATA),
         },
-        files={"photos": ("photo.jpg", b"fake-jpeg", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
 
     resp = client.get(f"/bins/{bin_id}")
@@ -125,13 +125,13 @@ def test_get_bin_includes_device_metadata(client):
     assert photos[0]["device_metadata"]["device_processing"]["version"] == "1"
 
 
-def test_get_bin_photo_without_metadata_has_null(client):
+def test_get_bin_photo_without_metadata_has_null(client, valid_jpeg_bytes):
     """GET /bins/{bin_id} returns null device_metadata when none was sent."""
     bin_id = "BIN-META-0006"
     client.post(
         "/ingest",
         data={"bin_id": bin_id},
-        files={"photos": ("photo.jpg", b"fake-jpeg", "image/jpeg")},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
 
     resp = client.get(f"/bins/{bin_id}")
