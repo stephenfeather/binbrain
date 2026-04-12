@@ -174,7 +174,7 @@ async def ingest(
         photo_id = repository.insert_photo(db, bin_id, str(final_path), device_metadata=parsed_metadata)
         db.commit()
 
-        saved.append({"photo_id": photo_id, "path": str(final_path)})
+        saved.append({"photo_id": photo_id})
 
     logger.info(
         "event=ingest_complete request_id=%s bin_id=%s saved=%s",
@@ -276,7 +276,7 @@ async def add_to_bin(
                 _validate_and_place(tmp_path, final_path)
 
                 photo_id = repository.insert_photo(db, bin_id, str(final_path))
-                saved_photos.append({"photo_id": photo_id, "path": str(final_path)})
+                saved_photos.append({"photo_id": photo_id})
 
         if item_id is not None:
             repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
@@ -342,13 +342,18 @@ def get_bin(
         len(items),
         len(photos),
     )
+    # F-10: strip internal filesystem path before sending to client.
+    safe_photos = [
+        {k: v for k, v in p.items() if k != "path"}
+        for p in photos
+    ]
     return {
         "version": "1",
         "bin_id": bin_id,
         "location_id": location_id,
         "location_name": location_name,
         "items": items,
-        "photos": photos,
+        "photos": safe_photos,
     }
 
 

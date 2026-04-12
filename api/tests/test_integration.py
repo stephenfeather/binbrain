@@ -103,7 +103,7 @@ def test_ingest_multiple_photos_returns_ids(client, valid_jpeg_bytes):
     assert len(body["photos"]) == 3
     for entry in body["photos"]:
         assert "photo_id" in entry
-        assert "path" in entry
+        assert "path" not in entry  # F-10: filesystem paths must not be disclosed
 
 
 def test_photo_detect_shape(client, valid_jpeg_bytes):
