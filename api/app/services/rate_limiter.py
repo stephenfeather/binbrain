@@ -17,7 +17,8 @@ GLOBAL_RATE_LIMIT          int  per-key req/min for all authenticated routes  (d
 VISION_RATE_LIMIT          int  per-key req/min for /photos/{id}/suggest|detect (default 10)
 WARMUP_RATE_LIMIT          int  per-key req/min for model warmup / admin model routes (default 3)
 UPC_RATE_LIMIT             int  per-key req/min for /upc/{upc}                (default 30)
-RATE_LIMIT_ADMIN_MULTIPLIER float multiplier applied to each limit for admin keys (default 4)
+RATE_LIMIT_ADMIN_MULTIPLIER  float multiplier applied to each limit for admin keys (default 4)
+RATE_LIMIT_MAX_TRACKED_KEYS  int  maximum number of API-key slots held in memory (default 10000)
 """
 import os
 from collections import deque
@@ -27,7 +28,7 @@ from typing import Callable
 
 from fastapi import HTTPException, Request
 
-_MAX_TRACKED_KEYS: int = 10_000
+_MAX_TRACKED_KEYS: int = int(os.environ.get("RATE_LIMIT_MAX_TRACKED_KEYS", "10000"))
 _ADMIN_MULTIPLIER: float = float(os.environ.get("RATE_LIMIT_ADMIN_MULTIPLIER", "4"))
 
 
@@ -65,7 +66,7 @@ class SlidingWindowRateLimiter:
 
         with self._lock:
             if key not in self._calls:
-                # LRU/FIFO cap: evict the oldest-inserted key when at the limit.
+                # FIFO cap: evict the oldest-inserted key when at the limit.
                 if len(self._calls) >= _MAX_TRACKED_KEYS:
                     oldest = next(iter(self._calls))
                     del self._calls[oldest]
