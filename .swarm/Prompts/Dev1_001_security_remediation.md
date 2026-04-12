@@ -63,6 +63,19 @@ Remediate the Critical and High findings from the 2026-04-12 security audit. Med
   3. Run the full test suite. If any upgrade causes breakage, investigate — do **not** pin back without `ARCHITECT REQUEST:` clarification.
   4. Re-run `pip-audit` and paste the clean output into the PR description.
 
+**Model-compatibility guardrails (READ BEFORE UPGRADING):**
+
+Several pins are load-bearing for the vision/embedding pipeline:
+- `torch==2.6.0+cpu`, `torchvision==0.21.0+cpu`, `ultralytics==8.4.0` are pinned for model compatibility (commit 0f9557e). **Do NOT upgrade these.**
+- `fastembed==0.3.6` transitively constrains `onnx` and `onnxruntime`. Bumping `onnx` directly may break fastembed embedding generation.
+- `Pillow` is consumed by both `ultralytics` and request handlers. Ultralytics 8.4.0 was released against older Pillow; test detection end-to-end after any Pillow bump.
+
+Required workflow for F-06:
+1. After each bump, run the full test suite **including any integration/live tests** that exercise detection and embeddings.
+2. If an upgrade causes model load failure, embedding mismatch, or test regression: stop, document the conflict, and output `ARCHITECT REQUEST: <which CVE cannot be resolved without breaking <pipeline>>`. Do not force the upgrade.
+3. When a direct upgrade is blocked by a pinned transitive consumer, pick the highest patch version that satisfies both constraints and document residual risk in the PR.
+4. Priority for trade-off cases: operational correctness > closing every CVE. Leave deferred CVEs captured as follow-up tasks in the PR body.
+
 ## Success Criteria
 
 - All six findings closed with failing-first tests that pass after the fix.
