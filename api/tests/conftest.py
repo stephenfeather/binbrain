@@ -283,3 +283,27 @@ def valid_jpeg_bytes():
     buf = BytesIO()
     Image.new("RGB", (1, 1), "red").save(buf, format="JPEG")
     return buf.getvalue()
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiters():
+    """Reset all in-process rate limiter state before each test.
+
+    Without this, the 120/min global budget can be exhausted by earlier
+    integration tests (all using the same test API key), causing subsequent
+    tests to receive spurious 429s before their own rate-limit assertions run.
+
+    Also ensures the per-endpoint swap pattern used by F-08 tests starts from
+    a clean slate regardless of test execution order.
+
+    No app_module dependency: rate_limiter has no DB imports and is safe to
+    import at any point in the test session, including during pure unit tests.
+    """
+    try:
+        from app.services import rate_limiter
+        rate_limiter.global_limiter.reset()
+        rate_limiter.vision_limiter.reset()
+        rate_limiter.warmup_limiter.reset()
+        rate_limiter.upc_limiter.reset()
+    except (ImportError, AttributeError):
+        pass  # Rate limiter not yet loaded — nothing to reset

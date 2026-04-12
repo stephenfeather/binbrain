@@ -158,8 +158,20 @@ def test_suggest_endpoint_returns_429_on_rate_limit(client, app_module):
         rate_limiter.vision_limiter = original
 
 
-def test_upc_endpoint_returns_429_on_rate_limit(client, app_module):
-    """GET /upc/{upc} must return 429 when the upc limit is exceeded."""
+def test_upc_endpoint_returns_429_on_rate_limit(client, app_module, monkeypatch):
+    """GET /upc/{upc} must return 429 when the upc limit is exceeded.
+
+    The external upcitemdb.com call is stubbed so the test is fast and
+    deterministic — we're testing the rate limiter, not the UPC service.
+    """
+    import app.routes.upc as upc_route
+    from app.services.upc_lookup import UPCResult
+
+    def _stub_lookup(upc: str) -> UPCResult:
+        return UPCResult(name=None, category=None, brand=None, source="unknown")
+
+    monkeypatch.setattr(upc_route, "lookup_upc", _stub_lookup)
+
     from app.services import rate_limiter
     original, _ = _swap_limiter(rate_limiter, "upc_limiter", max_calls=1)
     try:
