@@ -90,8 +90,8 @@ def test_admin_role_multiplier_increases_budget():
     assert rl.check("admin1", role_multiplier=_ADMIN_MULTIPLIER) is False
 
 
-def test_lru_cap_evicts_oldest_key():
-    """When _MAX_TRACKED_KEYS is reached, the oldest key is evicted (FIFO)."""
+def test_fifo_cap_evicts_oldest_key():
+    """When _MAX_TRACKED_KEYS is reached, the oldest key is evicted (FIFO, insertion order)."""
     from app.services import rate_limiter as rl_mod
     original_max = rl_mod._MAX_TRACKED_KEYS
     rl_mod._MAX_TRACKED_KEYS = 3
@@ -106,6 +106,23 @@ def test_lru_cap_evicts_oldest_key():
         assert "d" in rl._calls
     finally:
         rl_mod._MAX_TRACKED_KEYS = original_max
+
+
+def test_max_tracked_keys_env_var_respected(monkeypatch):
+    """RATE_LIMIT_MAX_TRACKED_KEYS env var controls the module-level constant."""
+    import importlib
+    import app.services.rate_limiter as rl_mod
+
+    monkeypatch.setenv("RATE_LIMIT_MAX_TRACKED_KEYS", "42")
+    importlib.reload(rl_mod)
+    try:
+        assert rl_mod._MAX_TRACKED_KEYS == 42, (
+            f"Expected _MAX_TRACKED_KEYS=42, got {rl_mod._MAX_TRACKED_KEYS}"
+        )
+    finally:
+        # Restore to default so other tests are unaffected
+        monkeypatch.delenv("RATE_LIMIT_MAX_TRACKED_KEYS", raising=False)
+        importlib.reload(rl_mod)
 
 
 def test_module_level_limiters_exist():
