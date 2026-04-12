@@ -8,15 +8,20 @@ Constraints
 - Max nesting depth:            4 levels
 - Max per-value string length:  1 KiB (STRING_MAX_BYTES)
 - Sensitive fields:             fields whose name matches /(device_id|imei|mac|serial)$/i
-                                are SHA-256 hashed before persistence to avoid storing
-                                device identifiers in plaintext in the database.
+                                are HMAC-SHA256 hashed with server-side pepper
+                                (env ``METADATA_HASH_PEPPER``) before persistence.
+                                When the pepper is unset the HMAC key is empty —
+                                still deterministic but not cross-install-correlatable
+                                once a pepper is configured.
 
 The validator is strict on structure to prevent unbounded field injection into
 the jsonb column, while permissive on value types within allowed keys so that
 the iOS client can evolve its payload without server-side schema changes.
 """
 import hashlib
+import hmac
 import json
+import os
 import re
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -40,7 +45,8 @@ ALLOWED_DEVICE_PROCESSING_KEYS: frozenset[str] = frozenset({
     "barcodes",
     "classifications",
     "crop_applied",
-    # Device identity fields — values are SHA-256 hashed before persistence (see below).
+    # Device identity fields — values are HMAC-SHA256 hashed with server-side pepper
+    # (env METADATA_HASH_PEPPER) before persistence (see below).
     "device_id",
     "device_serial",
     "device_imei",
@@ -53,6 +59,16 @@ _SENSITIVE_KEY_RE = re.compile(r"(device_id|imei|mac|serial)$", re.IGNORECASE)
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
+
+def _get_pepper() -> bytes:
+    """Read METADATA_HASH_PEPPER from env each call (test-friendly)."""
+    return os.environ.get("METADATA_HASH_PEPPER", "").encode("utf-8")
+
+
+def _hash_value(value: str) -> str:
+    """Return HMAC-SHA256 hex digest of *value* keyed with the server-side pepper."""
+    return hmac.new(_get_pepper(), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
 
 def _check_depth(obj: object, current: int) -> None:
     """Raise ValueError if *obj* contains nesting beyond NESTING_MAX_DEPTH."""
@@ -84,16 +100,17 @@ def _check_string_lengths(obj: object) -> None:
 
 
 def _hash_sensitive_fields(obj: object) -> object:
-    """Recursively replace values of sensitive-named fields with SHA-256 hashes.
+    """Recursively replace values of sensitive-named fields with HMAC-SHA256 hashes.
 
     Any field whose name matches /(device_id|imei|mac|serial)$/i and whose
-    value is a string is replaced with ``sha256(value.encode()).hexdigest()``.
+    value is a string is replaced with ``_hash_value(value)`` (HMAC-SHA256 keyed
+    with the server-side pepper from env ``METADATA_HASH_PEPPER``).
     Non-string values for sensitive fields are left unchanged.
     """
     if isinstance(obj, dict):
         return {
             k: (
-                hashlib.sha256(v.encode("utf-8")).hexdigest()
+                _hash_value(v)
                 if _SENSITIVE_KEY_RE.search(k) and isinstance(v, str)
                 else _hash_sensitive_fields(v)
             )

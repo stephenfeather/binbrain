@@ -6,10 +6,13 @@ Constraints enforced:
 - Inner allowlist for device_processing keys
 - Max nesting depth 4
 - Per-value string max 1 KiB
-- SHA-256 hashing of sensitive fields (device_id, imei, mac, serial)
+- HMAC-SHA256 hashing of sensitive fields (device_id, imei, mac, serial)
+  with server-side pepper from env METADATA_HASH_PEPPER
 """
 import hashlib
+import hmac
 import json
+import os
 
 
 SAMPLE_METADATA = {
@@ -95,14 +98,18 @@ def test_metadata_string_max_bytes_is_1kib():
 
 
 def test_sensitive_field_device_id_is_hashed():
-    """device_id values are SHA-256 hashed, not stored raw."""
+    """device_id values are HMAC-SHA256 hashed, not stored raw."""
     from app.services.metadata_schema import validate_device_metadata
     raw_value = "IMEI-123456789012345"
     metadata = {"device_processing": {"device_id": raw_value}}
     result = validate_device_metadata(json.dumps(metadata))
-    expected = hashlib.sha256(raw_value.encode("utf-8")).hexdigest()
+    expected = hmac.new(
+        os.environ.get("METADATA_HASH_PEPPER", "").encode("utf-8"),
+        raw_value.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
     assert result["device_processing"]["device_id"] == expected, (
-        f"device_id should be SHA-256 hash, got {result['device_processing']['device_id']!r}"
+        f"device_id should be HMAC-SHA256 hash, got {result['device_processing']['device_id']!r}"
     )
     assert result["device_processing"]["device_id"] != raw_value
 
@@ -111,14 +118,24 @@ def test_sensitive_field_imei_is_hashed():
     from app.services.metadata_schema import validate_device_metadata
     raw = "990000862471854"
     result = validate_device_metadata(json.dumps({"device_processing": {"device_imei": raw}}))
-    assert result["device_processing"]["device_imei"] == hashlib.sha256(raw.encode()).hexdigest()
+    expected = hmac.new(
+        os.environ.get("METADATA_HASH_PEPPER", "").encode("utf-8"),
+        raw.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    assert result["device_processing"]["device_imei"] == expected
 
 
 def test_sensitive_field_mac_is_hashed():
     from app.services.metadata_schema import validate_device_metadata
     raw = "AA:BB:CC:DD:EE:FF"
     result = validate_device_metadata(json.dumps({"device_processing": {"wifi_mac": raw}}))
-    assert result["device_processing"]["wifi_mac"] == hashlib.sha256(raw.encode()).hexdigest()
+    expected = hmac.new(
+        os.environ.get("METADATA_HASH_PEPPER", "").encode("utf-8"),
+        raw.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    assert result["device_processing"]["wifi_mac"] == expected
 
 
 def test_non_string_sensitive_field_unchanged():
@@ -197,8 +214,39 @@ def test_ingest_device_id_stored_hashed(client, db, valid_jpeg_bytes):
     ).scalar()
     assert row is not None
     stored = row["device_processing"]["device_id"]
-    expected_hash = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
+    expected_hash = hmac.new(
+        os.environ.get("METADATA_HASH_PEPPER", "").encode("utf-8"),
+        raw_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
     assert stored == expected_hash, (
-        f"Expected SHA-256 hash of device_id, got {stored!r}"
+        f"Expected HMAC-SHA256 hash of device_id, got {stored!r}"
     )
     assert stored != raw_id, "Raw device_id must not be stored"
+
+
+def test_pepper_changes_hash_output(monkeypatch):
+    """Different pepper values produce different hashes; neither equals plain SHA-256."""
+    from app.services.metadata_schema import _hash_value
+    raw = "test-device-id-42"
+
+    monkeypatch.setenv("METADATA_HASH_PEPPER", "pepper-a")
+    hash_a = _hash_value(raw)
+
+    monkeypatch.setenv("METADATA_HASH_PEPPER", "pepper-b")
+    hash_b = _hash_value(raw)
+
+    plain_sha256 = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    assert hash_a != hash_b, "Different peppers must produce different hashes"
+    assert hash_a != plain_sha256, "Peppered hash must differ from plain SHA-256"
+    assert hash_b != plain_sha256, "Peppered hash must differ from plain SHA-256"
+
+
+def test_no_pepper_is_deterministic(monkeypatch):
+    """Without a pepper, hashing the same value twice yields the same non-empty result."""
+    from app.services.metadata_schema import _hash_value
+    monkeypatch.delenv("METADATA_HASH_PEPPER", raising=False)
+    raw = "test-device-id-42"
+    assert _hash_value(raw) == _hash_value(raw)
+    assert _hash_value(raw) != ""
