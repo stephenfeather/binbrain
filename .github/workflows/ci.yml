@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (unit + integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: binbrain
+          POSTGRES_PASSWORD: claude_dev
+          POSTGRES_DB: binbrain
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U binbrain -d binbrain"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://binbrain:claude_dev@localhost:5432/binbrain
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync api dependencies (incl. test extra)
+        working-directory: api
+        run: uv sync --extra test --frozen
+
+      - name: Run pytest
+        working-directory: api
+        run: uv run pytest tests -q
+
+  pip-audit:
+    name: pip-audit (dependency CVEs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Non-blocking until fastembed==0.3.6 can be upgraded past its Pillow<11 pin
+    # (tracked residual CVE-2026-25990). Remove continue-on-error once resolved.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Export requirements from uv.lock
+        working-directory: api
+        run: uv export --frozen --no-dev --format requirements-txt -o /tmp/requirements.txt
+
+      - name: Run pip-audit
+        run: uvx pip-audit --requirement /tmp/requirements.txt --strict
+
+  secret-scan:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
