@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Bootstrap CLI — create the first BinBrain API key.
+"""Bootstrap CLI — create a BinBrain API key.
 
 Usage:
-    python scripts/create_api_key.py --name "bootstrap"
+    python scripts/create_api_key.py --name "bootstrap" --role admin
+    python scripts/create_api_key.py --name "mobile-app"        # defaults to user
 
 Reads DATABASE_URL from environment or .env file.
 """
@@ -21,10 +22,18 @@ except ImportError:
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+VALID_ROLES = ("user", "admin")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Create a BinBrain API key")
     parser.add_argument("--name", required=True, help="Human label for this key")
+    parser.add_argument(
+        "--role",
+        default="user",
+        choices=VALID_ROLES,
+        help="Role for this key: 'user' (default) or 'admin'",
+    )
     args = parser.parse_args()
 
     db_url = os.environ.get("DATABASE_URL")
@@ -41,12 +50,12 @@ def main():
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
 
         db.execute(
-            text("INSERT INTO api_keys (key_hash, name) VALUES (:key_hash, :name)"),
-            {"key_hash": key_hash, "name": args.name},
+            text("INSERT INTO api_keys (key_hash, name, role) VALUES (:key_hash, :name, :role)"),
+            {"key_hash": key_hash, "name": args.name, "role": args.role},
         )
         db.commit()
 
-        print(f"\nYour API key: {raw_key}")
+        print(f"\nYour API key ({args.role}): {raw_key}")
         print("Save this — it will not be shown again.\n")
     except Exception as e:
         db.rollback()

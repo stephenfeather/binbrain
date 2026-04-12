@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db import repository
 from app.deps import get_db, logger
+from app.middleware import require_admin
 
 router = APIRouter(tags=["locations"])
 
@@ -18,13 +19,13 @@ def list_locations(db: Session = Depends(get_db)):
     return {"version": "1", "locations": locations}
 
 
-@router.post("/locations")
+@router.post("/locations", dependencies=[Depends(require_admin)])
 def create_location(
     name: str = Form(...),
     description: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
-    """Create a new location."""
+    """Create a new location. Requires admin."""
     name_stripped = (name or "").strip()
     if not name_stripped:
         raise HTTPException(status_code=400, detail="name is required")
@@ -43,12 +44,12 @@ def create_location(
     return {"version": "1", "location": loc}
 
 
-@router.delete("/locations/{location_id}")
+@router.delete("/locations/{location_id}", dependencies=[Depends(require_admin)])
 def delete_location(
     location_id: int,
     db: Session = Depends(get_db),
 ):
-    """Soft-delete a location and clear references from bins."""
+    """Soft-delete a location and clear references from bins. Requires admin."""
     deleted = repository.soft_delete_location(db, location_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="location not found")
