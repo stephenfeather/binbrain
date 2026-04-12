@@ -15,6 +15,7 @@ from app.deps import (
     OLLAMA_URL, logger,
 )
 from app.services.detection import detect, get_model_name
+from app.services.rate_limiter import require_expensive_rate_limit
 from app.services.vision import describe_photo
 
 router = APIRouter()
@@ -31,7 +32,7 @@ _MIME_TYPES = {
 }
 
 
-@router.get("/photos/{photo_id}/suggest")
+@router.get("/photos/{photo_id}/suggest", dependencies=[Depends(require_expensive_rate_limit)])
 def suggest_for_photo(
     photo_id: int,
     model: Optional[str] = Query(None, description="Override vision model for this request"),
@@ -194,7 +195,7 @@ def delete_photo(
     return {"version": "1", "photo_id": photo_id, "deleted": True}
 
 
-@router.post("/photos/{photo_id}/detect")
+@router.post("/photos/{photo_id}/detect", dependencies=[Depends(require_expensive_rate_limit)])
 def detect_for_photo(
     photo_id: int,
     db: Session = Depends(get_db),
