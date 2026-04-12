@@ -264,6 +264,34 @@ def client(app_module, test_api_key):
     return c
 
 
+@pytest.fixture(scope="session")
+def user_api_key(app_module):
+    """Create a role='user' API key for tests that need non-admin rate limits."""
+    from app.deps import SessionLocal
+    from sqlalchemy import text
+
+    raw_key = "bb_user_" + secrets.token_urlsafe(24)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    db = SessionLocal()
+    try:
+        db.execute(
+            text("INSERT INTO api_keys (key_hash, name, role) VALUES (:key_hash, :name, 'user')"),
+            {"key_hash": key_hash, "name": "test-fixture-user"},
+        )
+        db.commit()
+    finally:
+        db.close()
+    return raw_key
+
+
+@pytest.fixture()
+def user_client(app_module, user_api_key):
+    """TestClient authenticated as a role='user' key (no admin 4× rate-limit multiplier)."""
+    c = TestClient(app_module.app)
+    c.headers["X-API-Key"] = user_api_key
+    return c
+
+
 @pytest.fixture()
 def db(app_module):
     from app.deps import SessionLocal

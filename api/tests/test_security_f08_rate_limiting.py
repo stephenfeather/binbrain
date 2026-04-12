@@ -128,14 +128,18 @@ def _swap_limiter(rate_limiter_mod, attr: str, max_calls: int):
     return original, temp
 
 
-def test_detect_endpoint_returns_429_on_rate_limit(client, app_module):
-    """POST /photos/{id}/detect must return 429 when the vision limit is exceeded."""
+def test_detect_endpoint_returns_429_on_rate_limit(user_client, app_module):
+    """POST /photos/{id}/detect returns 429 when the vision limit is exceeded.
+
+    Uses a role='user' client so the admin 4× multiplier does not inflate
+    max_calls=1 to 4, which would allow both requests through.
+    """
     from app.services import rate_limiter
     original, _ = _swap_limiter(rate_limiter, "vision_limiter", max_calls=1)
     try:
-        resp1 = client.post("/photos/999999/detect")
+        resp1 = user_client.post("/photos/999999/detect")
         assert resp1.status_code != 429, f"Already limited: {resp1.text}"
-        resp2 = client.post("/photos/999999/detect")
+        resp2 = user_client.post("/photos/999999/detect")
         assert resp2.status_code == 429, (
             f"Expected 429 on 2nd request, got {resp2.status_code}: {resp2.text}"
         )
@@ -143,14 +147,14 @@ def test_detect_endpoint_returns_429_on_rate_limit(client, app_module):
         rate_limiter.vision_limiter = original
 
 
-def test_suggest_endpoint_returns_429_on_rate_limit(client, app_module):
-    """GET /photos/{id}/suggest must return 429 when the vision limit is exceeded."""
+def test_suggest_endpoint_returns_429_on_rate_limit(user_client, app_module):
+    """GET /photos/{id}/suggest returns 429 when the vision limit is exceeded."""
     from app.services import rate_limiter
     original, _ = _swap_limiter(rate_limiter, "vision_limiter", max_calls=1)
     try:
-        resp1 = client.get("/photos/999999/suggest")
+        resp1 = user_client.get("/photos/999999/suggest")
         assert resp1.status_code != 429, f"Already limited: {resp1.text}"
-        resp2 = client.get("/photos/999999/suggest")
+        resp2 = user_client.get("/photos/999999/suggest")
         assert resp2.status_code == 429, (
             f"Expected 429 on 2nd request, got {resp2.status_code}: {resp2.text}"
         )
@@ -158,11 +162,11 @@ def test_suggest_endpoint_returns_429_on_rate_limit(client, app_module):
         rate_limiter.vision_limiter = original
 
 
-def test_upc_endpoint_returns_429_on_rate_limit(client, app_module, monkeypatch):
-    """GET /upc/{upc} must return 429 when the upc limit is exceeded.
+def test_upc_endpoint_returns_429_on_rate_limit(user_client, app_module, monkeypatch):
+    """GET /upc/{upc} returns 429 when the upc limit is exceeded.
 
-    The external upcitemdb.com call is stubbed so the test is fast and
-    deterministic — we're testing the rate limiter, not the UPC service.
+    Uses a role='user' client (no admin 4× multiplier).
+    The external upcitemdb.com call is stubbed for fast, deterministic results.
     """
     import app.routes.upc as upc_route
     from app.services.upc_lookup import UPCResult
@@ -175,9 +179,9 @@ def test_upc_endpoint_returns_429_on_rate_limit(client, app_module, monkeypatch)
     from app.services import rate_limiter
     original, _ = _swap_limiter(rate_limiter, "upc_limiter", max_calls=1)
     try:
-        resp1 = client.get("/upc/012345678905")
+        resp1 = user_client.get("/upc/012345678905")
         assert resp1.status_code != 429, f"Already limited: {resp1.text}"
-        resp2 = client.get("/upc/012345678905")
+        resp2 = user_client.get("/upc/012345678905")
         assert resp2.status_code == 429, (
             f"Expected 429 on 2nd request, got {resp2.status_code}: {resp2.text}"
         )
