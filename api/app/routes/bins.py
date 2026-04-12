@@ -19,6 +19,7 @@ from app.deps import (
 )
 from app.security import validate_bin_id
 from app.services.image_validation import validate_image_file
+from app.services.metadata_schema import validate_device_metadata
 from app.services.upc_lookup import validate_upc
 
 class BinLocationUpdate(BaseModel):
@@ -99,11 +100,11 @@ def _validate_and_place(tmp: Path, final: Path) -> None:
     """
     try:
         validate_image_file(tmp)
-    except ValueError as exc:
+    except ValueError:
         tmp.unlink(missing_ok=True)
         raise HTTPException(
             status_code=415,
-            detail=f"Unsupported file type: {exc}",
+            detail="unsupported file type",
         )
     final.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(tmp), str(final))
@@ -125,13 +126,15 @@ async def ingest(
             detail=f"Too many files: max {MAX_FILES_PER_REQUEST} per request",
         )
 
-    # Parse device_metadata once (same metadata applies to all photos in this batch)
+    # Parse and validate device_metadata (F-11: size cap + top-level key allowlist).
     parsed_metadata = None
     if device_metadata:
         try:
-            parsed_metadata = json.loads(device_metadata)
+            parsed_metadata = validate_device_metadata(device_metadata)
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="device_metadata must be valid JSON")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     # Ensure bin exists
     try:
@@ -174,7 +177,7 @@ async def ingest(
         photo_id = repository.insert_photo(db, bin_id, str(final_path), device_metadata=parsed_metadata)
         db.commit()
 
-        saved.append({"photo_id": photo_id, "path": str(final_path)})
+        saved.append({"photo_id": photo_id})
 
     logger.info(
         "event=ingest_complete request_id=%s bin_id=%s saved=%s",
@@ -276,7 +279,7 @@ async def add_to_bin(
                 _validate_and_place(tmp_path, final_path)
 
                 photo_id = repository.insert_photo(db, bin_id, str(final_path))
-                saved_photos.append({"photo_id": photo_id, "path": str(final_path)})
+                saved_photos.append({"photo_id": photo_id})
 
         if item_id is not None:
             repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
@@ -310,9 +313,9 @@ async def add_to_bin(
     except HTTPException:
         db.rollback()
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="add_to_bin failed") from e
+        raise HTTPException(status_code=500, detail="internal error") from None
 
 
 @router.get("/bins/{bin_id}")
@@ -342,13 +345,18 @@ def get_bin(
         len(items),
         len(photos),
     )
+    # F-10: strip internal filesystem path before sending to client.
+    safe_photos = [
+        {k: v for k, v in p.items() if k != "path"}
+        for p in photos
+    ]
     return {
         "version": "1",
         "bin_id": bin_id,
         "location_id": location_id,
         "location_name": location_name,
         "items": items,
-        "photos": photos,
+        "photos": safe_photos,
     }
 
 

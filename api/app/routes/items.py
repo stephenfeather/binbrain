@@ -76,9 +76,9 @@ def create_item(
     except HTTPException:
         db.rollback()
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"create_item failed: {e}")
+        raise HTTPException(status_code=500, detail="internal error")
 
 
 @router.post("/associate")
@@ -119,8 +119,8 @@ def search(
 ):
     try:
         qvec = embed_text(q)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"query embedding failed: {e}")
+    except Exception:
+        raise HTTPException(status_code=400, detail="search unavailable")
 
     if len(qvec) != 384:
         raise HTTPException(status_code=500, detail=f"unexpected query embedding dims {len(qvec)}, expected 384")

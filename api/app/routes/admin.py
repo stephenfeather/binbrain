@@ -13,6 +13,7 @@ from app.deps import (
     DETECTION_MODEL_ALLOWLIST,
 )
 from app.middleware import require_admin
+from app.services.rate_limiter import require_warmup_rate_limit
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ def list_models(request: Request = None):
             data = json.loads(resp.read())
     except Exception as e:
         logger.warning("event=models_list_failed request_id=%s error=%s", request_id, str(e)[:200])
-        raise HTTPException(status_code=502, detail=f"cannot reach Ollama: {e}")
+        raise HTTPException(status_code=502, detail="upstream service unavailable")
 
     models = []
     for m in data.get("models", []):
@@ -56,7 +57,7 @@ def running_models(request: Request = None):
             data = json.loads(resp.read())
     except Exception as e:
         logger.warning("event=models_running_failed request_id=%s error=%s", request_id, str(e)[:200])
-        raise HTTPException(status_code=502, detail=f"cannot reach Ollama: {e}")
+        raise HTTPException(status_code=502, detail="upstream service unavailable")
 
     models = []
     for m in data.get("models", []):
@@ -75,7 +76,7 @@ def running_models(request: Request = None):
     }
 
 
-@router.post("/models/select", dependencies=[Depends(require_admin)])
+@router.post("/models/select", dependencies=[Depends(require_admin), Depends(require_warmup_rate_limit)])
 def select_model(
     payload: dict = Body(...),
     request: Request = None,
@@ -103,7 +104,7 @@ def select_model(
             resp.read()
     except Exception as e:
         logger.warning("event=model_select_warmup_failed request_id=%s model=%s error=%s", request_id, model_name, str(e)[:200])
-        raise HTTPException(status_code=502, detail=f"failed to warm up model: {e}")
+        raise HTTPException(status_code=502, detail="upstream service unavailable")
 
     previous = get_active_vision_model()
     set_active_vision_model(model_name)
