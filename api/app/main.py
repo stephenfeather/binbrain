@@ -107,6 +107,54 @@ async def limit_body_size_middleware(request: Request, call_next):
 _AUTH_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json"}
 
 
+def _rate_limit_key_for(request: Request) -> str:
+    """Return the rate-limit bucket key for *request*.
+
+    Prefers the authenticated api_key_id (set by api_key_auth_middleware).
+    Falls back to ``ip:<client_ip>`` so unauthenticated requests get per-IP
+    buckets instead of sharing a single "anon" bucket.
+    """
+    api_key_id = getattr(request.state, "api_key_id", None)
+    if api_key_id is not None:
+        return str(api_key_id)
+    client = request.client
+    ip = client.host if client else "unknown"
+    return f"ip:{ip}"
+
+
+def _assert_auth_runs_before_rate_limit(names: list) -> None:
+    """Fail-fast if middleware registration order would put rate-limit outside of auth.
+
+    Starlette's ``app.user_middleware`` stores middleware in LIFO order:
+    index 0 is the outermost middleware (runs FIRST in the request pipeline).
+    api_key_auth_middleware must appear at a LOWER index than
+    global_rate_limit_middleware so that auth executes first and populates
+    ``request.state.api_key_id`` before the limiter reads it.
+
+    *names* is a list of middleware function names as returned by iterating
+    ``app.user_middleware`` (index 0 = outermost = runs first).
+
+    Raises RuntimeError with a clear message if the invariant is broken.
+    """
+    try:
+        auth_idx = names.index("api_key_auth_middleware")
+        rate_idx = names.index("global_rate_limit_middleware")
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Expected both api_key_auth_middleware and global_rate_limit_middleware "
+            f"in middleware list; got {names}"
+        ) from exc
+
+    # user_middleware stores in LIFO order: index 0 = outermost = runs FIRST.
+    # api_key_auth must run BEFORE rate-limit, so auth must be at a LOWER index.
+    if auth_idx >= rate_idx:
+        raise RuntimeError(
+            f"Middleware ordering invariant violated: api_key_auth_middleware "
+            f"must appear before global_rate_limit_middleware in user_middleware "
+            f"(lower index = outermost = runs first). Current order: {names}"
+        )
+
+
 # F-08: global rate limit — runs after auth middleware sets api_key_id / api_key_role.
 # Middleware registration is LIFO: this is defined before api_key_auth in code so it
 # executes AFTER auth in the request pipeline (auth is outermost).
@@ -114,7 +162,7 @@ _AUTH_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json"}
 async def global_rate_limit_middleware(request: Request, call_next):
     if request.url.path in _AUTH_EXEMPT_PATHS:
         return await call_next(request)
-    key = str(getattr(request.state, "api_key_id", "anon"))
+    key = _rate_limit_key_for(request)
     role = getattr(request.state, "api_key_role", "user")
     multiplier = _ADMIN_MULTIPLIER if role == "admin" else 1.0
     if not global_limiter.check(key, role_multiplier=multiplier):
@@ -258,6 +306,17 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         },
         headers={"x-request-id": getattr(request.state, "request_id", "")},
     )
+
+
+# ── Middleware ordering assertion ───────────────────────────────────────────────
+# Fail fast at import time if the LIFO ordering invariant is broken.
+_assert_auth_runs_before_rate_limit([
+    getattr(
+        getattr(mw, "kwargs", {}).get("dispatch") or getattr(mw, "cls", None),
+        "__name__", "",
+    )
+    for mw in app.user_middleware
+])
 
 
 # ── Register route modules ──────────────────────────────────────────────────────
