@@ -5,8 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-import os
-
 from app.db import repository
 from app.deps import (
     get_db, embed_text, canonical_item_text, fingerprint_for,
@@ -21,6 +19,50 @@ from app.services.vision import describe_photo
 router = APIRouter()
 
 _SUGGEST_MATCH_THRESHOLD = 0.5
+
+
+def _is_path_under_photo_root(fpath: Path) -> bool:
+    """Return True iff ``fpath`` resolves to a location under ``photo_root``.
+
+    Uses ``Path.resolve()`` so symlinks are followed — a symlink pointing out
+    of the photo root is rejected.
+    """
+    try:
+        resolved = fpath.resolve()
+        root_resolved = photo_root.resolve()
+    except (OSError, RuntimeError):
+        return False
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_photo_path_under_root(photo_path: str | None) -> Path:
+    """Resolve a DB-stored photo path and confirm it lives under ``photo_root``.
+
+    Returns the resolved ``Path`` on success. Raises ``HTTPException(404)`` for
+    any failure mode — missing row, missing file, symlink escape, or path
+    outside the configured photo root. 404 (not 403) to avoid leaking row
+    existence to unauthenticated probes (FF-03).
+    """
+    if not photo_path:
+        raise HTTPException(status_code=404, detail="photo not found")
+    fpath = Path(photo_path)
+    try:
+        resolved = fpath.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        raise HTTPException(status_code=404, detail="photo not found")
+    if not _is_path_under_photo_root(resolved):
+        logger.warning(
+            "event=photo_path_escape path=%s resolved=%s",
+            photo_path, resolved,
+        )
+        raise HTTPException(status_code=404, detail="photo not found")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="photo not found")
+    return resolved
 
 _MIME_TYPES = {
     ".jpg": "image/jpeg",
@@ -51,10 +93,13 @@ def suggest_for_photo(
         finally:
             db1.close()
 
+        # FF-03: confine to photo_root before reading from disk.
+        resolved_path = _resolve_photo_path_under_root(photo_path)
+
         logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
         vision_model = model or get_active_vision_model()
-        vision_hits, vision_elapsed_ms = (
-            describe_photo(photo_path, OLLAMA_URL, vision_model, get_max_image_px()) if photo_path else ([], 0)
+        vision_hits, vision_elapsed_ms = describe_photo(
+            str(resolved_path), OLLAMA_URL, vision_model, get_max_image_px()
         )
         logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
     except HTTPException:
@@ -137,12 +182,9 @@ def get_photo_file(
         raise HTTPException(status_code=404, detail="photo not found")
 
     photo_path = repository.fetch_photo_path(db, photo_id)
-    if not photo_path:
-        raise HTTPException(status_code=404, detail="photo not found")
-
-    fpath = Path(photo_path)
-    if not fpath.is_file():
-        raise HTTPException(status_code=404, detail="photo file missing from disk")
+    # FF-03: confine to photo_root (rejects symlink escapes and legacy rows
+    # whose path points outside PHOTO_DIR). 404 to avoid leaking row existence.
+    fpath = _resolve_photo_path_under_root(photo_path)
 
     ext = fpath.suffix.lower()
     content_type = _MIME_TYPES.get(ext, "application/octet-stream")
@@ -174,10 +216,9 @@ def delete_photo(
     db.commit()
 
     # F-01: verify stored path is still within photo_root before unlinking.
+    # Uses the shared _is_path_under_photo_root helper (FF-03).
     fpath = Path(deleted_path)
-    photo_root_resolved = photo_root.resolve()
-    fpath_resolved = fpath.resolve()
-    if not str(fpath_resolved).startswith(str(photo_root_resolved) + os.sep):
+    if not _is_path_under_photo_root(fpath):
         logger.error(
             "event=photo_delete_path_escape photo_id=%s path=%s",
             photo_id, deleted_path,
@@ -204,10 +245,10 @@ def detect_for_photo(
         raise HTTPException(status_code=404, detail="photo not found")
 
     photo_path = repository.fetch_photo_path(db, photo_id)
-    if not photo_path:
-        raise HTTPException(status_code=404, detail="photo not found")
+    # FF-03: confine to photo_root before feeding into detection.
+    resolved_path = _resolve_photo_path_under_root(photo_path)
 
-    detections = detect(photo_path)
+    detections = detect(str(resolved_path))
     model = get_model_name()
     repository.insert_photo_detections(db, photo_id, model, detections)
     repository.clear_detection_groups(db, photo_id, model)
