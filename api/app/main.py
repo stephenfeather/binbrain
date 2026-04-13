@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.db import repository
+from app.body_size_middleware import BodySizeLimitMiddleware
 from app.deps import (
     SessionLocal, OLLAMA_URL, logger,
     get_active_vision_model, load_settings_from_db,
@@ -77,31 +78,10 @@ async def request_id_middleware(request: Request, call_next):
     return response
 
 
-# F-04: reject oversized requests before any buffering occurs.
-@app.middleware("http")
-async def limit_body_size_middleware(request: Request, call_next):
-    content_length_header = request.headers.get("content-length")
-    if content_length_header:
-        try:
-            cl = int(content_length_header)
-        except ValueError:
-            cl = 0
-        if cl > MAX_REQUEST_BODY_BYTES:
-            request_id = getattr(request.state, "request_id", None)
-            return JSONResponse(
-                status_code=413,
-                content={
-                    "version": "1",
-                    "error": {
-                        "code": "payload_too_large",
-                        "message": (
-                            f"Request body exceeds the {MAX_REQUEST_BODY_BYTES}-byte limit"
-                        ),
-                        "request_id": request_id,
-                    },
-                },
-            )
-    return await call_next(request)
+# FF-01 (was F-04): reject oversized requests before any buffering occurs.
+# Pure ASGI middleware — enforces both Content-Length fast-path AND cumulative
+# streaming byte count, so chunked transfers and spoofed Content-Length headers
+# cannot bypass the cap. Installed via ``add_middleware`` (see below).
 
 
 _AUTH_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json"}
@@ -306,6 +286,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         },
         headers={"x-request-id": getattr(request.state, "request_id", "")},
     )
+
+
+# ── Register pure-ASGI middleware (outermost) ───────────────────────────────────
+# FF-01: body-size cap must run before auth/rate-limit/request-id so that
+# oversize bodies (including chunked or spoofed Content-Length) are rejected
+# before any downstream code — including the multipart parser that would
+# otherwise spool to disk — observes the request body.
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
 
 
 # ── Middleware ordering assertion ───────────────────────────────────────────────
