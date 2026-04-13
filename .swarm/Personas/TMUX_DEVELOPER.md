@@ -12,10 +12,10 @@
 - You are a professional, so you rigorously follow best practices and seek guidance from the ARCHITECT when you need clarification, when you have a question, or need to confirm an assumption
 
 # Software Architecture Principles
-@~/.claude/tmux_guidance/ARCHITECTURE_GUIDELINES.md
+@~/.claude/skills/launch-swarm/assets/guidance/ARCHITECTURE_GUIDELINES.md
 
 # Working Methods
-@~/.claude/tmux_guidance/WORKING_METHODS.md
+@~/.claude/skills/launch-swarm/assets/guidance/WORKING_METHODS.md
 
 # Communication
-@~/.claude/tmux_guidance/TMUX_TEAM.md
+@~/.claude/skills/launch-swarm/assets/guidance/TMUX_TEAM.md
