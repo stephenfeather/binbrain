@@ -30,6 +30,12 @@ router = APIRouter()
 
 _PHOTO_ROOT_RESOLVED: Path | None = None
 
+# FF-04: allowlist of photo fields safe to expose in user-plane responses.
+# The photos row also carries `path` (F-10: internal FS path) and
+# `device_metadata` (FF-04: OCR/classification/telemetry) — neither may leak.
+# Admin endpoints needing those fields must project them explicitly.
+_PUBLIC_PHOTO_FIELDS = frozenset({"photo_id"})
+
 
 def _get_photo_root_resolved() -> Path:
     """Return the resolved photo_root, cached after first call."""
@@ -345,9 +351,13 @@ def get_bin(
         len(items),
         len(photos),
     )
-    # F-10: strip internal filesystem path before sending to client.
+    # F-10 / FF-04: project to an explicit allowlist of public photo fields.
+    # Strips internal filesystem `path` (F-10) and operational `device_metadata`
+    # (FF-04 — OCR/classification/telemetry payloads must not leak to the
+    # user-plane response). New fields added to the photo row must be
+    # explicitly added here before clients can see them.
     safe_photos = [
-        {k: v for k, v in p.items() if k != "path"}
+        {k: v for k, v in p.items() if k in _PUBLIC_PHOTO_FIELDS}
         for p in photos
     ]
     return {
