@@ -105,10 +105,18 @@ def test_ingest_metadata_null_treated_as_absent(client, db, valid_jpeg_bytes):
     assert row is None
 
 
-def test_get_bin_includes_device_metadata(client, valid_jpeg_bytes):
-    """GET /bins/{bin_id} includes device_metadata in photo objects."""
+def test_get_bin_persists_device_metadata_without_leaking(client, db, valid_jpeg_bytes):
+    """Ingested device_metadata is persisted in the DB but NOT returned by
+    the user-plane GET /bins/{bin_id} endpoint (FF-04).
+
+    Supersedes the prior contract which leaked device_metadata in responses.
+    See tests/test_security_ff04_device_metadata_disclosure.py for the
+    disclosure-focused assertions.
+    """
+    from sqlalchemy import text
+
     bin_id = "BIN-META-0005"
-    client.post(
+    ingest = client.post(
         "/ingest",
         data={
             "bin_id": bin_id,
@@ -116,26 +124,20 @@ def test_get_bin_includes_device_metadata(client, valid_jpeg_bytes):
         },
         files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
+    assert ingest.status_code == 200
+    photo_id = ingest.json()["photos"][0]["photo_id"]
 
+    # DB layer still stores the metadata (admin endpoints remain able to read it).
+    row = db.execute(
+        text("SELECT device_metadata FROM photos WHERE photo_id = :pid"),
+        {"pid": photo_id},
+    ).scalar()
+    assert row is not None
+    assert row["device_processing"]["version"] == "1"
+
+    # User-plane response must NOT include device_metadata.
     resp = client.get(f"/bins/{bin_id}")
     assert resp.status_code == 200
     photos = resp.json()["photos"]
     assert len(photos) == 1
-    assert "device_metadata" in photos[0]
-    assert photos[0]["device_metadata"]["device_processing"]["version"] == "1"
-
-
-def test_get_bin_photo_without_metadata_has_null(client, valid_jpeg_bytes):
-    """GET /bins/{bin_id} returns null device_metadata when none was sent."""
-    bin_id = "BIN-META-0006"
-    client.post(
-        "/ingest",
-        data={"bin_id": bin_id},
-        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
-    )
-
-    resp = client.get(f"/bins/{bin_id}")
-    assert resp.status_code == 200
-    photos = resp.json()["photos"]
-    assert len(photos) == 1
-    assert photos[0]["device_metadata"] is None
+    assert "device_metadata" not in photos[0]
