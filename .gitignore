@@ -19,8 +19,8 @@ backups/
 CLAUDE.md 
 .tldr/
 .tldrignore
-.swarm/
 .claude/
 opengrep.json
 opengrep.txt
 thoughts/
+.worktrees/
