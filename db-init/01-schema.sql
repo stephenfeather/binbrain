@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS photos (
   photo_id bigserial PRIMARY KEY,
   bin_id text REFERENCES bins(bin_id) ON DELETE CASCADE,
   path text NOT NULL,
+  device_metadata jsonb,
   created_at timestamptz DEFAULT now()
 );
 
