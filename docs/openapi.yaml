@@ -138,6 +138,18 @@ components:
         db_ok:         { type: boolean }
         embed_model:   { type: string, example: "BAAI/bge-small-en-v1.5" }
         expected_dims: { type: integer, const: 384 }
+        auth_ok:
+          type: boolean
+          description: |
+            Present only when the caller supplied `X-API-Key`. `true` if the
+            key is valid and active, `false` if it is unknown or revoked.
+            Absent when no key is supplied.
+        role:
+          type: string
+          enum: [user, admin]
+          description: |
+            Role of the authenticated API key. Present only when
+            `auth_ok` is `true`.
       additionalProperties: true
 
     # Ingest
@@ -591,6 +603,21 @@ paths:
       description: |
         Returns `200` when the API and database are reachable.
         Returns `503` when the database is unavailable.
+
+        If the caller supplies an `X-API-Key` header, the response also
+        reports whether that key is valid via the `auth_ok` field (and
+        `role` when valid). This lets clients probe both connectivity and
+        credential validity in a single request without hitting a
+        protected endpoint. The header is optional; omit it for a plain
+        health check.
+      parameters:
+        - in: header
+          name: X-API-Key
+          required: false
+          schema: { type: string }
+          description: |
+            Optional. If present, the response includes `auth_ok`
+            (and `role` when the key is valid).
       responses:
         "200":
           description: API and database are healthy.
@@ -599,12 +626,34 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HealthResponse" }
-              example:
-                version: "1"
-                ok: true
-                db_ok: true
-                embed_model: "BAAI/bge-small-en-v1.5"
-                expected_dims: 384
+              examples:
+                unauthenticated:
+                  summary: No API key supplied
+                  value:
+                    version: "1"
+                    ok: true
+                    db_ok: true
+                    embed_model: "BAAI/bge-small-en-v1.5"
+                    expected_dims: 384
+                valid_key:
+                  summary: Valid API key supplied
+                  value:
+                    version: "1"
+                    ok: true
+                    db_ok: true
+                    embed_model: "BAAI/bge-small-en-v1.5"
+                    expected_dims: 384
+                    auth_ok: true
+                    role: user
+                invalid_key:
+                  summary: Unknown or revoked API key
+                  value:
+                    version: "1"
+                    ok: true
+                    db_ok: true
+                    embed_model: "BAAI/bge-small-en-v1.5"
+                    expected_dims: 384
+                    auth_ok: false
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   # ── Ingest ──────────────────────────────────────────────────────────────────
