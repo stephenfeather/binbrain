@@ -211,6 +211,18 @@ def app_module():
     if not test_db_url:
         pytest.skip("TEST_DATABASE_URL not set")
 
+    from urllib.parse import urlparse
+
+    parsed = urlparse(test_db_url.replace("postgresql+psycopg://", "postgresql://"))
+    db_name = (parsed.path or "").lstrip("/")
+    if db_name == "continuous_claude" or parsed.username == "claude":
+        pytest.fail(
+            f"TEST_DATABASE_URL points at the cross-terminal coordination DB "
+            f"(user={parsed.username!r}, db={db_name!r}). Refusing to run — this "
+            f"would drop/recreate binbrain tables in continuous_claude. "
+            f"Use the binbrain_db container (host port 5434)."
+        )
+
     os.environ["DATABASE_URL"] = test_db_url
     os.environ.setdefault("PHOTO_DIR", "/tmp/binbrain_test_photos")
 
