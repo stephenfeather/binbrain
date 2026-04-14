@@ -23,7 +23,7 @@ class TestLocationsAPI:
 
     def test_create_location(self, client, db):
         self._cleanup(db)
-        resp = client.post("/locations", data={"name": "Garage"})
+        resp = client.post("/locations", json={"name": "Garage"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["version"] == "1"
@@ -33,7 +33,7 @@ class TestLocationsAPI:
 
     def test_create_location_with_description(self, client, db):
         self._cleanup(db)
-        resp = client.post("/locations", data={
+        resp = client.post("/locations", json={
             "name": "Workshop",
             "description": "Detached building",
         })
@@ -43,18 +43,18 @@ class TestLocationsAPI:
 
     def test_create_location_duplicate_409(self, client, db):
         self._cleanup(db)
-        client.post("/locations", data={"name": "Kitchen"})
-        resp = client.post("/locations", data={"name": "  kitchen  "})
+        client.post("/locations", json={"name": "Kitchen"})
+        resp = client.post("/locations", json={"name": "  kitchen  "})
         assert resp.status_code == 409
 
     def test_create_location_empty_name_400(self, client, db):
-        resp = client.post("/locations", data={"name": "   "})
+        resp = client.post("/locations", json={"name": "   "})
         assert resp.status_code == 400
 
     def test_list_locations_after_create(self, client, db):
         self._cleanup(db)
-        client.post("/locations", data={"name": "Attic"})
-        client.post("/locations", data={"name": "Basement"})
+        client.post("/locations", json={"name": "Attic"})
+        client.post("/locations", json={"name": "Basement"})
         resp = client.get("/locations")
         body = resp.json()
         names = [loc["name"] for loc in body["locations"]]
@@ -63,7 +63,7 @@ class TestLocationsAPI:
 
     def test_delete_location(self, client, db):
         self._cleanup(db)
-        create_resp = client.post("/locations", data={"name": "To Delete"})
+        create_resp = client.post("/locations", json={"name": "To Delete"})
         loc_id = create_resp.json()["location"]["location_id"]
         resp = client.delete(f"/locations/{loc_id}")
         assert resp.status_code == 200
@@ -82,7 +82,7 @@ class TestLocationsAPI:
 
     def test_delete_location_nulls_bin_reference(self, client, db):
         self._cleanup(db)
-        create_resp = client.post("/locations", data={"name": "Old Room"})
+        create_resp = client.post("/locations", json={"name": "Old Room"})
         loc_id = create_resp.json()["location"]["location_id"]
         db.execute(text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-API-DEL', :loc_id)"),
                    {"loc_id": loc_id})
@@ -106,7 +106,7 @@ class TestBinLocationAPI:
         self._cleanup(db)
         db.execute(text("INSERT INTO bins (bin_id) VALUES ('BIN-ASSIGN')"))
         db.commit()
-        loc_resp = client.post("/locations", data={"name": "Garage"})
+        loc_resp = client.post("/locations", json={"name": "Garage"})
         loc_id = loc_resp.json()["location"]["location_id"]
 
         resp = client.patch("/bins/BIN-ASSIGN/location", json={"location_id": loc_id})
@@ -119,7 +119,7 @@ class TestBinLocationAPI:
 
     def test_clear_location_from_bin(self, client, db):
         self._cleanup(db)
-        loc_resp = client.post("/locations", data={"name": "Temp"})
+        loc_resp = client.post("/locations", json={"name": "Temp"})
         loc_id = loc_resp.json()["location"]["location_id"]
         db.execute(text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-CLEAR', :loc_id)"),
                    {"loc_id": loc_id})
