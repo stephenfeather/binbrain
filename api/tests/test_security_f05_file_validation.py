@@ -61,6 +61,27 @@ def _pdf_bytes() -> bytes:
     return b"%PDF-1.4 fake content that is not an image"
 
 
+def _minimal_heif_bytes() -> bytes:
+    """Minimal 1×1 HEIF encoded via pillow-heif.
+
+    Skips the test at collection time if pillow-heif can't encode in this
+    environment (libheif without an HEIC encoder plugin).
+    """
+    pytest.importorskip("pillow_heif")
+    import io
+    import pillow_heif
+    from PIL import Image
+
+    pillow_heif.register_heif_opener()
+    img = Image.new("RGB", (1, 1), color=(255, 255, 255))
+    buf = io.BytesIO()
+    try:
+        img.save(buf, format="HEIF")
+    except (OSError, ValueError) as exc:
+        pytest.skip(f"pillow-heif cannot encode HEIF in this environment: {exc}")
+    return buf.getvalue()
+
+
 def _pt_bytes() -> bytes:
     """Fake PyTorch model bytes (PK header = ZIP)."""
     return b"PK\x03\x04" + b"\x00" * 100
@@ -78,6 +99,13 @@ class TestValidateImageFileAcceptsImages:
         p.write_bytes(_minimal_png_bytes())
         fmt = validate_image_file(p)
         assert fmt in ALLOWED_FORMATS
+
+    def test_accepts_heif(self, tmp_path):
+        p = tmp_path / "img.heic"
+        p.write_bytes(_minimal_heif_bytes())
+        fmt = validate_image_file(p)
+        assert fmt == "HEIF"
+        assert "HEIF" in ALLOWED_FORMATS
 
 
 class TestValidateImageFileRejectsNonImages:
@@ -163,4 +191,16 @@ def test_ingest_accepts_valid_jpeg(client):
     )
     assert resp.status_code == 200, (
         f"Expected 200 for valid JPEG, got {resp.status_code}: {resp.text}"
+    )
+
+
+def test_ingest_accepts_valid_heif(client):
+    """Uploading a genuine HEIF must succeed (200)."""
+    resp = client.post(
+        "/ingest",
+        data={"bin_id": "F05HEIF01"},
+        files=[("photos", ("real.heic", _minimal_heif_bytes(), "image/heic"))],
+    )
+    assert resp.status_code == 200, (
+        f"Expected 200 for valid HEIF, got {resp.status_code}: {resp.text}"
     )

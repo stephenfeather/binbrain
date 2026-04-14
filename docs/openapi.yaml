@@ -1148,7 +1148,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               required: [name]
@@ -1331,6 +1331,10 @@ paths:
             image/png:
               schema: { type: string, format: binary }
             image/webp:
+              schema: { type: string, format: binary }
+            image/heic:
+              schema: { type: string, format: binary }
+            image/heif:
               schema: { type: string, format: binary }
         "404": { $ref: "#/components/responses/NotFound" }
 
