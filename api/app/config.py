@@ -10,7 +10,13 @@ MAX_FILES_PER_REQUEST: int = int(os.environ.get("MAX_FILES_PER_REQUEST", "20"))
 # ── Detection model allowlist (F-02) ─────────────────────────────────────────
 # Maps logical ID -> filename within MODELS_DIR.
 # Only IDs listed here may be selected via the API.
-MODELS_DIR: Path = Path(os.environ.get("MODELS_DIR", "/models"))
+# Default to a directory writable by the app user inside the container image.
+# Finding #3 (2026-04-15 walkthrough): the previous default "/models" is owned
+# by root; the app user (uid=100) cannot create it, so ultralytics' auto-download
+# path crashed in a background thread with PermissionError while HTTP 200 had
+# already returned. Override with $MODELS_DIR (e.g. a bind-mounted host volume
+# preloaded with the allowlisted weights) for production.
+MODELS_DIR: Path = Path(os.environ.get("MODELS_DIR", "/app/models"))
 
 DETECTION_MODEL_ALLOWLIST: dict[str, str] = {
     "yoloe-v8s-seg": "yoloe-v8s-seg.pt",

@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import platform
 import threading
+import time
+import traceback
 from typing import TypedDict
 
 logger = logging.getLogger("binbrain")
@@ -19,6 +21,31 @@ _model = None
 _model_path: str | None = None
 _model_lock = threading.RLock()
 _deferred_classes: list[str] | None = None
+
+# Finding #3: surface reload failures. Populated by `reload_classes`; read by
+# `get_reload_status()` and exposed via /health. `status` is one of
+# "never" | "ok" | "error". `error` carries the short message when status=error.
+_reload_status: dict = {
+    "status": "never",
+    "last_reload_at": None,
+    "count": 0,
+    "error": None,
+}
+_reload_status_lock = threading.Lock()
+
+
+def _record_reload_status(status: str, count: int, error: str | None) -> None:
+    with _reload_status_lock:
+        _reload_status["status"] = status
+        _reload_status["last_reload_at"] = time.time()
+        _reload_status["count"] = count
+        _reload_status["error"] = error
+
+
+def get_reload_status() -> dict:
+    """Snapshot of the last reload attempt for ops/health visibility."""
+    with _reload_status_lock:
+        return dict(_reload_status)
 
 
 def set_deferred_classes(classes: list[str]) -> None:
@@ -59,16 +86,32 @@ def initialize_model(classes: list[str]) -> None:
 def reload_classes(classes: list[str]) -> None:
     """Re-encode text embeddings for the new class list.
 
-    Called from a background thread by class_registry on mutations.
+    Called from a background thread by class_registry on mutations. Never
+    raises: background-thread exceptions previously vanished silently while
+    the HTTP request had already returned 200 (Finding #3). Failures are
+    captured in `get_reload_status()` and logged at ERROR.
     """
-    with _model_lock:
-        model = _get_model()
-        if classes:
-            logger.warning("event=yoloe_reload_start count=%d", len(classes))
-            model.set_classes(classes)
-            logger.warning("event=yoloe_reload_done count=%d", len(classes))
-        else:
-            logger.warning("event=yoloe_reload_empty")
+    count = len(classes)
+    try:
+        with _model_lock:
+            model = _get_model()
+            if classes:
+                logger.warning("event=yoloe_reload_start count=%d", count)
+                model.set_classes(classes)
+                logger.warning("event=yoloe_reload_done count=%d", count)
+            else:
+                logger.warning("event=yoloe_reload_empty")
+    except Exception as exc:
+        msg = f"{type(exc).__name__}: {exc}"
+        logger.error(
+            "event=yoloe_reload_failed count=%d error=%s\n%s",
+            count,
+            msg,
+            traceback.format_exc(),
+        )
+        _record_reload_status("error", count, msg)
+        return
+    _record_reload_status("ok", count, None)
 
 
 def get_device() -> str:

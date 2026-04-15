@@ -35,7 +35,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app /app/app
 
 RUN addgroup --system app && adduser --system --ingroup app --home /home/app app
-RUN mkdir -p /home/app/.cache /data/photos && chown -R app:app /home/app /data/photos /app
+# Finding #3: /app/models is the default MODELS_DIR. Create it owned by the
+# app user so ultralytics' auto-download / cache path doesn't PermissionError
+# on first run (previously it tried `mkdir /models` as uid=100). Bind-mount
+# a preloaded host volume here in production.
+RUN mkdir -p /home/app/.cache /data/photos /app/models && chown -R app:app /home/app /data/photos /app
 ENV HOME=/home/app
 USER app
 

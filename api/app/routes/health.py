@@ -25,6 +25,12 @@ def health(request: Request, db: Session = Depends(get_db)):
         "expected_dims": 384,
     }
 
+    # Finding #3: surface the last YOLOE class reload status so silent
+    # background-thread failures (e.g. mkdir permission errors) are visible
+    # to ops and, eventually, the iOS client.
+    from app.services import detection
+    body["model_reload"] = detection.get_reload_status()
+
     # Optional auth probe: if the caller supplied X-API-Key, report whether
     # it's valid so clients can verify their credentials without hitting a
     # protected endpoint. /health itself stays unauthenticated.
