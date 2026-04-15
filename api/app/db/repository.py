@@ -752,6 +752,68 @@ def create_location(
     return dict(row) if row else None
 
 
+def update_location(
+    db: Session,
+    location_id: int,
+    *,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    update_description: bool = False,
+) -> dict | None | str:
+    """Update a location's name and/or description.
+
+    Returns:
+        * the updated row (dict) on success
+        * None if the location does not exist (or is soft-deleted)
+        * the string "conflict" if the new name collides with another active
+          location's case-insensitive trimmed name
+
+    `update_description=True` distinguishes "set description to NULL" from
+    "leave description unchanged"; when False, description is ignored.
+    """
+    # Conflict check before the UPDATE so PATCH {name: existing} yields 409.
+    if name is not None:
+        conflict = db.execute(
+            text(
+                """
+                SELECT location_id FROM locations
+                WHERE lower(trim(name)) = lower(trim(:name))
+                  AND deleted_at IS NULL
+                  AND location_id <> :location_id
+                LIMIT 1
+                """
+            ),
+            {"name": name, "location_id": location_id},
+        ).scalar()
+        if conflict is not None:
+            return "conflict"
+
+    sets = []
+    params: dict = {"location_id": location_id}
+    if name is not None:
+        sets.append("name = trim(:name)")
+        params["name"] = name
+    if update_description:
+        sets.append("description = :description")
+        params["description"] = description
+
+    if not sets:
+        return get_location(db, location_id)
+
+    row = db.execute(
+        text(
+            f"""
+            UPDATE locations
+            SET {", ".join(sets)}
+            WHERE location_id = :location_id AND deleted_at IS NULL
+            RETURNING location_id, name, description, created_at
+            """
+        ),
+        params,
+    ).mappings().first()
+    return dict(row) if row else None
+
+
 def soft_delete_location(db: Session, location_id: int) -> bool:
     res = db.execute(
         text(

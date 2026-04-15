@@ -1186,6 +1186,55 @@ paths:
                 error: { code: "conflict", message: "location with this name already exists", request_id: "abc123" }
 
   /locations/{location_id}:
+    patch:
+      summary: Update a location's name and/or description
+      operationId: updateLocation
+      tags: [Locations]
+      description: |
+        Update a location in-place. Both fields are optional; omit a field to
+        leave it unchanged. `description: null` clears the description.
+        Admin-only.
+      parameters:
+        - name: location_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+          description: Location ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:        { type: string, minLength: 1, description: "New name (trimmed)." }
+                description: { type: ["string", "null"], description: "New description; null clears it." }
+              additionalProperties: false
+            examples:
+              rename:
+                value: { name: "Workshop" }
+              clear_description:
+                value: { description: null }
+      responses:
+        "200":
+          description: Updated location.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateLocationResponse" }
+              example:
+                version: "1"
+                location: { location_id: 3, name: "Workshop", description: null, created_at: "2026-04-15T12:00:00Z" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: A location with that name already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
     delete:
       summary: Soft-delete a location
       operationId: deleteLocation
