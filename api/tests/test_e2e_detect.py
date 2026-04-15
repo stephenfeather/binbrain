@@ -2,7 +2,7 @@
 
 Requires:
   - binbrain_api container running at localhost:8000
-  - binbrain_db container running at localhost:5432
+  - binbrain_db container running at localhost:5434
   - A real image at samples/image_01-1200x900.jpg
 
 Run:

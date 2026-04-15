@@ -146,6 +146,6 @@ Tests use an in-memory SQLite database and do not require Docker or Ollama.
 ```bash
 cd api
 uv sync
-DATABASE_URL=postgresql+psycopg://binbrain:PASSWORD@localhost:5432/binbrain \
+DATABASE_URL=postgresql+psycopg://binbrain:PASSWORD@localhost:5434/binbrain \
   uv run uvicorn app.main:app --reload
 ```
