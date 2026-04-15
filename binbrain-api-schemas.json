@@ -26,9 +26,10 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["photo_id"],
+        "required": ["photo_id", "url"],
         "properties": {
-          "photo_id": { "type": "integer", "minimum": 1 }
+          "photo_id": { "type": "integer", "minimum": 1 },
+          "url": { "type": "string", "minLength": 1, "description": "Path to /photos/{photo_id}/file (authenticated)." }
         },
         "additionalProperties": false
       }
@@ -229,9 +230,10 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["photo_id"],
+        "required": ["photo_id", "url"],
         "properties": {
-          "photo_id": { "type": "integer", "minimum": 1 }
+          "photo_id": { "type": "integer", "minimum": 1 },
+          "url": { "type": "string", "minLength": 1, "description": "Path to /photos/{photo_id}/file (authenticated)." }
         },
         "additionalProperties": false
       }

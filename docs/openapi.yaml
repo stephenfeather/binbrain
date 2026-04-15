@@ -49,13 +49,16 @@ components:
     # Shared atoms
     PhotoRecord:
       type: object
-      required: [photo_id, path]
+      required: [photo_id, url]
       properties:
         photo_id: { type: integer, minimum: 1 }
-        path:     { type: string, description: "Absolute filesystem path inside the container." }
-        device_metadata:
-          type: ["object", "null"]
-          description: "On-device processing metadata from iOS client, if submitted."
+        url:
+          type: string
+          description: |
+            Path to the authenticated photo file endpoint
+            (`/photos/{photo_id}/file`). Clients MUST resolve against the
+            server base URL and supply an API key. Replaces the internal
+            filesystem `path` previously exposed here (F-10 fix).
       additionalProperties: false
 
     Location:
@@ -703,8 +706,8 @@ paths:
                 version: "1"
                 bin_id: "B-42"
                 photos:
-                  - { photo_id: 7, path: "/data/photos/B-42/abc123.jpg" }
-                  - { photo_id: 8, path: "/data/photos/B-42/def456.jpg" }
+                  - { photo_id: 7, url: "/photos/7/file" }
+                  - { photo_id: 8, url: "/photos/8/file" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -914,7 +917,7 @@ paths:
                 items:
                   - { item_id: 12, name: "M3 Screw", category: "fastener", quantity: 50, confidence: 0.92 }
                 photos:
-                  - { photo_id: 7, path: "/data/photos/B-42/abc123.jpg" }
+                  - { photo_id: 7, url: "/photos/7/file" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -975,7 +978,7 @@ paths:
                 category: "electronics"
                 notes: null
                 photos:
-                  - { photo_id: 9, path: "/data/photos/B-42/xyz789.jpg" }
+                  - { photo_id: 9, url: "/photos/9/file" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }

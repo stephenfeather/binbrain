@@ -26,6 +26,35 @@ class BinLocationUpdate(BaseModel):
     location_id: int | None = None
 
 
+class PhotoRecord(BaseModel):
+    """Public photo shape. `url` points at authenticated /photos/{id}/file.
+
+    F-10: the internal filesystem `path` and FF-04 `device_metadata` are
+    never exposed on this record.
+    """
+
+    photo_id: int
+    url: str
+
+
+class BinItemRecord(BaseModel):
+    item_id: int
+    name: str
+    category: Optional[str] = None
+    upc: Optional[str] = None
+    quantity: Optional[float] = None
+    confidence: Optional[float] = None
+
+
+class GetBinResponse(BaseModel):
+    version: str = "1"
+    bin_id: str
+    location_id: Optional[int] = None
+    location_name: Optional[str] = None
+    items: list[BinItemRecord]
+    photos: list[PhotoRecord]
+
+
 router = APIRouter()
 
 _PHOTO_ROOT_RESOLVED: Path | None = None
@@ -34,7 +63,13 @@ _PHOTO_ROOT_RESOLVED: Path | None = None
 # The photos row also carries `path` (F-10: internal FS path) and
 # `device_metadata` (FF-04: OCR/classification/telemetry) — neither may leak.
 # Admin endpoints needing those fields must project them explicitly.
-_PUBLIC_PHOTO_FIELDS = frozenset({"photo_id"})
+# `url` is synthesized server-side in `_public_photo` from `photo_id`.
+_PUBLIC_PHOTO_FIELDS = frozenset({"photo_id", "url"})
+
+
+def _public_photo(photo_id: int) -> dict:
+    """Build the user-plane photo record. F-10: never includes internal path."""
+    return {"photo_id": photo_id, "url": f"/photos/{photo_id}/file"}
 
 
 def _get_photo_root_resolved() -> Path:
@@ -183,7 +218,7 @@ async def ingest(
         photo_id = repository.insert_photo(db, bin_id, str(final_path), device_metadata=parsed_metadata)
         db.commit()
 
-        saved.append({"photo_id": photo_id})
+        saved.append(_public_photo(photo_id))
 
     logger.info(
         "event=ingest_complete request_id=%s bin_id=%s saved=%s",
@@ -285,7 +320,7 @@ async def add_to_bin(
                 _validate_and_place(tmp_path, final_path)
 
                 photo_id = repository.insert_photo(db, bin_id, str(final_path))
-                saved_photos.append({"photo_id": photo_id})
+                saved_photos.append(_public_photo(photo_id))
 
         if item_id is not None:
             repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
@@ -324,7 +359,7 @@ async def add_to_bin(
         raise HTTPException(status_code=500, detail="internal error") from None
 
 
-@router.get("/bins/{bin_id}")
+@router.get("/bins/{bin_id}", response_model=GetBinResponse)
 def get_bin(
     bin_id: str,
     db: Session = Depends(get_db),
@@ -351,15 +386,12 @@ def get_bin(
         len(items),
         len(photos),
     )
-    # F-10 / FF-04: project to an explicit allowlist of public photo fields.
+    # F-10 / FF-04: build the user-plane photo record from `photo_id` only.
     # Strips internal filesystem `path` (F-10) and operational `device_metadata`
     # (FF-04 — OCR/classification/telemetry payloads must not leak to the
-    # user-plane response). New fields added to the photo row must be
-    # explicitly added here before clients can see them.
-    safe_photos = [
-        {k: v for k, v in p.items() if k in _PUBLIC_PHOTO_FIELDS}
-        for p in photos
-    ]
+    # user-plane response). The `url` field is synthesized server-side so
+    # the allowlist stays honest even if the DB row gains new columns.
+    safe_photos = [_public_photo(p["photo_id"]) for p in photos]
     return {
         "version": "1",
         "bin_id": bin_id,
