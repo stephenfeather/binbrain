@@ -1,10 +1,5 @@
-"""Finding #24: tolerant /suggest parser + WARN logging on parse failure.
-
-qwen3-vl:2b is non-deterministic about wrapping its response: sometimes the
-expected ``{"suggestions": [...]}`` object, sometimes a bare JSON list. The
-old parser called ``.get("suggestions", [])`` on the parsed value and silently
-swallowed the resulting AttributeError, returning ``[]`` and losing the
-training signal. These tests pin down the tolerant contract.
+"""Vision pipeline tests: tolerant parser (F#24), schema enforcement (F#27),
+OpenAI-protocol backend (Dev2_007).
 """
 from __future__ import annotations
 
@@ -107,24 +102,11 @@ def test_extract_suggestions_dict_with_non_list_value_warns(caplog):
 
 
 # ---------------------------------------------------------------------------
-# Finding #27: Ollama structured outputs — format=<schema> wired into /suggest.
+# Dev2_007: OpenAI-protocol interchangeable vision backend.
+# Tests mock the openai.OpenAI client (not urllib.request) and assert that
+# describe_photo uses the OpenAI chat completions interface with image_url
+# format, making the backend swappable between Ollama and hosted providers.
 # ---------------------------------------------------------------------------
-
-
-class _FakeOllamaResp:
-    """Minimal urllib response shim that supports the `with urlopen(...)` idiom."""
-
-    def __init__(self, body: bytes):
-        self._body = body
-
-    def read(self):
-        return self._body
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        return False
 
 
 def _write_jpeg(tmp_path, valid_jpeg_bytes):
@@ -134,24 +116,44 @@ def _write_jpeg(tmp_path, valid_jpeg_bytes):
     return str(p)
 
 
-def _patch_urlopen(monkeypatch, captured: dict, response_content: str):
-    """Patch urllib.request.urlopen to capture the outgoing payload and return
-    a canned Ollama /api/chat response whose message content is ``response_content``."""
+class _FakeMessage:
+    def __init__(self, content: str):
+        self.content = content
 
-    def fake_urlopen(req, timeout=None):
-        captured["url"] = req.full_url
-        captured["body"] = json.loads(req.data)
-        body = json.dumps({"message": {"content": response_content}}).encode()
-        return _FakeOllamaResp(body)
 
-    # vision.py imports urllib.request; patch the module attribute it uses.
-    import urllib.request as _urllib_request
-    monkeypatch.setattr(_urllib_request, "urlopen", fake_urlopen)
+class _FakeChoice:
+    def __init__(self, content: str):
+        self.message = _FakeMessage(content)
+
+
+class _FakeChatCompletion:
+    def __init__(self, content: str):
+        self.choices = [_FakeChoice(content)]
+
+
+def _patch_openai(monkeypatch, captured: dict, response_content: str):
+    """Replace the openai.OpenAI constructor so describe_photo's client
+    captures its call kwargs and returns a canned response."""
+
+    class _FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeChatCompletion(response_content)
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+    monkeypatch.setattr(vision_mod, "openai", type("openai", (), {"OpenAI": _FakeClient}))
 
 
 def test_suggest_response_schema_shape():
-    """The Pydantic schema must have a 'suggestions' array of name-bearing items.
-    This guards the shape the Ollama server will be asked to enforce."""
+    """The Pydantic schema must have a 'suggestions' array of name-bearing items."""
     assert hasattr(vision_mod, "SuggestResponseSchema"), (
         "vision module must expose SuggestResponseSchema (Finding #27)"
     )
@@ -160,9 +162,7 @@ def test_suggest_response_schema_shape():
     props = schema.get("properties", {})
     assert "suggestions" in props, schema
     assert props["suggestions"]["type"] == "array"
-    # The item schema must at minimum require a 'name' field.
     item_schema = props["suggestions"]["items"]
-    # Pydantic uses $ref for nested models — resolve it.
     if "$ref" in item_schema:
         ref = item_schema["$ref"].rsplit("/", 1)[-1]
         item_schema = schema["$defs"][ref]
@@ -170,28 +170,40 @@ def test_suggest_response_schema_shape():
     assert "name" in item_schema.get("required", []), item_schema
 
 
-def test_describe_photo_sends_format_schema(tmp_path, valid_jpeg_bytes, monkeypatch):
-    """describe_photo must include `format=<schema>` in the Ollama payload so
-    the server enforces the wrapper shape on its end (Finding #27)."""
+def test_describe_photo_uses_openai_client(tmp_path, valid_jpeg_bytes, monkeypatch):
+    """describe_photo must use the openai.OpenAI client with base_url + api_key,
+    send image via data-URI image_url format, and use response_format json_object."""
     captured: dict = {}
-    _patch_urlopen(
-        monkeypatch,
-        captured,
+    _patch_openai(
+        monkeypatch, captured,
         response_content='{"suggestions": [{"name": "M3 Bolt"}]}',
     )
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
-    suggestions, _elapsed = describe_photo(photo_path, "http://fake:11434", "qwen3-vl:2b")
+    suggestions, _elapsed = describe_photo(
+        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+    )
 
     assert suggestions == [{"name": "M3 Bolt"}]
-    body = captured["body"]
-    assert "format" in body, f"Ollama payload missing 'format': {list(body.keys())}"
-    fmt = body["format"]
-    # Expect a JSON Schema object (dict), not the string "json" — strings don't
-    # constrain shape, and Finding #27 is specifically about schema enforcement.
-    assert isinstance(fmt, dict), f"format must be a JSON Schema dict, got {type(fmt).__name__}"
-    assert fmt.get("type") == "object"
-    assert "suggestions" in fmt.get("properties", {})
+
+    # Verify OpenAI client was constructed with our base_url + api_key.
+    ck = captured["client_kwargs"]
+    assert ck["base_url"] == "http://fake:11434/v1"
+    assert ck["api_key"] == "test-key"
+
+    # Verify the chat completion call used OpenAI image_url format.
+    messages = captured["messages"]
+    user_msg = messages[0]
+    assert user_msg["role"] == "user"
+    content_parts = user_msg["content"]
+    assert isinstance(content_parts, list), "content should be a multi-part list"
+    image_part = [p for p in content_parts if p.get("type") == "image_url"]
+    assert image_part, f"expected image_url part in content, got types: {[p.get('type') for p in content_parts]}"
+    assert image_part[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+    # Verify response_format is set for JSON mode.
+    rf = captured.get("response_format")
+    assert rf == {"type": "json_object"}, f"expected json_object response_format, got {rf}"
 
 
 def test_describe_photo_schema_conforming_response_parses():
@@ -203,33 +215,54 @@ def test_describe_photo_schema_conforming_response_parses():
 
 
 def test_describe_photo_single_item_response_propagates(tmp_path, valid_jpeg_bytes, monkeypatch):
-    """Schema-enforced responses may have lower recall (Dev1_009 photo_id=15:
-    4 items freeform → 1 with schema). The pipeline must still propagate a
-    1-item response without dropping it."""
+    """1-item response must propagate without being dropped."""
     captured: dict = {}
-    _patch_urlopen(
-        monkeypatch,
-        captured,
+    _patch_openai(
+        monkeypatch, captured,
         response_content='{"suggestions": [{"name": "Only Item"}]}',
     )
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
-    suggestions, _elapsed = describe_photo(photo_path, "http://fake:11434", "qwen3-vl:2b")
-
+    suggestions, _elapsed = describe_photo(
+        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+    )
     assert suggestions == [{"name": "Only Item"}]
 
 
 def test_describe_photo_bare_list_response_still_parses(tmp_path, valid_jpeg_bytes, monkeypatch):
-    """Defense-in-depth: if the server ignores the schema (old Ollama, edge case),
-    Dev2_005's tolerant parser must still handle the bare-list fallback shape."""
+    """Defense-in-depth: if the server ignores the schema, Dev2_005's tolerant
+    parser must still handle the bare-list fallback shape."""
     captured: dict = {}
-    _patch_urlopen(
-        monkeypatch,
-        captured,
+    _patch_openai(
+        monkeypatch, captured,
         response_content='[{"name": "Fallback Item", "category": "other"}]',
     )
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
-    suggestions, _elapsed = describe_photo(photo_path, "http://fake:11434", "qwen3-vl:2b")
-
+    suggestions, _elapsed = describe_photo(
+        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+    )
     assert suggestions == [{"name": "Fallback Item", "category": "other"}]
+
+
+def test_describe_photo_error_returns_empty(tmp_path, valid_jpeg_bytes, monkeypatch):
+    """Client errors must be caught gracefully and return ([], elapsed_ms)."""
+
+    class _BoomClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    raise ConnectionError("network down")
+
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(vision_mod, "openai", type("openai", (), {"OpenAI": _BoomClient}))
+
+    photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
+    suggestions, elapsed = describe_photo(
+        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+    )
+    assert suggestions == []
+    assert elapsed >= 0
