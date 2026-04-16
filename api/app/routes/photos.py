@@ -10,7 +10,7 @@ from app.deps import (
     get_db, embed_text, canonical_item_text, fingerprint_for,
     vec_to_pgvector, SessionLocal, photo_root,
     get_active_vision_model, get_max_image_px,
-    OLLAMA_URL, logger,
+    VISION_BASE_URL, VISION_API_KEY, logger,
 )
 from app.services.detection import detect, get_model_name
 from app.services.rate_limiter import require_vision_rate_limit
@@ -99,7 +99,8 @@ def suggest_for_photo(
         logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
         vision_model = model or get_active_vision_model()
         vision_hits, vision_elapsed_ms = describe_photo(
-            str(resolved_path), OLLAMA_URL, vision_model, get_max_image_px()
+            str(resolved_path), VISION_BASE_URL, VISION_API_KEY,
+            vision_model, get_max_image_px(),
         )
         logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
     except HTTPException:

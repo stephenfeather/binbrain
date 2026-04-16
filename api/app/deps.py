@@ -18,6 +18,8 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+VISION_BASE_URL = os.environ.get("VISION_BASE_URL", "http://localhost:11434/v1")
+VISION_API_KEY = os.environ.get("VISION_API_KEY", "ollama")
 
 # Re-export for callers that import these from app.deps (backwards compat).
 MAX_REQUEST_BODY_BYTES = MAX_REQUEST_BODY_BYTES

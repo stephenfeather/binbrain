@@ -6,9 +6,8 @@ import json
 import logging
 import re
 import time
-import urllib.request
-from pathlib import Path
 
+import openai
 from PIL import Image
 from pydantic import BaseModel
 
@@ -117,14 +116,18 @@ def _load_and_resize(photo_path: str, max_px: int) -> bytes:
 
 def describe_photo(
     photo_path: str,
-    ollama_url: str,
+    base_url: str,
+    api_key: str,
     model: str,
     max_px: int = 1280,
 ) -> tuple[list[dict], int]:
-    """Use Ollama vision model to identify items in a photo.
+    """Use a vision-language model to identify items in a photo.
+
+    Communicates via the OpenAI-compatible chat completions API, making the
+    backend swappable between Ollama (local) and hosted providers (e.g.
+    Fireworks.ai) by changing ``base_url`` and ``api_key``.
 
     Returns (suggestions, elapsed_ms). On any failure returns ([], elapsed_ms).
-    elapsed_ms covers the full Ollama round-trip.
     Image is downscaled to max_px on the longest side before sending.
     """
     try:
@@ -133,37 +136,33 @@ def describe_photo(
         return [], 0
 
     image_b64 = base64.b64encode(image_bytes).decode()
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": _PROMPT,
-                "images": [image_b64],
-            }
-        ],
-        "format": _SUGGEST_SCHEMA,
-        "stream": False,
-        "keep_alive": -1,
-    }
+    data_uri = f"data:image/jpeg;base64,{image_b64}"
+
+    client = openai.OpenAI(base_url=base_url, api_key=api_key)
 
     t0 = time.monotonic()
     try:
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            f"{ollama_url}/api/chat",
-            data=data,
-            headers={"Content-Type": "application/json"},
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _PROMPT},
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                    ],
+                }
+            ],
+            response_format={"type": "json_object"},
+            timeout=180,
         )
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            body = json.loads(resp.read())
     except Exception:
         return [], int((time.monotonic() - t0) * 1000)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     try:
-        content = body["message"]["content"]
-    except (KeyError, TypeError):
+        content = resp.choices[0].message.content
+    except (IndexError, AttributeError):
         return [], elapsed_ms
 
     return _parse_suggestions(content), elapsed_ms
