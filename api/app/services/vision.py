@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _PROMPT = (
     'Return ONLY valid JSON using the schema '
     '{"suggestions":[{"name":"string","category":"fastener|electronics|tool|label_packaging|other","confidence":0.0}]} '
-    'List up to 5 likely item types visible. No explanation, no markdown.'
+    'List all item types visible. No explanation, no markdown.'
 )
 
 
