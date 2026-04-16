@@ -39,6 +39,11 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data/photos:/data/photos
+      # Detection model weights (shared with host benchmarks). Read-only —
+      # the container must not mutate these. Host path is gitignored; fresh
+      # checkouts need to populate ./models/ before first /detect call, or
+      # ultralytics will auto-download into a non-persistent container path.
+      - ./models:/app/models:ro
       # Persist fastembed model cache so restarts don't redownload
       - binbrain_cache:/home/app/.cache
     depends_on:

@@ -39,13 +39,16 @@ BENCHMARK_CLASSES = [
     "usb cable", "wrench", "bolt", "capacitor", "book",
 ]
 
-# Models to benchmark — add new ones here
+# Weights live in ./models/ (shared with the API container via a bind-mount in
+# docker-compose.yml — see Finding #3).
+MODELS_DIR = "models"
+
 MODEL_REGISTRY = {
     "yolo11s.pt": {"type": "YOLO", "dataset": "COCO", "classes": 80},
     "yoloe-v8s-seg.pt": {"type": "YOLOE", "dataset": "LVIS+Objects365", "classes": "text-prompt"},
     "yoloe-v8s-seg-pf.pt": {"type": "YOLOE", "dataset": "LVIS+Objects365", "classes": 4585},
     "yolov8s-worldv2.pt": {"type": "YOLOWorld", "dataset": "text-prompt", "classes": "text-prompt"},
-    "yolo11n_object365.pt": {"type": "YOLO", "dataset": "Objects365", "classes": 365, "path": "api/yolo11n_object365.pt"},
+    "yolo11n_object365.pt": {"type": "YOLO", "dataset": "Objects365", "classes": 365},
 }
 
 
@@ -65,8 +68,7 @@ def find_images(image_dir: str) -> list[Path]:
 def load_model(model_key: str):
     """Load a detection model by registry key."""
     info = MODEL_REGISTRY[model_key]
-    raw_path = info.get("path", model_key)
-    model_path = str(BASE_DIR / raw_path) if "/" in raw_path else raw_path
+    model_path = str(BASE_DIR / MODELS_DIR / info.get("path", model_key))
 
     if info["type"] == "YOLOE":
         from ultralytics import YOLOE
