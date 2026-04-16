@@ -100,7 +100,7 @@ def suggest_for_photo(
         vision_model = model or get_active_vision_model()
         vision_hits, vision_elapsed_ms = describe_photo(
             str(resolved_path), VISION_BASE_URL, VISION_API_KEY,
-            vision_model, get_max_image_px(),
+            vision_model, get_max_image_px(), photo_id=photo_id,
         )
         logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
     except HTTPException:

@@ -120,6 +120,7 @@ def describe_photo(
     api_key: str,
     model: str,
     max_px: int = 1280,
+    photo_id: int | None = None,
 ) -> tuple[list[dict], int]:
     """Use a vision-language model to identify items in a photo.
 
@@ -139,6 +140,7 @@ def describe_photo(
     data_uri = f"data:image/jpeg;base64,{image_b64}"
 
     client = openai.OpenAI(base_url=base_url, api_key=api_key)
+    logger.info("event=vision_request_start photo_id=%s base_url=%s model=%s", photo_id, base_url, model)
 
     t0 = time.monotonic()
     try:
@@ -156,8 +158,10 @@ def describe_photo(
             response_format={"type": "json_object"},
             timeout=180,
         )
-    except Exception:
-        return [], int((time.monotonic() - t0) * 1000)
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        logger.warning("event=vision_request_failed photo_id=%s base_url=%s model=%s ms=%s exc=%s", photo_id, base_url, model, elapsed_ms, exc.__class__.__name__)
+        return [], elapsed_ms
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     try:
@@ -165,4 +169,7 @@ def describe_photo(
     except (IndexError, AttributeError):
         return [], elapsed_ms
 
-    return _parse_suggestions(content), elapsed_ms
+    logger.info("event=vision_response photo_id=%s base_url=%s model=%s ms=%s", photo_id, base_url, model, elapsed_ms)
+    logger.debug("event=vision_response_raw photo_id=%s content=%r", photo_id, content[:500] if content else None)
+
+    return _parse_suggestions(content, photo_id), elapsed_ms
