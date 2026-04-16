@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import re
 import time
 import urllib.request
@@ -10,11 +11,33 @@ from pathlib import Path
 
 from PIL import Image
 
+logger = logging.getLogger(__name__)
+
 _PROMPT = (
     'Return ONLY valid JSON using the schema '
     '{"suggestions":[{"name":"string","category":"fastener|electronics|tool|label_packaging|other","confidence":0.0}]} '
     'List up to 5 likely item types visible. No explanation, no markdown.'
 )
+
+
+def _parse_suggestions(raw_content: str, photo_id: int | None = None) -> list[dict]:
+    """Parse vision-model content into a list of suggestion dicts.
+
+    Current (pre-fix) behavior: strips <think> tags and markdown fences,
+    json-loads, expects {"suggestions": [...]} object, returns [] on any
+    failure. This will be made tolerant in a follow-up.
+    """
+    content = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
+    content = re.sub(r"^```(?:json)?\s*", "", content).rstrip("` \n")
+
+    try:
+        parsed = json.loads(content)
+        return [
+            s for s in parsed.get("suggestions", [])
+            if isinstance(s, dict) and s.get("name")
+        ]
+    except (json.JSONDecodeError, AttributeError):
+        return []
 
 
 def _load_and_resize(photo_path: str, max_px: int) -> bytes:
@@ -81,17 +104,4 @@ def describe_photo(
     except (KeyError, TypeError):
         return [], elapsed_ms
 
-    # Strip thinking tokens (qwen3 models)
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-    # Strip markdown code fences
-    content = re.sub(r"^```(?:json)?\s*", "", content).rstrip("` \n")
-
-    try:
-        parsed = json.loads(content)
-        suggestions = [
-            s for s in parsed.get("suggestions", [])
-            if isinstance(s, dict) and s.get("name")
-        ]
-        return suggestions, elapsed_ms
-    except (json.JSONDecodeError, AttributeError):
-        return [], elapsed_ms
+    return _parse_suggestions(content), elapsed_ms
