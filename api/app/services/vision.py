@@ -20,14 +20,41 @@ _PROMPT = (
 )
 
 
-def _parse_suggestions(raw_content: str, photo_id: int | None = None) -> list[dict]:
-    """Parse vision-model content into a list of suggestion dicts.
+def _extract_suggestions(parsed: object, photo_id: int | None, sample: str) -> list[dict]:
+    """Pull the suggestions list out of any accepted shape.
 
-    qwen3-vl:2b is non-deterministic about its wrapping: it may emit
-    ``{"suggestions": [...]}`` (the requested schema) or a bare JSON list
-    ``[...]``. Both shapes are accepted. Anything else is a parse failure
-    and is logged at WARN with the photo_id and a payload sample so that
-    schema drift is debuggable rather than silently swallowed.
+    Accepts ``{"suggestions": [...]}`` (requested schema) or a bare list
+    ``[...]`` (qwen3-vl:2b's alternate emission). Logs WARN and returns
+    ``[]`` for any other shape so schema drift is debuggable. Items are
+    filtered to dicts with a truthy 'name'.
+    """
+    if isinstance(parsed, dict):
+        items = parsed.get("suggestions")
+        if not isinstance(items, list):
+            logger.warning(
+                "event=vision_parse_failed reason=missing_suggestions_key photo_id=%s keys=%s sample=%r",
+                photo_id, list(parsed.keys()), sample,
+            )
+            return []
+    elif isinstance(parsed, list):
+        items = parsed
+    else:
+        logger.warning(
+            "event=vision_parse_failed reason=unexpected_type photo_id=%s type=%s sample=%r",
+            photo_id, type(parsed).__name__, sample,
+        )
+        return []
+
+    return [s for s in items if isinstance(s, dict) and s.get("name")]
+
+
+def _parse_suggestions(raw_content: str, photo_id: int | None = None) -> list[dict]:
+    """Sanitize + json-parse vision-model content, then extract suggestions.
+
+    qwen3-vl:2b is non-deterministic about wrapping its response; the
+    extractor handles both ``{"suggestions": [...]}`` and bare-list shapes.
+    JSON parse failures are logged at WARN with photo_id and a payload
+    sample so that schema drift is debuggable rather than silently swallowed.
     """
     content = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
     content = re.sub(r"^```(?:json)?\s*", "", content).rstrip("` \n")
@@ -41,24 +68,7 @@ def _parse_suggestions(raw_content: str, photo_id: int | None = None) -> list[di
         )
         return []
 
-    if isinstance(parsed, dict):
-        items = parsed.get("suggestions")
-        if not isinstance(items, list):
-            logger.warning(
-                "event=vision_parse_failed reason=missing_suggestions_key photo_id=%s keys=%s sample=%r",
-                photo_id, list(parsed.keys()), content[:200],
-            )
-            return []
-    elif isinstance(parsed, list):
-        items = parsed
-    else:
-        logger.warning(
-            "event=vision_parse_failed reason=unexpected_type photo_id=%s type=%s sample=%r",
-            photo_id, type(parsed).__name__, content[:200],
-        )
-        return []
-
-    return [s for s in items if isinstance(s, dict) and s.get("name")]
+    return _extract_suggestions(parsed, photo_id, content[:200])
 
 
 def _load_and_resize(photo_path: str, max_px: int) -> bytes:

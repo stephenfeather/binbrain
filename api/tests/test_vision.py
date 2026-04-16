@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from app.services.vision import _parse_suggestions
+from app.services.vision import _extract_suggestions, _parse_suggestions
 
 
 def test_parse_suggestions_object_shape():
@@ -67,3 +67,32 @@ def test_parse_suggestions_drops_items_without_name():
     raw = '{"suggestions": [{"name": "Keep"}, {"category": "drop"}, {"name": ""}]}'
     out = _parse_suggestions(raw)
     assert out == [{"name": "Keep"}]
+
+
+# ---------------------------------------------------------------------------
+# Direct tests for the _extract_suggestions helper (post-Step-3 refactor).
+# ---------------------------------------------------------------------------
+
+
+def test_extract_suggestions_dict_shape():
+    out = _extract_suggestions({"suggestions": [{"name": "X"}]}, None, "")
+    assert out == [{"name": "X"}]
+
+
+def test_extract_suggestions_list_shape():
+    out = _extract_suggestions([{"name": "Y"}], None, "")
+    assert out == [{"name": "Y"}]
+
+
+def test_extract_suggestions_unexpected_scalar_warns(caplog):
+    with caplog.at_level(logging.WARNING, logger="app.services.vision"):
+        out = _extract_suggestions(42, photo_id=7, sample="42")
+    assert out == []
+    assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+def test_extract_suggestions_dict_with_non_list_value_warns(caplog):
+    with caplog.at_level(logging.WARNING, logger="app.services.vision"):
+        out = _extract_suggestions({"suggestions": "not a list"}, photo_id=8, sample="")
+    assert out == []
+    assert any(r.levelno >= logging.WARNING for r in caplog.records)
