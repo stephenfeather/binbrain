@@ -23,21 +23,42 @@ _PROMPT = (
 def _parse_suggestions(raw_content: str, photo_id: int | None = None) -> list[dict]:
     """Parse vision-model content into a list of suggestion dicts.
 
-    Current (pre-fix) behavior: strips <think> tags and markdown fences,
-    json-loads, expects {"suggestions": [...]} object, returns [] on any
-    failure. This will be made tolerant in a follow-up.
+    qwen3-vl:2b is non-deterministic about its wrapping: it may emit
+    ``{"suggestions": [...]}`` (the requested schema) or a bare JSON list
+    ``[...]``. Both shapes are accepted. Anything else is a parse failure
+    and is logged at WARN with the photo_id and a payload sample so that
+    schema drift is debuggable rather than silently swallowed.
     """
     content = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
     content = re.sub(r"^```(?:json)?\s*", "", content).rstrip("` \n")
 
     try:
         parsed = json.loads(content)
-        return [
-            s for s in parsed.get("suggestions", [])
-            if isinstance(s, dict) and s.get("name")
-        ]
-    except (json.JSONDecodeError, AttributeError):
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "event=vision_parse_failed reason=json_decode photo_id=%s exc=%s sample=%r",
+            photo_id, exc.__class__.__name__, content[:200],
+        )
         return []
+
+    if isinstance(parsed, dict):
+        items = parsed.get("suggestions")
+        if not isinstance(items, list):
+            logger.warning(
+                "event=vision_parse_failed reason=missing_suggestions_key photo_id=%s keys=%s sample=%r",
+                photo_id, list(parsed.keys()), content[:200],
+            )
+            return []
+    elif isinstance(parsed, list):
+        items = parsed
+    else:
+        logger.warning(
+            "event=vision_parse_failed reason=unexpected_type photo_id=%s type=%s sample=%r",
+            photo_id, type(parsed).__name__, content[:200],
+        )
+        return []
+
+    return [s for s in items if isinstance(s, dict) and s.get("name")]
 
 
 def _load_and_resize(photo_path: str, max_px: int) -> bytes:
