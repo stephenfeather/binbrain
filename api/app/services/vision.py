@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 _PROMPT = (
     'Return ONLY valid JSON using the schema '
-    '{"suggestions":[{"name":"string","category":"fastener|electronics|tool|label_packaging|other","confidence":0.0}]} '
-    'List all item types visible. No explanation, no markdown.'
+    '{"suggestions":[{"name":"string","category":"fastener|electronics|tool|label_packaging|other","confidence":0.0,"bbox":[x1,y1,x2,y2]}]} '
+    'List all item types visible. For each item include a bbox with pixel coordinates [x1,y1,x2,y2] of the bounding box. No explanation, no markdown.'
 )
 
 
@@ -32,6 +32,7 @@ class SuggestedItem(BaseModel):
     name: str
     category: str | None = None
     confidence: float | None = None
+    bbox: list[int] | None = None
 
 
 class SuggestResponseSchema(BaseModel):
