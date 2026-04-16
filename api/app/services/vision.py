@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 
 from PIL import Image
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,35 @@ _PROMPT = (
     '{"suggestions":[{"name":"string","category":"fastener|electronics|tool|label_packaging|other","confidence":0.0}]} '
     'List up to 5 likely item types visible. No explanation, no markdown.'
 )
+
+
+class SuggestedItem(BaseModel):
+    """Raw vision-model suggestion for a single item in a photo.
+
+    Fields mirror the ``SuggestionItem`` schema in ``docs/openapi.yaml``,
+    limited to what the vision model actually produces. Route-level
+    enrichment (``bins``, ``match``) is attached downstream and is NOT
+    part of the Ollama output contract.
+    """
+
+    name: str
+    category: str | None = None
+    confidence: float | None = None
+
+
+class SuggestResponseSchema(BaseModel):
+    """Wrapper schema handed to Ollama as ``format=<schema>`` so the server
+    enforces the ``{"suggestions": [...]}`` envelope on its end (Finding #27).
+
+    Dev1_009 confirmed qwen3-vl:2b honors this: 6/6 calls produced conforming
+    JSON. The defensive parser in :func:`_parse_suggestions` is retained as
+    belt-and-suspenders for older Ollama builds or models that ignore ``format``.
+    """
+
+    suggestions: list[SuggestedItem]
+
+
+_SUGGEST_SCHEMA: dict = SuggestResponseSchema.model_json_schema()
 
 
 def _extract_suggestions(parsed: object, photo_id: int | None, sample: str) -> list[dict]:
@@ -112,6 +142,7 @@ def describe_photo(
                 "images": [image_b64],
             }
         ],
+        "format": _SUGGEST_SCHEMA,
         "stream": False,
         "keep_alive": -1,
     }
