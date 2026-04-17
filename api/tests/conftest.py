@@ -34,8 +34,9 @@ def _stub_fastembed() -> None:
 # ``confirmed_classes`` are EXCLUDED because they are populated by
 # session-scope fixtures or app startup and must survive across tests.
 _TRUNCATE_BETWEEN_TESTS_SQL = (
-    "TRUNCATE photo_group_items, photo_detection_groups, photo_detections, "
-    "photo_labels, item_embeddings, bin_items, photos, items, bins, "
+    "TRUNCATE photo_suggestion_outcomes, photo_group_items, "
+    "photo_detection_groups, photo_detections, photo_labels, "
+    "item_embeddings, bin_items, photos, items, bins, "
     "locations RESTART IDENTITY CASCADE"
 )
 
@@ -43,8 +44,9 @@ _TRUNCATE_BETWEEN_TESTS_SQL = (
 # from the same state as the very first run. (Problem A acceptance:
 # SELECT COUNT(*) FROM api_keys post-run == pre-run.)
 _TRUNCATE_ALL_SQL = (
-    "TRUNCATE photo_group_items, photo_detection_groups, photo_detections, "
-    "photo_labels, item_embeddings, bin_items, photos, items, bins, "
+    "TRUNCATE photo_suggestion_outcomes, photo_group_items, "
+    "photo_detection_groups, photo_detections, photo_labels, "
+    "item_embeddings, bin_items, photos, items, bins, "
     "locations, settings, confirmed_classes, api_keys RESTART IDENTITY CASCADE"
 )
 
@@ -53,6 +55,7 @@ def _init_schema(engine) -> None:
     ddl = """
     CREATE EXTENSION IF NOT EXISTS vector;
 
+    DROP TABLE IF EXISTS photo_suggestion_outcomes CASCADE;
     DROP TABLE IF EXISTS photo_detection_groups CASCADE;
     DROP TABLE IF EXISTS photo_detections CASCADE;
     DROP TABLE IF EXISTS photo_labels CASCADE;
@@ -191,6 +194,26 @@ def _init_schema(engine) -> None:
 
     CREATE UNIQUE INDEX photo_group_items_uq
     ON photo_group_items (photo_id, model, label, category, item_id);
+
+    CREATE TABLE photo_suggestion_outcomes (
+      id               bigserial PRIMARY KEY,
+      photo_id         bigint NOT NULL REFERENCES photos(photo_id) ON DELETE CASCADE,
+      vision_model     text   NOT NULL,
+      prompt_version   text,
+      label            text   NOT NULL,
+      category         text,
+      confidence       double precision,
+      bbox             double precision[],
+      shown_at         timestamptz NOT NULL,
+      decision         text   NOT NULL
+                       CHECK (decision IN ('accepted', 'rejected', 'edited', 'ignored')),
+      edited_to_label  text,
+      decided_at       timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX photo_suggestion_outcomes_photo_idx
+        ON photo_suggestion_outcomes (photo_id);
+    CREATE INDEX photo_suggestion_outcomes_decision_idx
+        ON photo_suggestion_outcomes (decision);
 
     DROP TABLE IF EXISTS api_keys CASCADE;
     CREATE TABLE api_keys (
