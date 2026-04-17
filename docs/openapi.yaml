@@ -459,6 +459,59 @@ components:
           items: { $ref: "#/components/schemas/ConfirmResult" }
       additionalProperties: false
 
+    # Phase 2 data capture: rejection outcomes
+    SuggestionOutcome:
+      type: object
+      required: [label, shown_at, decision]
+      properties:
+        label:      { type: string, minLength: 1 }
+        category:   { type: ["string", "null"] }
+        confidence: { type: ["number", "null"] }
+        bbox:
+          description: "Optional 4-element [x1,y1,x2,y2] bounding box."
+          oneOf:
+            - type: "null"
+            - type: array
+              items: { type: number }
+              minItems: 4
+              maxItems: 4
+        shown_at:
+          type: string
+          format: date-time
+          description: "Client-supplied timestamp at which iOS presented the suggestion."
+        decision:
+          type: string
+          enum: [accepted, rejected, edited, ignored]
+        edited_to_label:
+          type: ["string", "null"]
+          description: "Required when `decision` is `edited`; otherwise null/omitted."
+      additionalProperties: false
+
+    SuggestionOutcomesRequest:
+      type: object
+      required: [vision_model, decisions]
+      properties:
+        vision_model:
+          type: string
+          description: "Model identifier the decisions refer to. Stored verbatim."
+        prompt_version:
+          type: ["string", "null"]
+          description: "Optional prompt revision tag (matches `photo_detections.prompt_version`)."
+        decisions:
+          type: array
+          description: "Full presented-list for the photo. Empty list is a valid no-op."
+          items: { $ref: "#/components/schemas/SuggestionOutcome" }
+      additionalProperties: false
+
+    SuggestionOutcomesResponse:
+      type: object
+      required: [version, photo_id, outcomes_recorded]
+      properties:
+        version:            { type: string, enum: ["1"] }
+        photo_id:           { type: integer, minimum: 1 }
+        outcomes_recorded:  { type: integer, minimum: 0 }
+      additionalProperties: false
+
     # Search
     SearchResultItem:
       type: object
@@ -1562,6 +1615,55 @@ paths:
                 bin_id: "B-42"
                 results:
                   - { group_key: "screw|fastener", item_id: 15, fingerprint: "screw|fastener", status: "created" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /photos/{photo_id}/outcomes:
+    post:
+      summary: Record the full user-decision list for a photo's VLM suggestions
+      operationId: postPhotoSuggestionOutcomes
+      tags: [Photos]
+      description: |
+        Fire-and-forget telemetry. The client submits every suggestion that
+        was presented for this photo along with the user's decision
+        (`accepted`, `rejected`, `edited`, `ignored`). Intended to be called
+        AFTER a successful `/confirm`; failure here must not block or reverse
+        the confirm path.
+
+        Idempotent per `(photo_id, vision_model)`: the server replaces any
+        prior outcomes for that pair with the new batch atomically. Outcomes
+        recorded under a different `vision_model` on the same photo are
+        preserved.
+
+        Validation is fail-closed (400/422) but never 5xx in the normal
+        case — clients log and drop.
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SuggestionOutcomesRequest" }
+            example:
+              vision_model: "accounts/fireworks/models/qwen3p6-plus"
+              prompt_version: "v2"
+              decisions:
+                - { label: "hex bolt", category: "fastener", confidence: 0.91, bbox: [0.12, 0.34, 0.40, 0.68], shown_at: "2026-04-17T19:32:01Z", decision: "accepted" }
+                - { label: "lamp base", confidence: 0.74, shown_at: "2026-04-17T19:32:01Z", decision: "rejected" }
+                - { label: "plastic gear", shown_at: "2026-04-17T19:32:01Z", decision: "edited", edited_to_label: "brass gear" }
+      responses:
+        "200":
+          description: Outcomes recorded (or idempotently replaced).
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuggestionOutcomesResponse" }
+              example:
+                version: "1"
+                photo_id: 123
+                outcomes_recorded: 3
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
