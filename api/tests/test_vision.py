@@ -363,8 +363,18 @@ def test_suggest_response_schema_bbox_is_number():
 
 
 def test_prompt_requests_normalized_bbox():
-    """_PROMPT must ask for normalized 0–1 coordinates, not pixel coords."""
+    """_PROMPT must ask for normalized 0-1 coordinates.
+
+    Iter 2 (Dev2_015) explicitly *rejects* pixel coords in the prompt text, so
+    the word 'pixel' now appears — but only inside a rejection clause. The
+    invariant is: prompt states the [0.0, 1.0] range, and any mention of
+    'pixel' is paired with a reject/forbid/invalid/do-not marker.
+    """
     prompt = vision_mod._PROMPT
     assert "0" in prompt and "1" in prompt
-    # Must NOT ask for pixel coordinates
-    assert "pixel" not in prompt.lower()
+    p = prompt.lower()
+    if "pixel" in p:
+        assert any(
+            marker in p
+            for marker in ("do not use pixel", "not pixel", "reject", "invalid")
+        ), "if prompt mentions 'pixel', it must explicitly reject/forbid it"

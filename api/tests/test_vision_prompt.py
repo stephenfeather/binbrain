@@ -39,10 +39,13 @@ def test_prompt_contains_omission_fallback():
 
 
 def test_prompt_contains_few_shot_example():
-    """A GOOD/BAD bbox example helps VLMs calibrate. Keep tokens minimal."""
+    """A calibrating example pair (GOOD/BAD or VALID/INVALID) helps VLMs.
+    Iter 2 uses VALID/INVALID framing so the numeric contrast lands harder."""
     p = _PROMPT.lower()
-    assert "good" in p and "bad" in p, (
-        "prompt should include a minimal good-vs-bad bbox few-shot example"
+    has_good_bad = "good" in p and "bad" in p
+    has_valid_invalid = "valid" in p and "invalid" in p
+    assert has_good_bad or has_valid_invalid, (
+        "prompt should include a calibrating bbox example pair"
     )
 
 
