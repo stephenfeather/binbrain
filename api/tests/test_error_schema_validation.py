@@ -11,7 +11,7 @@ def test_not_found_error_schema(client):
 
 
 def test_bad_request_error_schema(client):
-    resp = client.post("/items", data={"name": ""})
+    resp = client.post("/items", json={"name": ""})
     assert resp.status_code == 400
     validate_schema("https://binbrain.local/schemas/error.response.json", resp.json())
 

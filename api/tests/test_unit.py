@@ -64,7 +64,7 @@ def test_embedding_dimension_validation(client, app_module, monkeypatch):
     monkeypatch.setattr(items_mod, "embed_text", bad_embed)
     resp = client.post(
         "/items",
-        data={"name": "test item", "category": "test", "notes": "n"},
+        json={"name": "test item", "category": "test", "notes": "n"},
     )
     assert resp.status_code == 500
     assert "unexpected embedding dims" in resp.text

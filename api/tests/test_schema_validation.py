@@ -24,7 +24,7 @@ def test_ingest_schema(client, valid_jpeg_bytes):
 def test_items_schema(client):
     resp = client.post(
         "/items",
-        data={"name": "Schema Item", "category": "fastener"},
+        json={"name": "Schema Item", "category": "fastener"},
     )
     assert resp.status_code == 200
     validate_schema("https://binbrain.local/schemas/items.post.response.json", resp.json())
@@ -40,7 +40,7 @@ def test_bin_get_schema(client):
     bin_id = "BIN-SCHEMA-GET-0001"
     resp = client.post(
         "/items",
-        data={"name": "Schema Bin Item", "category": "fastener", "bin_id": bin_id},
+        json={"name": "Schema Bin Item", "category": "fastener", "bin_id": bin_id},
     )
     assert resp.status_code == 200
 

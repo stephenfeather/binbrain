@@ -17,7 +17,7 @@ class TestBinsWithLocation:
 
     def test_list_bins_includes_location(self, client, db):
         self._cleanup(db)
-        loc_resp = client.post("/locations", data={"name": "Garage"})
+        loc_resp = client.post("/locations", json={"name": "Garage"})
         loc_id = loc_resp.json()["location"]["location_id"]
         db.execute(
             text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-WITH-LOC', :loc_id)"),
@@ -47,7 +47,7 @@ class TestBinsWithLocation:
 
     def test_get_bin_includes_location(self, client, db):
         self._cleanup(db)
-        loc_resp = client.post("/locations", data={"name": "Kitchen"})
+        loc_resp = client.post("/locations", json={"name": "Kitchen"})
         loc_id = loc_resp.json()["location"]["location_id"]
         db.execute(
             text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-DETAIL-LOC', :loc_id)"),

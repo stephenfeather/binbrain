@@ -60,7 +60,7 @@ def test_create_item_500_does_not_leak_exception_text(client, monkeypatch):
     monkeypatch.setattr(repo, "insert_item", _fail)
 
     try:
-        resp = client.post("/items", data={"name": "test item"})
+        resp = client.post("/items", json={"name": "test item"})
         assert resp.status_code == 500, f"Expected 500, got {resp.status_code}: {resp.text}"
         msg = resp.json()["error"]["message"]
         assert "psycopg" not in msg, f"DB driver name in response: {msg!r}"

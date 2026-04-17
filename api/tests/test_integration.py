@@ -5,11 +5,11 @@ from sqlalchemy import text
 def test_create_item_twice_idempotent(client, db):
     payload = {"name": "M3 socket head cap screw 12mm", "category": "fastener"}
 
-    r1 = client.post("/items", data=payload)
+    r1 = client.post("/items", json=payload)
     assert r1.status_code == 200
     item_id_1 = r1.json()["item_id"]
 
-    r2 = client.post("/items", data=payload)
+    r2 = client.post("/items", json=payload)
     assert r2.status_code == 200
     item_id_2 = r2.json()["item_id"]
 
@@ -23,7 +23,7 @@ def test_bins_endpoints(client):
     bin_id = "BIN-TEST-0001"
     r_item = client.post(
         "/items",
-        data={"name": "Test Widget", "category": "widget", "bin_id": bin_id, "quantity": 2},
+        json={"name": "Test Widget", "category": "widget", "bin_id": bin_id, "quantity": 2},
     )
     assert r_item.status_code == 200
 
@@ -54,7 +54,7 @@ def test_photo_suggest_shape(client, db, valid_jpeg_bytes):
     bin_id = "BIN-PHOTO-0001"
     r = client.post(
         "/items",
-        data={"name": "Photo Item", "category": "widget", "bin_id": bin_id},
+        json={"name": "Photo Item", "category": "widget", "bin_id": bin_id},
     )
     assert r.status_code == 200
 
@@ -341,7 +341,7 @@ def test_soft_deleted_bin_hidden(client, db):
     bin_id = "BIN-DEL-0001"
     r_item = client.post(
         "/items",
-        data={"name": "Soft Delete Item", "category": "widget", "bin_id": bin_id},
+        json={"name": "Soft Delete Item", "category": "widget", "bin_id": bin_id},
     )
     assert r_item.status_code == 200
 
@@ -360,7 +360,7 @@ def test_soft_deleted_bin_hidden(client, db):
 def test_soft_deleted_item_hidden_from_search(client, db):
     r_item = client.post(
         "/items",
-        data={"name": "Hidden Item", "category": "widget"},
+        json={"name": "Hidden Item", "category": "widget"},
     )
     assert r_item.status_code == 200
     item_id = r_item.json()["item_id"]
@@ -379,7 +379,7 @@ def test_soft_deleted_item_hidden_from_search(client, db):
 # ---------------------------------------------------------------------------
 
 def test_create_item_with_upc(client, db):
-    resp = client.post("/items", data={"name": "UPC Widget", "category": "test", "upc": "111111111111"})
+    resp = client.post("/items", json={"name": "UPC Widget", "category": "test", "upc": "111111111111"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["upc"] == "111111111111"
@@ -388,20 +388,20 @@ def test_create_item_with_upc(client, db):
 
 
 def test_create_item_without_upc_unchanged(client):
-    resp = client.post("/items", data={"name": "No UPC Widget", "category": "test"})
+    resp = client.post("/items", json={"name": "No UPC Widget", "category": "test"})
     assert resp.status_code == 200
     assert resp.json()["upc"] is None
 
 
 def test_create_item_invalid_upc_rejected(client):
-    resp = client.post("/items", data={"name": "Bad UPC Item", "category": "test", "upc": "notaupc"})
+    resp = client.post("/items", json={"name": "Bad UPC Item", "category": "test", "upc": "notaupc"})
     assert resp.status_code == 400
     assert "invalid UPC" in resp.json()["error"]["message"]
 
 
 def test_null_upcs_do_not_conflict(client):
-    r1 = client.post("/items", data={"name": "No UPC Alpha", "category": "test"})
-    r2 = client.post("/items", data={"name": "No UPC Beta", "category": "test"})
+    r1 = client.post("/items", json={"name": "No UPC Alpha", "category": "test"})
+    r2 = client.post("/items", json={"name": "No UPC Beta", "category": "test"})
     assert r1.status_code == 200
     assert r2.status_code == 200
     assert r1.json()["item_id"] != r2.json()["item_id"]
@@ -410,11 +410,11 @@ def test_null_upcs_do_not_conflict(client):
 def test_upc_preserved_on_fingerprint_conflict(client, db):
     # Insert item with UPC, then re-insert same name+category without UPC.
     # The existing UPC must not be overwritten with NULL.
-    r1 = client.post("/items", data={"name": "Stable UPC Item", "category": "test", "upc": "222222222222"})
+    r1 = client.post("/items", json={"name": "Stable UPC Item", "category": "test", "upc": "222222222222"})
     assert r1.status_code == 200
     item_id = r1.json()["item_id"]
 
-    r2 = client.post("/items", data={"name": "Stable UPC Item", "category": "test"})
+    r2 = client.post("/items", json={"name": "Stable UPC Item", "category": "test"})
     assert r2.status_code == 200
     assert r2.json()["item_id"] == item_id
 
@@ -429,7 +429,7 @@ def test_upc_lookup_invalid_format(client):
 
 
 def test_upc_lookup_local_hit(client):
-    client.post("/items", data={"name": "Local UPC Item", "category": "test", "upc": "333333333333"})
+    client.post("/items", json={"name": "Local UPC Item", "category": "test", "upc": "333333333333"})
     resp = client.get("/upc/333333333333")
     assert resp.status_code == 200
     body = resp.json()
@@ -488,7 +488,7 @@ def test_add_to_bin_with_upc(client, db):
 
 def test_add_to_bin_reuses_existing_upc(client, db):
     # Create item with UPC via POST /items
-    r = client.post("/items", data={"name": "Original Name", "category": "test", "upc": "666666666666"})
+    r = client.post("/items", json={"name": "Original Name", "category": "test", "upc": "666666666666"})
     assert r.status_code == 200
     original_id = r.json()["item_id"]
 
@@ -509,7 +509,7 @@ def test_add_to_bin_reuses_existing_upc(client, db):
 
 def test_bin_items_include_upc(client):
     bin_id = "BIN-UPC-VIEW-001"
-    client.post("/items", data={
+    client.post("/items", json={
         "name": "Bin UPC Item", "category": "test", "upc": "777777777777", "bin_id": bin_id,
     })
     resp = client.get(f"/bins/{bin_id}")
@@ -521,7 +521,7 @@ def test_bin_items_include_upc(client):
 
 
 def test_search_results_include_upc(client):
-    client.post("/items", data={"name": "Searchable UPC Item", "category": "test", "upc": "888888888888"})
+    client.post("/items", json={"name": "Searchable UPC Item", "category": "test", "upc": "888888888888"})
     # Use limit=100 — stub embeddings are all identical so ordering is arbitrary
     resp = client.get("/search", params={"q": "Searchable UPC Item", "limit": 100})
     assert resp.status_code == 200
@@ -532,7 +532,7 @@ def test_search_results_include_upc(client):
 
 
 def test_search_results_include_upc_null_for_items_without(client):
-    client.post("/items", data={"name": "No UPC Search Item", "category": "test"})
+    client.post("/items", json={"name": "No UPC Search Item", "category": "test"})
     resp = client.get("/search", params={"q": "No UPC Search Item", "limit": 100})
     assert resp.status_code == 200
     results = resp.json()["results"]
