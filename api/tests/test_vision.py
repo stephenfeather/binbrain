@@ -266,3 +266,105 @@ def test_describe_photo_error_returns_empty(tmp_path, valid_jpeg_bytes, monkeypa
     )
     assert suggestions == []
     assert elapsed >= 0
+
+
+# ---------------------------------------------------------------------------
+# Dev2_008: Bounding box support in /suggest response.
+# bbox must be list[float] (normalized 0–1), passed through parser and
+# describe_photo, and reflected in the Pydantic schema.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_suggestions_bbox_passthrough():
+    """bbox field must survive parsing and appear in the output dict."""
+    raw = json.dumps({"suggestions": [
+        {"name": "Resistor", "category": "electronics", "confidence": 0.8,
+         "bbox": [0.1, 0.2, 0.5, 0.6]},
+    ]})
+    out = _parse_suggestions(raw)
+    assert len(out) == 1
+    assert out[0]["bbox"] == [0.1, 0.2, 0.5, 0.6]
+
+
+def test_parse_suggestions_bbox_none_when_absent():
+    """Items without bbox must still parse; bbox simply absent from dict."""
+    raw = json.dumps({"suggestions": [
+        {"name": "Bolt", "category": "fastener", "confidence": 0.9},
+    ]})
+    out = _parse_suggestions(raw)
+    assert len(out) == 1
+    assert "bbox" not in out[0] or out[0].get("bbox") is None
+
+
+def test_describe_photo_bbox_passthrough(tmp_path, valid_jpeg_bytes, monkeypatch):
+    """describe_photo must pass bbox floats through to the caller."""
+    captured: dict = {}
+    _patch_openai(
+        monkeypatch, captured,
+        response_content=json.dumps({"suggestions": [
+            {"name": "Capacitor", "category": "electronics", "confidence": 0.7,
+             "bbox": [0.12, 0.34, 0.56, 0.78]},
+        ]}),
+    )
+
+    photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
+    suggestions, _elapsed = describe_photo(
+        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+    )
+    assert len(suggestions) == 1
+    assert suggestions[0]["bbox"] == [0.12, 0.34, 0.56, 0.78]
+
+
+def test_describe_photo_mixed_bbox_and_no_bbox(tmp_path, valid_jpeg_bytes, monkeypatch):
+    """Response with some items having bbox and others not must preserve both."""
+    captured: dict = {}
+    _patch_openai(
+        monkeypatch, captured,
+        response_content=json.dumps({"suggestions": [
+            {"name": "Bolt", "bbox": [0.0, 0.0, 0.5, 0.5]},
+            {"name": "Washer"},
+        ]}),
+    )
+
+    photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
+    suggestions, _elapsed = describe_photo(
+        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+    )
+    assert len(suggestions) == 2
+    assert suggestions[0]["bbox"] == [0.0, 0.0, 0.5, 0.5]
+    assert suggestions[1].get("bbox") is None
+
+
+def test_suggested_item_bbox_accepts_floats():
+    """SuggestedItem.bbox must accept float values (normalized 0–1 coords)."""
+    from app.services.vision import SuggestedItem
+    item = SuggestedItem(name="Screw", bbox=[0.1, 0.2, 0.3, 0.4])
+    assert item.bbox == [0.1, 0.2, 0.3, 0.4]
+    assert all(isinstance(v, float) for v in item.bbox)
+
+
+def test_suggest_response_schema_bbox_is_number():
+    """The JSON Schema for SuggestedItem.bbox items must be 'number' (not 'integer')
+    so Ollama/Fireworks emit normalized 0–1 floats."""
+    schema = vision_mod.SuggestResponseSchema.model_json_schema()
+    item_schema = schema["properties"]["suggestions"]["items"]
+    if "$ref" in item_schema:
+        ref = item_schema["$ref"].rsplit("/", 1)[-1]
+        item_schema = schema["$defs"][ref]
+    bbox_prop = item_schema["properties"]["bbox"]
+    # bbox is anyOf: [list-of-number, null]
+    array_schema = next(
+        s for s in bbox_prop.get("anyOf", [bbox_prop])
+        if s.get("type") == "array"
+    )
+    assert array_schema["items"]["type"] == "number", (
+        f"bbox items must be 'number' (float), got {array_schema['items']}"
+    )
+
+
+def test_prompt_requests_normalized_bbox():
+    """_PROMPT must ask for normalized 0–1 coordinates, not pixel coords."""
+    prompt = vision_mod._PROMPT
+    assert "0" in prompt and "1" in prompt
+    # Must NOT ask for pixel coordinates
+    assert "pixel" not in prompt.lower()
