@@ -47,6 +47,7 @@
     "photo_id": { "type": "integer", "minimum": 1 },
     "model": { "type": "string" },
     "vision_elapsed_ms": { "type": "integer", "minimum": 0 },
+    "cached": { "type": "boolean" },
     "suggestions": {
       "type": "array",
       "items": { "$ref": "https://binbrain.local/schemas/suggestion.item.json" }

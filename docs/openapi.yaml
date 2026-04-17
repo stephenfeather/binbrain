@@ -340,7 +340,10 @@ components:
         version:           { type: string, enum: ["1"] }
         photo_id:          { type: integer, minimum: 1 }
         model:             { type: string, example: "qwen3-vl:4b" }
-        vision_elapsed_ms: { type: integer, minimum: 0, description: "Full Ollama round-trip in milliseconds." }
+        vision_elapsed_ms: { type: integer, minimum: 0, description: "Full vision round-trip in milliseconds. 0 when served from the photo_detections cache." }
+        cached:
+          type: boolean
+          description: "True when suggestions were served from the photo_detections cache (populated by a prior /suggest call for the same photo + model). False when this call triggered a fresh vision request. Clients may ignore this; future UI may surface a 'Re-analyze' action to force ?refresh=true."
         suggestions:
           type: array
           items: { $ref: "#/components/schemas/SuggestionItem" }
@@ -1346,6 +1349,11 @@ paths:
           required: false
           schema: { type: string }
           description: "Override the vision model for this request (e.g. `qwen3-vl:2b`)."
+        - name: refresh
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: "Force a fresh vision call even if persisted suggestions exist for this (photo_id, model). Replaces the cached photo_detections rows."
       responses:
         "200":
           description: Suggestions sorted by descending confidence.
