@@ -16,7 +16,7 @@ from app.deps import (
 from app.services.detection import detect, get_model_name
 from app.services.rate_limiter import require_vision_rate_limit
 from app.services.suggest_tracker import get_tracker
-from app.services.vision import _PROMPT_VERSION, describe_photo
+from app.services.vision import PROMPT_VERSION, describe_photo
 
 router = APIRouter()
 
@@ -179,7 +179,7 @@ def suggest_for_photo(
                     photo_id,
                     vision_model,
                     rows,
-                    prompt_version=_PROMPT_VERSION,
+                    prompt_version=PROMPT_VERSION,
                 )
             db_write.commit()
         finally:

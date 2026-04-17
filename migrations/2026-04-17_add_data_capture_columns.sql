@@ -13,7 +13,7 @@
 --     iOS will wire this up later; server accepts it now.
 --
 --   * photo_detections.prompt_version — the vision prompt revision that
---     produced each row (sourced from app.services.vision._PROMPT_VERSION).
+--     produced each row (sourced from app.services.vision.PROMPT_VERSION).
 --     Without this column, "is prompt v2 better than v1?" is unanswerable
 --     from data.
 --
