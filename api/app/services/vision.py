@@ -13,6 +13,13 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+# Dev2_016: manual prompt-version stamp. Bumped by hand whenever `_PROMPT`
+# below is materially changed. Persisted on every photo_detections row written
+# by the /suggest path so "did prompt v2 beat v1?" is answerable from data.
+# Explicit > hashing: keeps the provenance readable in the DB.
+# Public (no leading underscore) because it's imported by app.routes.photos.
+PROMPT_VERSION = "v2"
+
 # Dev2_015 iter 2: prior iter 1 prompt was not followed by Fireworks — logs
 # showed bbox=[86,138,991,997] (pixels, not 0-1) and one suggestion per photo.
 # This version states the bbox coordinate range TWICE (top and bottom), gives

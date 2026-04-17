@@ -137,6 +137,9 @@ def _init_schema(engine) -> None:
       bin_id text REFERENCES bins(bin_id) ON DELETE CASCADE,
       path text NOT NULL,
       device_metadata jsonb,
+      width integer,
+      height integer,
+      session_id text,
       created_at timestamptz DEFAULT now()
     );
 
@@ -161,6 +164,7 @@ def _init_schema(engine) -> None:
       y1 float NOT NULL,
       x2 float NOT NULL,
       y2 float NOT NULL,
+      prompt_version text,
       created_at timestamptz DEFAULT now()
     );
 
