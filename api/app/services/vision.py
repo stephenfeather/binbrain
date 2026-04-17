@@ -13,22 +13,31 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-# Dev2_015: tightened per-object bbox guidance. Prior prompt specified FORMAT
-# but let Fireworks return near-full-image boxes (e.g. [0.03, 0.11, 0.97, 0.9])
-# that stacked on iOS overlays and looked invisible. This version requires
-# tight, per-instance boxes and provides a minimal good/bad few-shot. Keep the
-# strict JSON-only contract and the existing category vocabulary.
+# Dev2_015 iter 2: prior iter 1 prompt was not followed by Fireworks — logs
+# showed bbox=[86,138,991,997] (pixels, not 0-1) and one suggestion per photo.
+# This version states the bbox coordinate range TWICE (top and bottom), gives
+# explicit VALID-vs-INVALID numeric examples, and a concrete multi-item example
+# so the model cannot collapse to a single whole-image box. Strict JSON-only
+# output contract and existing category vocabulary preserved. A server-side
+# normalization safety net (`_normalize_bboxes`) remains in place in case the
+# model still ignores these instructions.
 _PROMPT = (
+    'RULE: Every bbox value must be a decimal between 0.0 and 1.0 inclusive. '
+    'Do NOT use pixel coordinates under any circumstances. '
     'Return ONLY valid JSON using the schema '
     '{"suggestions":[{"name":"string","category":"fastener|electronics|tool|label_packaging|other","confidence":0.0,"bbox":[x1,y1,x2,y2]}]} '
     'Coordinates are normalized 0-1 with the top-left origin. '
-    'Each bbox MUST tightly enclose ONLY the named object, cropped to the object\'s visible extent. '
+    'Each bbox MUST tightly enclose ONLY the named object, cropped to its visible extent. '
     'Do NOT return the whole image as a bbox. A single object\'s bbox should almost never exceed 50% of the image area '
-    '(unless the object is a single large surface — e.g. a wall or floor — that fills the frame). '
-    'Emit one bbox per visible instance: if two staplers are visible, return two entries with the same "name" and distinct bboxes. '
-    'GOOD example: a stapler in the lower-left quadrant -> "bbox":[0.05,0.55,0.45,0.95]. '
-    'BAD example (do not emit): the same stapler with "bbox":[0,0,1,1] (whole-image box, not localized). '
-    'If you cannot localize an object, OMIT it from "suggestions" — do not return approximate or placeholder boxes. '
+    '(unless it is a single large surface — e.g. a wall or floor — that fills the frame). '
+    'VALID bbox: [0.05, 0.30, 0.45, 0.80] (all values in [0, 1]). '
+    'INVALID bbox: [50, 300, 450, 800] (these are pixel values — REJECT and REDO). '
+    'Emit one bbox per visible instance: if you see a stapler AND a mug, return TWO suggestions: '
+    '[{"name":"stapler","bbox":[0.1,0.4,0.4,0.75]},{"name":"mug","bbox":[0.55,0.2,0.85,0.6]}]. '
+    'Do NOT merge distinct objects into a single whole-image bbox. '
+    'If you cannot precisely localize distinct objects, return an empty list "suggestions": [] — '
+    'do NOT return approximate, placeholder, or whole-image boxes. OMIT items you cannot localize. '
+    'FINAL REMINDER: each bbox coordinate must be a decimal between 0.0 and 1.0. '
     'No explanation, no markdown.'
 )
 
@@ -68,12 +77,68 @@ _SUGGEST_SCHEMA: dict = SuggestResponseSchema.model_json_schema()
 # telemetry only — we do not drop the row, per policy in the task prompt.
 _WHOLE_IMAGE_BBOX_COVERAGE_THRESHOLD = 0.7
 
+# Dev2_015 iter 2: any bbox component strictly above this threshold is treated
+# as pixel-space and gets normalized against the image dimensions. Normalized
+# coords are in [0, 1]; a value like 1.05 is a rounding artefact, 1.5 cleanly
+# separates that from "definitely pixels" (e.g. 86 or 991).
+_PIXEL_BBOX_THRESHOLD = 1.5
+
+
+def _normalize_bboxes(
+    suggestions: list[dict],
+    image_dims: tuple[int, int] | None,
+    photo_id: int | None,
+) -> None:
+    """Convert pixel-space bboxes to normalized 0-1 floats in place.
+
+    Fireworks (observed with qwen3p6-plus, Dev2_015 iter 1) ignores the prompt
+    instruction and returns raw pixel values like ``[86, 138, 991, 997]``. iOS
+    clamps each coord to [0, 1] so every pixel value becomes 1 and overlays
+    collapse to nothing. This helper detects pixel-space bboxes (any component
+    > 1.5) and divides by the image dimensions, clamping into [0, 1].
+
+    No-op when ``image_dims`` is ``None`` (image failed to open earlier) or
+    when every value is already within range.
+    """
+    if image_dims is None:
+        return
+    width, height = image_dims
+    if width <= 0 or height <= 0:
+        return
+
+    for s in suggestions:
+        bbox = s.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        try:
+            x1, y1, x2, y2 = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            continue
+        if max(abs(x1), abs(y1), abs(x2), abs(y2)) <= _PIXEL_BBOX_THRESHOLD:
+            continue  # already normalized
+
+        original = [x1, y1, x2, y2]
+        nx1 = min(1.0, max(0.0, x1 / width))
+        ny1 = min(1.0, max(0.0, y1 / height))
+        nx2 = min(1.0, max(0.0, x2 / width))
+        ny2 = min(1.0, max(0.0, y2 / height))
+        s["bbox"] = [nx1, ny1, nx2, ny2]
+
+        logger.info(
+            "event=vision.bbox.normalized photo_id=%s name=%s from_pixel=%s "
+            "to_normalized=[%.3f,%.3f,%.3f,%.3f] image_size=(%d,%d)",
+            photo_id, s.get("name"), original, nx1, ny1, nx2, ny2, width, height,
+        )
+
 
 def _log_suspicious_bboxes(suggestions: list[dict], photo_id: int | None) -> None:
-    """Emit a WARN line for each suggestion whose bbox covers ≥70% of the
-    image. Does NOT mutate the list — the row is kept so downstream clients
-    see exactly what the model returned, but the telemetry is loud enough
-    that prompt-regression pagers fire before any user complaint does.
+    """Emit a WARN line for each suggestion whose (normalized) bbox covers
+    ≥70% of the image. Expects bboxes to already be in [0, 1] — call
+    :func:`_normalize_bboxes` first.
+
+    Does NOT mutate the list — the row is kept so downstream clients see
+    exactly what the model returned, but the telemetry is loud enough that
+    prompt-regression pagers fire before any user complaint does.
     """
     for s in suggestions:
         bbox = s.get("bbox")
@@ -142,18 +207,22 @@ def _parse_suggestions(raw_content: str, photo_id: int | None = None) -> list[di
     return _extract_suggestions(parsed, photo_id, content[:200])
 
 
-def _load_and_resize(photo_path: str, max_px: int) -> bytes:
-    """Load image and downscale so the longest side is at most max_px.
+def _load_and_resize(photo_path: str, max_px: int) -> tuple[bytes, tuple[int, int]]:
+    """Load image and downscale so the longest side is at most ``max_px``.
 
-    Returns JPEG bytes. Never upscales. Raises OSError if the file can't be read.
+    Returns ``(jpeg_bytes, (w, h))`` where the dims reflect the *post-resize*
+    size — i.e. the coordinate space the vision model sees. Downstream bbox
+    normalization must divide by THESE dims (not the original) so ratios are
+    correct. Never upscales. Raises ``OSError`` if the file can't be read.
     """
     with Image.open(photo_path) as img:
         img = img.convert("RGB")
         if max(img.width, img.height) > max_px:
             img.thumbnail((max_px, max_px), Image.LANCZOS)
+        dims = (img.width, img.height)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
-        return buf.getvalue()
+        return buf.getvalue(), dims
 
 
 def describe_photo(
@@ -174,7 +243,7 @@ def describe_photo(
     Image is downscaled to max_px on the longest side before sending.
     """
     try:
-        image_bytes = _load_and_resize(photo_path, max_px)
+        image_bytes, image_dims = _load_and_resize(photo_path, max_px)
     except (OSError, Exception):
         return [], 0
 
@@ -215,5 +284,9 @@ def describe_photo(
     logger.debug("event=vision_response_raw photo_id=%s content=%r", photo_id, content[:500] if content else None)
 
     suggestions = _parse_suggestions(content, photo_id)
+    # Dev2_015 iter 2: normalize pixel coords BEFORE the whole-image check.
+    # Fireworks ignores the prompt's 0-1 instruction and emits raw pixels;
+    # iOS clamps to [0,1] so pixel values render as invisible overlays.
+    _normalize_bboxes(suggestions, image_dims, photo_id)
     _log_suspicious_bboxes(suggestions, photo_id)
     return suggestions, elapsed_ms
