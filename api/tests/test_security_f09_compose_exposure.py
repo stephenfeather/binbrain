@@ -5,6 +5,8 @@ preventing exposure on networked interfaces.
 """
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).parent.parent.parent  # tests/ → api/ → repo root
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 
@@ -28,6 +30,13 @@ def test_db_port_bound_to_localhost():
     )
 
 
+@pytest.mark.xfail(
+    reason=(
+        "F-09 intentionally reverted 1dd5dbf — API now exposed on all interfaces "
+        "for LAN access; tests preserved as audit trail of old policy"
+    ),
+    strict=False,
+)
 def test_api_port_bound_to_localhost():
     """API must be bound to 127.0.0.1, not all interfaces."""
     text = _compose_text()
@@ -49,6 +58,13 @@ def test_db_port_not_exposed_bare():
             assert False, f"DB port exposed without host binding: {line!r}"
 
 
+@pytest.mark.xfail(
+    reason=(
+        "F-09 intentionally reverted 1dd5dbf — API now exposed on all interfaces "
+        "for LAN access; tests preserved as audit trail of old policy"
+    ),
+    strict=False,
+)
 def test_api_port_not_exposed_bare():
     """Bare port mapping '${API_PORT:-8000}:8000' (without 127.0.0.1 prefix) must not exist."""
     text = _compose_text()
