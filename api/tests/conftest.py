@@ -225,23 +225,24 @@ def _init_schema(engine) -> None:
         conn.execute(text(ddl))
 
 
+# Ensure this directory is on sys.path so sibling modules (e.g. _db_guard) are
+# importable during conftest evaluation, before pytest's usual rootdir setup.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _db_guard import test_db_isolation_error as _test_db_isolation_error
+
+
 @pytest.fixture(scope="session")
 def app_module():
     test_db_url = os.environ.get("TEST_DATABASE_URL")
     if not test_db_url:
         pytest.skip("TEST_DATABASE_URL not set")
 
-    from urllib.parse import urlparse
-
-    parsed = urlparse(test_db_url.replace("postgresql+psycopg://", "postgresql://"))
-    db_name = (parsed.path or "").lstrip("/")
-    if db_name == "continuous_claude" or parsed.username == "claude":
-        pytest.fail(
-            f"TEST_DATABASE_URL points at the cross-terminal coordination DB "
-            f"(user={parsed.username!r}, db={db_name!r}). Refusing to run — this "
-            f"would drop/recreate binbrain tables in continuous_claude. "
-            f"Use the binbrain_db container (host port 5434)."
-        )
+    # Dev2_013 Problem B: fail-fast if the test URL is in any way unsafe
+    # (points at prod, missing 'test' marker, coordination DB, etc.) before
+    # any schema drop executes.
+    err = _test_db_isolation_error(test_db_url, os.environ.get("DATABASE_URL"))
+    if err:
+        pytest.fail(err)
 
     os.environ["DATABASE_URL"] = test_db_url
     os.environ.setdefault("PHOTO_DIR", "/tmp/binbrain_test_photos")
