@@ -16,7 +16,7 @@ from app.deps import (
 from app.services.detection import detect, get_model_name
 from app.services.rate_limiter import require_vision_rate_limit
 from app.services.suggest_tracker import get_tracker
-from app.services.vision import describe_photo
+from app.services.vision import _PROMPT_VERSION, describe_photo
 
 router = APIRouter()
 
@@ -171,7 +171,16 @@ def suggest_for_photo(
             repository.clear_photo_detections(db_write, photo_id, vision_model)
             rows = [r for r in (_hit_to_detection_row(h) for h in vision_hits) if r is not None]
             if rows:
-                repository.insert_photo_detections(db_write, photo_id, vision_model, rows)
+                # Dev2_016: stamp the VLM prompt version on every persisted
+                # detection so A/B comparisons across prompt revisions are
+                # answerable from the DB.
+                repository.insert_photo_detections(
+                    db_write,
+                    photo_id,
+                    vision_model,
+                    rows,
+                    prompt_version=_PROMPT_VERSION,
+                )
             db_write.commit()
         finally:
             db_write.close()
