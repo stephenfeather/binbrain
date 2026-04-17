@@ -8,7 +8,7 @@ from typing import Optional
 
 import aiofiles
 from fastapi import APIRouter, Depends, HTTPException, Form, Body, UploadFile, File
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -248,7 +248,7 @@ async def ingest(
         try:
             with Image.open(final_path) as img:
                 pw, ph = ImageOps.exif_transpose(img).size
-        except Exception as exc:  # pragma: no cover - defensive; exercised by monkeypatch test
+        except (UnidentifiedImageError, OSError) as exc:
             logger.warning(
                 "event=ingest_dims_failed request_id=%s photo_path=%s err=%s",
                 db.info.get("request_id"),
