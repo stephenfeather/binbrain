@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,7 @@ from app.services.vision import describe_photo
 
 router = APIRouter()
 
-_SUGGEST_MATCH_THRESHOLD = 0.5
+_SUGGEST_MATCH_THRESHOLD = float(os.environ.get("SUGGEST_MATCH_THRESHOLD", "0.85"))
 
 
 def _is_path_under_photo_root(fpath: Path) -> bool:

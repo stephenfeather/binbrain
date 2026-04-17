@@ -1,6 +1,7 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import repository
@@ -13,17 +14,35 @@ from app.services.upc_lookup import validate_upc
 router = APIRouter()
 
 
+class CreateItemBody(BaseModel):
+    name: str
+    category: Optional[str] = None
+    notes: Optional[str] = None
+    upc: Optional[str] = None
+    bin_id: Optional[str] = None
+    confidence: Optional[float] = None
+    quantity: Optional[float] = None
+
+
+class AssociateItemBody(BaseModel):
+    bin_id: str
+    item_id: int
+    confidence: Optional[float] = None
+    quantity: Optional[float] = None
+
+
 @router.post("/items")
 def create_item(
-    name: str = Form(...),
-    category: Optional[str] = Form(None),
-    notes: Optional[str] = Form(None),
-    upc: Optional[str] = Form(None),
-    bin_id: Optional[str] = Form(None),
-    confidence: Optional[float] = Form(None),
-    quantity: Optional[float] = Form(None),
+    payload: CreateItemBody,
     db: Session = Depends(get_db),
 ):
+    name = payload.name
+    category = payload.category
+    notes = payload.notes
+    upc = payload.upc
+    bin_id = payload.bin_id
+    confidence = payload.confidence
+    quantity = payload.quantity
     name = (name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
@@ -83,13 +102,13 @@ def create_item(
 
 @router.post("/associate")
 def associate_item(
-    bin_id: str = Form(...),
-    item_id: int = Form(...),
-    confidence: Optional[float] = Form(None),
-    quantity: Optional[float] = Form(None),
+    payload: AssociateItemBody,
     db: Session = Depends(get_db),
 ):
-    bin_id = (bin_id or "").strip()
+    bin_id = (payload.bin_id or "").strip()
+    item_id = payload.item_id
+    confidence = payload.confidence
+    quantity = payload.quantity
     if not bin_id:
         raise HTTPException(status_code=400, detail="bin_id is required")
 

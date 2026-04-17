@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import repository
 from app.deps import (
-    get_db, SessionLocal, OLLAMA_URL, logger,
+    get_db, SessionLocal, OLLAMA_URL, VISION_BASE_URL, logger,
     get_active_vision_model, set_active_vision_model,
     get_max_image_px, set_max_image_px,
     get_detection_model_id, set_detection_model,
@@ -18,10 +18,33 @@ from app.services.rate_limiter import require_warmup_rate_limit
 router = APIRouter()
 
 
+def _is_local_ollama() -> bool:
+    """True when VISION_BASE_URL points to a local Ollama instance."""
+    return "localhost" in VISION_BASE_URL or "host.docker.internal" in VISION_BASE_URL or "127.0.0.1" in VISION_BASE_URL
+
+
 @router.get("/models")
 def list_models(request: Request = None):
-    """List vision models available on the Ollama server."""
+    """List available vision models and the active selection.
+
+    When VISION_BASE_URL points to a hosted provider (e.g. Fireworks.ai),
+    Ollama's model list is skipped and models returns empty — the active_model
+    and vision_provider fields describe the configured backend instead.
+    """
     request_id = getattr(request.state, "request_id", None) if request else None
+    active = get_active_vision_model()
+
+    if not _is_local_ollama():
+        from urllib.parse import urlparse
+        provider_host = urlparse(VISION_BASE_URL).hostname or VISION_BASE_URL
+        logger.info("event=models_list request_id=%s provider=%s active=%s", request_id, provider_host, active)
+        return {
+            "version": "1",
+            "active_model": active,
+            "vision_provider": provider_host,
+            "models": [],
+        }
+
     try:
         req = urllib.request.Request(f"{OLLAMA_URL}/api/tags")
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -38,11 +61,11 @@ def list_models(request: Request = None):
             "modified_at": m.get("modified_at"),
         })
 
-    active = get_active_vision_model()
     logger.info("event=models_list request_id=%s count=%s active=%s", request_id, len(models), active)
     return {
         "version": "1",
         "active_model": active,
+        "vision_provider": "localhost",
         "models": models,
     }
 

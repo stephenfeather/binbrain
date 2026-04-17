@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from app.db import repository
 from app.body_size_middleware import BodySizeLimitMiddleware
 from app.deps import (
-    SessionLocal, OLLAMA_URL, logger,
+    SessionLocal, OLLAMA_URL, VISION_BASE_URL, logger,
     get_active_vision_model, load_settings_from_db,
     MAX_REQUEST_BODY_BYTES, MODELS_DIR, photo_root,
 )
@@ -45,23 +45,27 @@ async def lifespan(app: FastAPI):
         db.close()
 
     model = get_active_vision_model()
-    logger.info("event=warmup_start model=%s ollama_url=%s", model, OLLAMA_URL)
-    try:
-        payload = json.dumps({
-            "model": model,
-            "prompt": "",
-            "keep_alive": -1,
-        }).encode()
-        req = urllib.request.Request(
-            f"{OLLAMA_URL}/api/generate",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            resp.read()
-        logger.info("event=warmup_done model=%s", model)
-    except Exception as e:
-        logger.warning("event=warmup_failed model=%s error=%s", model, str(e)[:200])
+    is_local = "localhost" in VISION_BASE_URL or "host.docker.internal" in VISION_BASE_URL or "127.0.0.1" in VISION_BASE_URL
+    if is_local:
+        logger.info("event=warmup_start model=%s ollama_url=%s", model, OLLAMA_URL)
+        try:
+            payload = json.dumps({
+                "model": model,
+                "prompt": "",
+                "keep_alive": -1,
+            }).encode()
+            req = urllib.request.Request(
+                f"{OLLAMA_URL}/api/generate",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                resp.read()
+            logger.info("event=warmup_done model=%s", model)
+        except Exception as e:
+            logger.warning("event=warmup_failed model=%s error=%s", model, str(e)[:200])
+    else:
+        logger.info("event=warmup_skipped reason=hosted_provider model=%s base_url=%s", model, VISION_BASE_URL)
 
     yield
 
