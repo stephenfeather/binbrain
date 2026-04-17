@@ -160,17 +160,29 @@ def update_bin_item(
     return res.scalar() is not None
 
 
-def insert_photo(db: Session, bin_id: str, path: str, device_metadata: dict | None = None) -> int:
+def insert_photo(
+    db: Session,
+    bin_id: str,
+    path: str,
+    device_metadata: dict | None = None,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    session_id: str | None = None,
+) -> int:
     res = db.execute(
         text(
-            "INSERT INTO photos (bin_id, path, device_metadata) "
-            "VALUES (:bin_id, :path, CAST(:device_metadata AS jsonb)) "
+            "INSERT INTO photos (bin_id, path, device_metadata, width, height, session_id) "
+            "VALUES (:bin_id, :path, CAST(:device_metadata AS jsonb), :width, :height, :session_id) "
             "RETURNING photo_id"
         ),
         {
             "bin_id": bin_id,
             "path": path,
             "device_metadata": json.dumps(device_metadata) if device_metadata else None,
+            "width": width,
+            "height": height,
+            "session_id": session_id,
         },
     )
     return int(res.scalar_one())
@@ -276,6 +288,8 @@ def insert_photo_detections(
     photo_id: int,
     model: str,
     detections: list[dict],
+    *,
+    prompt_version: str | None = None,
 ) -> None:
     if not detections:
         return
@@ -283,9 +297,9 @@ def insert_photo_detections(
         text(
             """
             INSERT INTO photo_detections
-              (photo_id, model, label, category, confidence, x1, y1, x2, y2)
+              (photo_id, model, label, category, confidence, x1, y1, x2, y2, prompt_version)
             VALUES
-              (:photo_id, :model, :label, :category, :confidence, :x1, :y1, :x2, :y2)
+              (:photo_id, :model, :label, :category, :confidence, :x1, :y1, :x2, :y2, :prompt_version)
             """
         ),
         [
@@ -299,6 +313,7 @@ def insert_photo_detections(
                 "y1": d["bbox"][1],
                 "x2": d["bbox"][2],
                 "y2": d["bbox"][3],
+                "prompt_version": prompt_version,
             }
             for d in detections
         ],
