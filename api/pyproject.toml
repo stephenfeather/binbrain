@@ -37,6 +37,7 @@ test = [
   "pytest==8.3.4",
   "httpx==0.27.2",
   "jsonschema==4.23.0",
+  "ruff==0.8.4",
 ]
 scripts = [
   "qrcode[pil]==7.4.2",
@@ -56,3 +57,26 @@ environments = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+extend-exclude = [".venv", "migrations"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle  F: pyflakes  I: isort  UP: pyupgrade
+# B: flake8-bugbear  SIM: simplify  RUF: ruff-native
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+  "E501",   # line length — rely on the formatter, don't double-gate
+  "B008",   # FastAPI uses Depends() as a default arg on purpose
+  "UP007",  # allow Optional[X] alongside X | None until a full sweep
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B", "SIM", "RUF"]
+"app/services/vision.py" = ["E501"]  # long prompt strings
+
+[tool.ruff.format]
+quote-style = "double"
