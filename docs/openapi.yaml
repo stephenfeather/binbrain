@@ -720,6 +720,17 @@ paths:
                     JSON string containing on-device processing metadata
                     (OCR results, barcode detections, classifications, quality scores).
                     Applied to all photos in the batch.
+                session_id:
+                  type: string
+                  maxLength: 128
+                  pattern: "^[\\x20-\\x7E]*$"
+                  description: >
+                    Optional opaque client-supplied identifier grouping
+                    photos taken during a single cataloging session.
+                    Printable ASCII only, at most 128 characters. Stored
+                    verbatim on each photo row; no server-side uniqueness
+                    constraint. Intended for training-signal multi-view
+                    correlation.
       responses:
         "200":
           description: Photos saved and associated with the bin.
