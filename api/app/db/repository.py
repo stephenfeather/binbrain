@@ -305,6 +305,50 @@ def insert_photo_detections(
     )
 
 
+def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
+    """Return rows for (photo_id, model) as a list of dicts.
+
+    Keys match the ``insert_photo_detections`` write shape so callers can
+    round-trip a detection set through the DB without format translation:
+    ``{"label", "category", "confidence", "bbox"}`` where ``bbox`` is a
+    4-element ``[x1, y1, x2, y2]`` list.
+    """
+    rows = db.execute(
+        text(
+            """
+            SELECT label, category, confidence, x1, y1, x2, y2
+            FROM photo_detections
+            WHERE photo_id = :photo_id AND model = :model
+            ORDER BY id
+            """
+        ),
+        {"photo_id": photo_id, "model": model},
+    ).mappings().all()
+    return [
+        {
+            "label": row["label"],
+            "category": row["category"],
+            "confidence": float(row["confidence"]),
+            "bbox": [float(row["x1"]), float(row["y1"]), float(row["x2"]), float(row["y2"])],
+        }
+        for row in rows
+    ]
+
+
+def clear_photo_detections(db: Session, photo_id: int, model: str) -> None:
+    """Delete all ``photo_detections`` rows for (photo_id, model).
+
+    Used by /suggest to realise the "latest vision answer wins" invariant
+    before writing new detections from a fresh Fireworks call.
+    """
+    db.execute(
+        text(
+            "DELETE FROM photo_detections WHERE photo_id = :photo_id AND model = :model"
+        ),
+        {"photo_id": photo_id, "model": model},
+    )
+
+
 def clear_detection_groups(db: Session, photo_id: int, model: str) -> None:
     db.execute(
         text(

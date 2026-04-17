@@ -76,10 +76,40 @@ _MIME_TYPES = {
 }
 
 
+def _hit_to_detection_row(hit: dict) -> Optional[dict]:
+    """Convert a vision hit ({name, category, confidence, bbox}) into the
+    shape expected by ``repository.insert_photo_detections``
+    ({label, category, confidence, bbox[4]}). Returns None when the hit lacks
+    a usable name or bbox — those rows can't be persisted safely.
+    """
+    name = (hit.get("name") or "").strip()
+    bbox = hit.get("bbox")
+    if not name or not bbox or len(bbox) != 4:
+        return None
+    return {
+        "label": name,
+        "category": hit.get("category"),
+        "confidence": float(hit.get("confidence") or 0.0),
+        "bbox": list(bbox),
+    }
+
+
+def _detection_row_to_hit(row: dict) -> dict:
+    """Convert a persisted photo_detections row back into the vision-hit shape
+    the suggest builder downstream expects ({name, category, confidence, bbox})."""
+    return {
+        "name": row["label"],
+        "category": row["category"],
+        "confidence": row["confidence"],
+        "bbox": row["bbox"],
+    }
+
+
 @router.get("/photos/{photo_id}/suggest", dependencies=[Depends(require_vision_rate_limit)])
 def suggest_for_photo(
     photo_id: int,
     model: Optional[str] = Query(None, description="Override vision model for this request"),
+    refresh: bool = Query(False, description="Bypass the photo_detections cache and force a fresh vision call."),
     request: Request = None,
 ):
     request_id = getattr(request.state, "request_id", None) if request else None
@@ -96,20 +126,55 @@ def suggest_for_photo(
     # FF-03: confine to photo_root before reading from disk.
     resolved_path = _resolve_photo_path_under_root(photo_path)
 
+    vision_model = model or get_active_vision_model()
+
     tracker = get_tracker()
     tracker.start(photo_id)
-    try:
-        logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
-        vision_model = model or get_active_vision_model()
-        vision_hits, vision_elapsed_ms = describe_photo(
-            str(resolved_path), VISION_BASE_URL, VISION_API_KEY,
-            vision_model, get_max_image_px(), photo_id=photo_id,
-        )
-        logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
-    except Exception as exc:
-        tracker.mark_failed(photo_id, type(exc).__name__.lower())
-        logger.exception("event=photo_suggest_crash request_id=%s photo_id=%s", request_id, photo_id)
-        raise
+
+    # Dev2_014: cache read path. Skip Fireworks entirely when persisted rows
+    # exist for this (photo_id, vision_model) and caller didn't ask for a
+    # refresh. Per design decision 1, cache-miss writes do a clear-then-insert
+    # so the DB always reflects the latest vision answer.
+    cached_flag = False
+    if not refresh:
+        db_read = SessionLocal()
+        try:
+            cached_rows = repository.get_photo_detections(db_read, photo_id, vision_model)
+        finally:
+            db_read.close()
+        if cached_rows:
+            vision_hits = [_detection_row_to_hit(r) for r in cached_rows]
+            vision_elapsed_ms = 0
+            cached_flag = True
+            logger.info(
+                "event=photo_suggest_cache_hit request_id=%s photo_id=%s model=%s hits=%s",
+                request_id, photo_id, vision_model, len(vision_hits),
+            )
+
+    if not cached_flag:
+        try:
+            logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
+            vision_hits, vision_elapsed_ms = describe_photo(
+                str(resolved_path), VISION_BASE_URL, VISION_API_KEY,
+                vision_model, get_max_image_px(), photo_id=photo_id,
+            )
+            logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
+        except Exception as exc:
+            tracker.mark_failed(photo_id, type(exc).__name__.lower())
+            logger.exception("event=photo_suggest_crash request_id=%s photo_id=%s", request_id, photo_id)
+            raise
+
+        # Persist for future cache hits. Clear first so re-runs replace rather
+        # than accumulate (decision 1: "latest vision answer wins").
+        db_write = SessionLocal()
+        try:
+            repository.clear_photo_detections(db_write, photo_id, vision_model)
+            rows = [r for r in (_hit_to_detection_row(h) for h in vision_hits) if r is not None]
+            if rows:
+                repository.insert_photo_detections(db_write, photo_id, vision_model, rows)
+            db_write.commit()
+        finally:
+            db_write.close()
 
     tracker.update_stage(photo_id, "embedding_match")
 
@@ -176,6 +241,7 @@ def suggest_for_photo(
         "photo_id": photo_id,
         "model": vision_model,
         "vision_elapsed_ms": vision_elapsed_ms,
+        "cached": cached_flag,
         "suggestions": suggestions,
     }
 
