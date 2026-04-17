@@ -13,10 +13,23 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+# Dev2_015: tightened per-object bbox guidance. Prior prompt specified FORMAT
+# but let Fireworks return near-full-image boxes (e.g. [0.03, 0.11, 0.97, 0.9])
+# that stacked on iOS overlays and looked invisible. This version requires
+# tight, per-instance boxes and provides a minimal good/bad few-shot. Keep the
+# strict JSON-only contract and the existing category vocabulary.
 _PROMPT = (
     'Return ONLY valid JSON using the schema '
     '{"suggestions":[{"name":"string","category":"fastener|electronics|tool|label_packaging|other","confidence":0.0,"bbox":[x1,y1,x2,y2]}]} '
-    'List all item types visible. Each item must include "bbox": [x1, y1, x2, y2] with normalized 0-1 coordinates (top-left origin). No explanation, no markdown.'
+    'Coordinates are normalized 0-1 with the top-left origin. '
+    'Each bbox MUST tightly enclose ONLY the named object, cropped to the object\'s visible extent. '
+    'Do NOT return the whole image as a bbox. A single object\'s bbox should almost never exceed 50% of the image area '
+    '(unless the object is a single large surface — e.g. a wall or floor — that fills the frame). '
+    'Emit one bbox per visible instance: if two staplers are visible, return two entries with the same "name" and distinct bboxes. '
+    'GOOD example: a stapler in the lower-left quadrant -> "bbox":[0.05,0.55,0.45,0.95]. '
+    'BAD example (do not emit): the same stapler with "bbox":[0,0,1,1] (whole-image box, not localized). '
+    'If you cannot localize an object, OMIT it from "suggestions" — do not return approximate or placeholder boxes. '
+    'No explanation, no markdown.'
 )
 
 
@@ -48,6 +61,34 @@ class SuggestResponseSchema(BaseModel):
 
 
 _SUGGEST_SCHEMA: dict = SuggestResponseSchema.model_json_schema()
+
+
+# Dev2_015: bbox coverage above this fraction of the image area is suspicious
+# (treated as "model gave up and returned a whole-image box"). Kept for
+# telemetry only — we do not drop the row, per policy in the task prompt.
+_WHOLE_IMAGE_BBOX_COVERAGE_THRESHOLD = 0.7
+
+
+def _log_suspicious_bboxes(suggestions: list[dict], photo_id: int | None) -> None:
+    """Emit a WARN line for each suggestion whose bbox covers ≥70% of the
+    image. Does NOT mutate the list — the row is kept so downstream clients
+    see exactly what the model returned, but the telemetry is loud enough
+    that prompt-regression pagers fire before any user complaint does.
+    """
+    for s in suggestions:
+        bbox = s.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        try:
+            x1, y1, x2, y2 = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            continue
+        coverage = max(0.0, (x2 - x1)) * max(0.0, (y2 - y1))
+        if coverage >= _WHOLE_IMAGE_BBOX_COVERAGE_THRESHOLD:
+            logger.warning(
+                "event=vision.suggest.whole_image_bbox photo_id=%s name=%s coverage=%.3f bbox=%s",
+                photo_id, s.get("name"), coverage, bbox,
+            )
 
 
 def _extract_suggestions(parsed: object, photo_id: int | None, sample: str) -> list[dict]:
@@ -173,4 +214,6 @@ def describe_photo(
     logger.info("event=vision_response photo_id=%s base_url=%s model=%s ms=%s", photo_id, base_url, model, elapsed_ms)
     logger.debug("event=vision_response_raw photo_id=%s content=%r", photo_id, content[:500] if content else None)
 
-    return _parse_suggestions(content, photo_id), elapsed_ms
+    suggestions = _parse_suggestions(content, photo_id)
+    _log_suspicious_bboxes(suggestions, photo_id)
+    return suggestions, elapsed_ms
