@@ -29,6 +29,26 @@ def _stub_fastembed() -> None:
     sys.modules["fastembed"] = types.SimpleNamespace(TextEmbedding=DummyEmbed)
 
 
+# Data tables that tests mutate. Truncated between tests so ordering and
+# fixture re-use do not leak state. ``api_keys``, ``settings``, and
+# ``confirmed_classes`` are EXCLUDED because they are populated by
+# session-scope fixtures or app startup and must survive across tests.
+_TRUNCATE_BETWEEN_TESTS_SQL = (
+    "TRUNCATE photo_group_items, photo_detection_groups, photo_detections, "
+    "photo_labels, item_embeddings, bin_items, photos, items, bins, "
+    "locations RESTART IDENTITY CASCADE"
+)
+
+# Session-end cleanup: wipe everything including api_keys so re-runs start
+# from the same state as the very first run. (Problem A acceptance:
+# SELECT COUNT(*) FROM api_keys post-run == pre-run.)
+_TRUNCATE_ALL_SQL = (
+    "TRUNCATE photo_group_items, photo_detection_groups, photo_detections, "
+    "photo_labels, item_embeddings, bin_items, photos, items, bins, "
+    "locations, settings, confirmed_classes, api_keys RESTART IDENTITY CASCADE"
+)
+
+
 def _init_schema(engine) -> None:
     ddl = """
     CREATE EXTENSION IF NOT EXISTS vector;
@@ -247,7 +267,16 @@ def app_module():
     photos_route.detect = lambda photo_path: []
     photos_route.get_model_name = lambda: "stub"
 
-    return main
+    yield main
+
+    # Session teardown (Dev2_013 Problem A): leave the test DB clean so back-
+    # to-back pytest runs start from the same state they left. Best-effort —
+    # don't mask real test failures if TRUNCATE itself raises.
+    try:
+        with deps.engine.begin() as conn:
+            conn.execute(text(_TRUNCATE_ALL_SQL))
+    except Exception:
+        pass
 
 
 @pytest.fixture(scope="session")
@@ -323,6 +352,23 @@ def valid_jpeg_bytes():
     buf = BytesIO()
     Image.new("RGB", (1, 1), "red").save(buf, format="JPEG")
     return buf.getvalue()
+
+
+@pytest.fixture(autouse=True)
+def _truncate_mutable_tables_between_tests(request):
+    """Reset mutable app tables before every DB-touching test (Dev2_013 Problem A).
+
+    Excludes ``api_keys`` so the session-scope ``test_api_key`` /
+    ``user_api_key`` fixtures survive across the whole run. Pure unit tests
+    (no ``client`` / ``db`` / ``app_module`` / ``user_client`` in the fixture
+    graph) skip the TRUNCATE entirely so they stay independent of DB setup.
+    """
+    db_fixture_names = {"app_module", "client", "user_client", "db"}
+    if not db_fixture_names & set(request.fixturenames):
+        return
+    from app.deps import engine
+    with engine.begin() as conn:
+        conn.execute(text(_TRUNCATE_BETWEEN_TESTS_SQL))
 
 
 @pytest.fixture(autouse=True)
