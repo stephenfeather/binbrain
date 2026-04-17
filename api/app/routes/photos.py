@@ -1,9 +1,12 @@
 import os
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, model_validator
+from pydantic_core import PydanticCustomError
 from sqlalchemy.orm import Session
 
 from app.db import repository
@@ -480,3 +483,99 @@ def confirm_photo_groups(
         raise HTTPException(status_code=500, detail="internal error") from None
 
     return {"version": "1", "photo_id": photo_id, "bin_id": bin_id, "results": results}
+
+
+class SuggestionOutcome(BaseModel):
+    """Per-suggestion decision row for POST /photos/{id}/outcomes.
+
+    Dev2_017 (Phase 2 data capture). ``bbox`` is optional — some presented
+    suggestions legitimately have no bbox (e.g. whole-image fallbacks); when
+    present it MUST have exactly 4 elements. ``edited_to_label`` is required
+    iff ``decision == 'edited'``.
+    """
+
+    label: str
+    category: Optional[str] = None
+    confidence: Optional[float] = None
+    bbox: Optional[list[float]] = None
+    shown_at: datetime
+    decision: Literal["accepted", "rejected", "edited", "ignored"]
+    edited_to_label: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> "SuggestionOutcome":
+        # PydanticCustomError serializes cleanly in RequestValidationError.errors();
+        # a raw ValueError embeds the exception instance in ctx and breaks
+        # the app's JSON error handler.
+        if self.bbox is not None and len(self.bbox) != 4:
+            raise PydanticCustomError(
+                "bbox_length",
+                "bbox must have exactly 4 elements [x1,y1,x2,y2]",
+            )
+        if self.decision == "edited" and not self.edited_to_label:
+            raise PydanticCustomError(
+                "edited_requires_label",
+                "edited_to_label is required when decision is 'edited'",
+            )
+        return self
+
+
+class SuggestionOutcomesRequest(BaseModel):
+    vision_model: str
+    prompt_version: Optional[str] = None
+    decisions: list[SuggestionOutcome]
+
+
+@router.post("/photos/{photo_id}/outcomes")
+def post_photo_suggestion_outcomes(
+    photo_id: int,
+    body: SuggestionOutcomesRequest,
+    db: Session = Depends(get_db),
+):
+    """Fire-and-forget: record the full user-decision list for a photo's
+    VLM suggestions.
+
+    Decoupled from /confirm so telemetry failures cannot break the
+    catalogue-write path. Idempotent per (photo_id, vision_model):
+    the server DELETEs prior outcomes for that pair and INSERTs the new
+    batch atomically. Other vision_model rows on the same photo are
+    preserved.
+    """
+    if not repository.photo_exists(db, photo_id):
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    decisions = [d.model_dump(mode="python") for d in body.decisions]
+    for d in decisions:
+        # Pydantic parsed shown_at to a tz-aware datetime; psycopg adapts it.
+        if isinstance(d.get("shown_at"), datetime):
+            pass
+    try:
+        repository.replace_photo_suggestion_outcomes(
+            db,
+            photo_id=photo_id,
+            vision_model=body.vision_model,
+            prompt_version=body.prompt_version,
+            decisions=decisions,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "event=outcomes_failed request_id=%s photo_id=%s",
+            db.info.get("request_id") if db.info else None,
+            photo_id,
+        )
+        raise HTTPException(status_code=500, detail="internal error") from None
+
+    logger.info(
+        "event=photo_outcomes request_id=%s photo_id=%s model=%s count=%s",
+        db.info.get("request_id") if db.info else None,
+        photo_id,
+        body.vision_model,
+        len(decisions),
+    )
+    return {
+        "version": "1",
+        "photo_id": photo_id,
+        "outcomes_recorded": len(decisions),
+    }
