@@ -46,8 +46,13 @@ services:
       # checkouts need to populate ./models/ before first /detect call, or
       # ultralytics will auto-download into a non-persistent container path.
       - ./models:/app/models:ro
-      # Persist fastembed model cache so restarts don't redownload
-      - binbrain_cache:/home/app/.cache
+      # Persist fastembed model cache so container recreations don't redownload
+      # the BGE model from HuggingFace. fastembed 0.3.6 hard-codes its cache at
+      # /tmp/fastembed_cache/ (no env var override, no constructor arg set in
+      # app/deps.py), so the volume MUST be mounted exactly there — mounting it
+      # at /home/app/.cache/ leaves fastembed writing to the ephemeral /tmp layer
+      # and re-downloading ~45MB on every rebuild.
+      - binbrain_cache:/tmp/fastembed_cache
     depends_on:
       db:
         condition: service_healthy
