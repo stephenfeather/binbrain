@@ -138,6 +138,119 @@ def test_suggest_bbox_absent_is_null(client, monkeypatch, valid_jpeg_bytes):
     assert body["suggestions"][0]["bbox"] is None
 
 
+# ---------------------------------------------------------------------------
+# Dev2_012: /suggest progress heartbeat (Finding #18).
+# Design: thoughts/shared/designs/suggest-heartbeat-2026-04-17.md (iOS repo).
+# ---------------------------------------------------------------------------
+
+
+def _reset_suggest_tracker():
+    from app.services.suggest_tracker import get_tracker
+    t = get_tracker()
+    with t._lock:
+        t._jobs.clear()
+
+
+def test_suggest_status_unknown_photo_returns_404(client):
+    _reset_suggest_tracker()
+    r = client.get("/photos/987654/suggest/status")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "not_found"
+
+
+def test_suggest_status_after_success_is_done_final(client, monkeypatch, valid_jpeg_bytes):
+    _reset_suggest_tracker()
+    r_ingest = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-STATUS-0001"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    photo_id = r_ingest.json()["photos"][0]["photo_id"]
+
+    monkeypatch.setattr(
+        "app.routes.photos.describe_photo",
+        lambda *a, **kw: ([{"name": "widget", "category": "tool", "confidence": 0.9}], 12),
+    )
+    assert client.get(f"/photos/{photo_id}/suggest").status_code == 200
+
+    r = client.get(f"/photos/{photo_id}/suggest/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["photo_id"] == photo_id
+    assert body["state"] == "done"
+    assert body["stage"] == "final"
+    assert body["error_code"] is None
+    assert body["elapsed_ms"] >= 0
+    assert body["started_at"].endswith("Z")
+
+
+def test_suggest_status_during_vision_is_running_vision(client, monkeypatch, valid_jpeg_bytes):
+    """Status polled from inside describe_photo must show state=running, stage=vision."""
+    _reset_suggest_tracker()
+    r_ingest = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-STATUS-0002"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    photo_id = r_ingest.json()["photos"][0]["photo_id"]
+
+    from app.services.suggest_tracker import get_tracker
+    captured: dict = {}
+
+    def fake_describe(*a, **kw):
+        entry = get_tracker().get(photo_id)
+        captured["state"] = entry.state
+        captured["stage"] = entry.stage
+        return ([{"name": "widget", "confidence": 0.9}], 0)
+
+    monkeypatch.setattr("app.routes.photos.describe_photo", fake_describe)
+    assert client.get(f"/photos/{photo_id}/suggest").status_code == 200
+
+    assert captured == {"state": "running", "stage": "vision"}
+
+
+def test_suggest_status_after_vision_failure_is_failed(client, monkeypatch, valid_jpeg_bytes):
+    _reset_suggest_tracker()
+    r_ingest = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-STATUS-0003"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    photo_id = r_ingest.json()["photos"][0]["photo_id"]
+
+    def boom(*a, **kw):
+        raise RuntimeError("fireworks exploded")
+
+    monkeypatch.setattr("app.routes.photos.describe_photo", boom)
+    with pytest.raises(RuntimeError):
+        client.get(f"/photos/{photo_id}/suggest")
+
+    r = client.get(f"/photos/{photo_id}/suggest/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["state"] == "failed"
+    assert body["error_code"] == "runtimeerror"
+
+
+def test_suggest_status_elapsed_ms_monotonic_between_polls(client, monkeypatch, valid_jpeg_bytes):
+    _reset_suggest_tracker()
+    r_ingest = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-STATUS-0004"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    photo_id = r_ingest.json()["photos"][0]["photo_id"]
+
+    from app.services.suggest_tracker import get_tracker
+    get_tracker().start(photo_id)  # simulate an in-flight job, no terminal yet
+
+    import time as _time
+    first = client.get(f"/photos/{photo_id}/suggest/status").json()["elapsed_ms"]
+    _time.sleep(0.02)
+    second = client.get(f"/photos/{photo_id}/suggest/status").json()["elapsed_ms"]
+    assert second >= first
+
+
 def test_ingest_multiple_photos_returns_ids(client, valid_jpeg_bytes):
     bin_id = "BIN-INGEST-0001"
     files = [

@@ -15,6 +15,7 @@ from app.deps import (
 )
 from app.services.detection import detect, get_model_name
 from app.services.rate_limiter import require_vision_rate_limit
+from app.services.suggest_tracker import get_tracker
 from app.services.vision import describe_photo
 
 router = APIRouter()
@@ -83,20 +84,21 @@ def suggest_for_photo(
 ):
     request_id = getattr(request.state, "request_id", None) if request else None
 
+    # Pre-vision validation (not tracked; 404s stay invisible to the status endpoint).
+    db1 = SessionLocal()
     try:
-        # Phase 1: fetch photo path, then close DB to avoid idle connection timeout
-        # during the potentially long vision call
-        db1 = SessionLocal()
-        try:
-            if not repository.photo_exists(db1, photo_id):
-                raise HTTPException(status_code=404, detail="photo not found")
-            photo_path = repository.fetch_photo_path(db1, photo_id)
-        finally:
-            db1.close()
+        if not repository.photo_exists(db1, photo_id):
+            raise HTTPException(status_code=404, detail="photo not found")
+        photo_path = repository.fetch_photo_path(db1, photo_id)
+    finally:
+        db1.close()
 
-        # FF-03: confine to photo_root before reading from disk.
-        resolved_path = _resolve_photo_path_under_root(photo_path)
+    # FF-03: confine to photo_root before reading from disk.
+    resolved_path = _resolve_photo_path_under_root(photo_path)
 
+    tracker = get_tracker()
+    tracker.start(photo_id)
+    try:
         logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
         vision_model = model or get_active_vision_model()
         vision_hits, vision_elapsed_ms = describe_photo(
@@ -104,11 +106,12 @@ def suggest_for_photo(
             vision_model, get_max_image_px(), photo_id=photo_id,
         )
         logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
-    except HTTPException:
-        raise
-    except Exception:
+    except Exception as exc:
+        tracker.mark_failed(photo_id, type(exc).__name__.lower())
         logger.exception("event=photo_suggest_crash request_id=%s photo_id=%s", request_id, photo_id)
         raise
+
+    tracker.update_stage(photo_id, "embedding_match")
 
     # Phase 2: fresh DB connection for embedding search
     # Every vision hit becomes a suggestion. If there's a strong DB match,
@@ -157,6 +160,8 @@ def suggest_for_photo(
     finally:
         db2.close()
 
+    tracker.mark_done(photo_id)
+
     logger.info(
         "event=photo_suggest request_id=%s photo_id=%s model=%s vision_elapsed_ms=%s vision_hits=%s suggestions=%s",
         request_id,
@@ -172,6 +177,32 @@ def suggest_for_photo(
         "model": vision_model,
         "vision_elapsed_ms": vision_elapsed_ms,
         "suggestions": suggestions,
+    }
+
+
+@router.get("/photos/{photo_id}/suggest/status")
+def suggest_status(photo_id: int):
+    """Finding #18: lightweight liveness probe for an in-flight or recently-completed
+    /suggest job. Safe to poll at ~5s intervals. 404 when no recent job exists."""
+    from datetime import datetime, timezone
+
+    tracker = get_tracker()
+    entry = tracker.get(photo_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="no suggest job for this photo")
+    started_at = (
+        datetime.fromtimestamp(entry.started_at, tz=timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+    return {
+        "version": "1",
+        "photo_id": photo_id,
+        "state": entry.state,
+        "stage": entry.stage,
+        "started_at": started_at,
+        "elapsed_ms": tracker.elapsed_ms(entry),
+        "error_code": entry.error_code,
     }
 
 

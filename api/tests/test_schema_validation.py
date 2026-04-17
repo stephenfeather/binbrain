@@ -62,6 +62,25 @@ def test_photo_suggest_schema(client, valid_jpeg_bytes):
     validate_schema("https://binbrain.local/schemas/photo.suggest.response.json", r.json())
 
 
+def test_photo_suggest_status_schema(client, monkeypatch, valid_jpeg_bytes):
+    resp = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-SCHEMA-STATUS-0001"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    photo_id = resp.json()["photos"][0]["photo_id"]
+
+    monkeypatch.setattr(
+        "app.routes.photos.describe_photo",
+        lambda *a, **kw: ([{"name": "widget", "confidence": 0.9}], 0),
+    )
+    assert client.get(f"/photos/{photo_id}/suggest").status_code == 200
+
+    r = client.get(f"/photos/{photo_id}/suggest/status")
+    assert r.status_code == 200
+    validate_schema("https://binbrain.local/schemas/photo.suggest.status.response.json", r.json())
+
+
 def test_photo_detect_schema(client, valid_jpeg_bytes):
     resp = client.post(
         "/ingest",

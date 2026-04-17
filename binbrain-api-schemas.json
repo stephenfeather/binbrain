@@ -71,6 +71,22 @@
   "additionalProperties": false
 },{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binbrain.local/schemas/photo.suggest.status.response.json",
+  "title": "PhotoSuggestStatusResponse",
+  "type": "object",
+  "required": ["version", "photo_id", "state", "stage", "started_at", "elapsed_ms", "error_code"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "photo_id": { "type": "integer", "minimum": 1 },
+    "state": { "type": "string", "enum": ["running", "done", "failed"] },
+    "stage": { "type": ["string", "null"], "enum": ["vision", "embedding_match", "final", null] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "elapsed_ms": { "type": "integer", "minimum": 0 },
+    "error_code": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+},{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://binbrain.local/schemas/photo.detect.response.json",
   "title": "PhotoDetectResponse",
   "type": "object",

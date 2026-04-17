@@ -315,6 +315,24 @@ components:
             decides whether to use the existing item or create a new one.
       additionalProperties: false
 
+    PhotoSuggestStatusResponse:
+      type: object
+      required: [version, photo_id, state, stage, started_at, elapsed_ms, error_code]
+      properties:
+        version:     { type: string, enum: ["1"] }
+        photo_id:    { type: integer, minimum: 1 }
+        state:       { type: string, enum: [running, done, failed] }
+        stage:
+          type: ["string", "null"]
+          enum: [vision, embedding_match, final, null]
+          description: "Current /suggest stage within the running state, or 'final' once done."
+        started_at:  { type: string, format: date-time, description: "UTC ISO-8601 with Z suffix." }
+        elapsed_ms:  { type: integer, minimum: 0, description: "Derived at read time. Frozen once state is terminal." }
+        error_code:
+          type: ["string", "null"]
+          description: "Lower-cased exception class name when state=failed; otherwise null."
+      additionalProperties: false
+
     PhotoSuggestResponse:
       type: object
       required: [version, photo_id, model, vision_elapsed_ms, suggestions]
@@ -1359,6 +1377,40 @@ paths:
                     confidence: 0.80
                     bins: []
                     match: null
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /photos/{photo_id}/suggest/status:
+    get:
+      summary: Poll /suggest progress heartbeat (Finding #18)
+      operationId: suggestStatusForPhoto
+      tags: [Photos]
+      description: |
+        Lightweight liveness/progress probe for an in-flight or recently-completed
+        `/suggest` call. Intended to be polled at ~5 s intervals while the main
+        `/suggest` request is blocked on vision inference so clients can
+        distinguish "slow but working" from "frozen".
+
+        Returns 404 when no job exists for the photo (either never started or
+        finished more than 5 minutes ago and pruned). An in-process registry
+        backs this endpoint — state is lost on server restart by design.
+      parameters:
+        - { $ref: "#/components/parameters/PhotoIdPath" }
+      responses:
+        "200":
+          description: Current state of the /suggest job for this photo.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhotoSuggestStatusResponse" }
+              example:
+                version: "1"
+                photo_id: 7
+                state: "running"
+                stage: "vision"
+                started_at: "2026-04-17T12:30:00.000Z"
+                elapsed_ms: 38421
+                error_code: null
         "404": { $ref: "#/components/responses/NotFound" }
 
   /photos/{photo_id}/file:
