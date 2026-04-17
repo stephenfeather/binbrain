@@ -80,32 +80,31 @@ def test_ingest_persists_image_dimensions(client, db):
 
 
 def test_ingest_records_null_dimensions_when_pil_fails(client, db, monkeypatch, caplog):
-    """If PIL.Image.open raises, /ingest still succeeds and stores NULL dims.
+    """If PIL.Image.open raises for the dims read, /ingest still succeeds and
+    stores NULL dims.
 
     The column capture is best-effort — failure must NOT break ingest, and a
     warning must be logged so the regression is observable.
+
+    Patch ``app.routes.bins.Image`` (the module-local reference) with a stub
+    so validation — which uses its own ``PIL.Image`` import — stays intact and
+    only the dims read in /ingest is affected.
     """
     import app.routes.bins as bins_mod
 
-    original_open = bins_mod.Image.open
+    class _BoomImage:
+        @staticmethod
+        def open(path, *args, **kwargs):
+            raise OSError("simulated decode failure")
 
-    def _boom(path, *args, **kwargs):
-        raise OSError("simulated decode failure")
+    monkeypatch.setattr(bins_mod, "Image", _BoomImage)
 
-    monkeypatch.setattr(bins_mod.Image, "open", _boom)
-
-    try:
-        with caplog.at_level("WARNING", logger="app.deps"):
-            r = client.post(
-                "/ingest",
-                data={"bin_id": "BIN-DIMS-0002"},
-                # Pre-validated (image_validation uses its own Image.open which we
-                # left untouched), so the upload passes file-type validation and
-                # only the dims read fails.
-                files={"photos": ("photo.jpg", _jpeg_bytes(10, 10), "image/jpeg")},
-            )
-    finally:
-        monkeypatch.setattr(bins_mod.Image, "open", original_open)
+    with caplog.at_level("WARNING", logger="app.deps"):
+        r = client.post(
+            "/ingest",
+            data={"bin_id": "BIN-DIMS-0002"},
+            files={"photos": ("photo.jpg", _jpeg_bytes(10, 10), "image/jpeg")},
+        )
 
     assert r.status_code == 200, r.text
     photo_id = r.json()["photos"][0]["photo_id"]
@@ -117,7 +116,6 @@ def test_ingest_records_null_dimensions_when_pil_fails(client, db, monkeypatch, 
     assert row["width"] is None
     assert row["height"] is None
 
-    # Warning must surface — any of the standard ingest loggers is acceptable.
     assert any("ingest_dims_failed" in rec.getMessage() for rec in caplog.records), (
         "expected an ingest_dims_failed warning log"
     )

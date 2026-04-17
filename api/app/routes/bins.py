@@ -8,6 +8,7 @@ from typing import Optional
 
 import aiofiles
 from fastapi import APIRouter, Depends, HTTPException, Form, Body, UploadFile, File
+from PIL import Image, ImageOps
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,11 @@ from app.deps import (
     vec_to_pgvector, photo_root, EMBED_MODEL_NAME, logger,
     MAX_FILE_BYTES, MAX_FILES_PER_REQUEST,
 )
+
+# Dev2_016: session_id is client-supplied, opaque, length-capped. Reject
+# non-printable ASCII and anything longer than this so a misbehaving client
+# cannot smuggle arbitrary bytes through a grouping key.
+_SESSION_ID_MAX_LEN = 128
 from app.security import validate_bin_id
 from app.services.image_validation import validate_image_file
 from app.services.metadata_schema import validate_device_metadata
@@ -156,6 +162,7 @@ async def ingest(
     bin_id: str = Form(...),
     photos: list[UploadFile] = File(...),
     device_metadata: Optional[str] = Form(None),
+    session_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     bin_id = _check_bin_id(bin_id)
@@ -176,6 +183,23 @@ async def ingest(
             raise HTTPException(status_code=400, detail="device_metadata must be valid JSON")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    # Dev2_016: session_id is opaque but must be short and printable ASCII so
+    # a misbehaving client can't smuggle bytes through a grouping key. Reject
+    # before the file loop so no photo rows are written on a bad request.
+    if session_id is not None and session_id != "":
+        if len(session_id) > _SESSION_ID_MAX_LEN:
+            raise HTTPException(
+                status_code=400,
+                detail=f"session_id exceeds {_SESSION_ID_MAX_LEN}-char limit",
+            )
+        if not all(0x20 <= ord(c) <= 0x7E for c in session_id):
+            raise HTTPException(
+                status_code=400,
+                detail="session_id must be printable ASCII",
+            )
+    else:
+        session_id = None
 
     # Ensure bin exists
     try:
@@ -215,7 +239,33 @@ async def ingest(
         await _stream_upload(up, tmp_path)
         _validate_and_place(tmp_path, final_path)
 
-        photo_id = repository.insert_photo(db, bin_id, str(final_path), device_metadata=parsed_metadata)
+        # Dev2_016: capture pixel dimensions (after EXIF rotation) so downstream
+        # training can back-map normalized bboxes without re-reading files.
+        # Best-effort: if PIL can't decode the placed file, insert NULL dims and
+        # log — ingest must not fail because of a metadata-only read.
+        pw: int | None
+        ph: int | None
+        try:
+            with Image.open(final_path) as img:
+                pw, ph = ImageOps.exif_transpose(img).size
+        except Exception as exc:  # pragma: no cover - defensive; exercised by monkeypatch test
+            logger.warning(
+                "event=ingest_dims_failed request_id=%s photo_path=%s err=%s",
+                db.info.get("request_id"),
+                final_path,
+                exc,
+            )
+            pw = ph = None
+
+        photo_id = repository.insert_photo(
+            db,
+            bin_id,
+            str(final_path),
+            device_metadata=parsed_metadata,
+            width=pw,
+            height=ph,
+            session_id=session_id,
+        )
         db.commit()
 
         saved.append(_public_photo(photo_id))
