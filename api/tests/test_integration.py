@@ -88,6 +88,56 @@ def test_photo_suggest_missing(client):
     assert body["error"]["code"] == "not_found"
 
 
+def test_suggest_passes_bbox_through_from_vision(client, monkeypatch, valid_jpeg_bytes):
+    bin_id = "BIN-BBOX-0001"
+    r_ingest = client.post(
+        "/ingest",
+        data={"bin_id": bin_id},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    assert r_ingest.status_code == 200
+    photo_id = r_ingest.json()["photos"][0]["photo_id"]
+
+    monkeypatch.setattr(
+        "app.routes.photos.describe_photo",
+        lambda *a, **kw: (
+            [{"name": "widget", "category": "tool", "confidence": 0.9,
+              "bbox": [0.1, 0.2, 0.8, 0.9]}],
+            42,
+        ),
+    )
+    r = client.get(f"/photos/{photo_id}/suggest")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["suggestions"][0]["bbox"] == [0.1, 0.2, 0.8, 0.9]
+
+
+def test_suggest_bbox_absent_is_null(client, monkeypatch, valid_jpeg_bytes):
+    # Back-compat: when vision does not return bbox (older models),
+    # the field must be present in the response and set to null.
+    bin_id = "BIN-BBOX-0002"
+    r_ingest = client.post(
+        "/ingest",
+        data={"bin_id": bin_id},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    assert r_ingest.status_code == 200
+    photo_id = r_ingest.json()["photos"][0]["photo_id"]
+
+    monkeypatch.setattr(
+        "app.routes.photos.describe_photo",
+        lambda *a, **kw: (
+            [{"name": "widget", "category": "tool", "confidence": 0.9}],
+            42,
+        ),
+    )
+    r = client.get(f"/photos/{photo_id}/suggest")
+    assert r.status_code == 200
+    body = r.json()
+    assert "bbox" in body["suggestions"][0]
+    assert body["suggestions"][0]["bbox"] is None
+
+
 def test_ingest_multiple_photos_returns_ids(client, valid_jpeg_bytes):
     bin_id = "BIN-INGEST-0001"
     files = [

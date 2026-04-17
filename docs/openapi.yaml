@@ -296,6 +296,11 @@ components:
           minimum: 0
           maximum: 1
           description: "Raw vision model confidence for this label."
+        bbox:
+          type: array
+          items: { type: number }
+          nullable: true
+          description: "Normalized [x1,y1,x2,y2] in 0-1 coords from the vision model. Null when the model did not return coords."
         bins:
           type: array
           items: { type: string }

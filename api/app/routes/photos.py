@@ -129,6 +129,7 @@ def suggest_for_photo(
                 "name": name,
                 "category": category,
                 "confidence": round(vision_conf, 4),
+                "bbox": hit.get("bbox"),
                 "bins": [],
                 "match": None,
             }
