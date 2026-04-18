@@ -897,6 +897,52 @@ def soft_delete_location(db: Session, location_id: int) -> bool:
     return deleted
 
 
+def replace_photo_suggestion_outcomes(
+    db: Session,
+    photo_id: int,
+    vision_model: str,
+    prompt_version: str | None,
+    decisions: list[dict],
+) -> None:
+    """Replace the outcome rows for ``(photo_id, vision_model)`` atomically.
+
+    Dev2_017 (Phase 2 data capture). The endpoint is idempotent per retry:
+    a DELETE on the scoping key runs unconditionally, followed by a
+    batched INSERT of the current decisions. Outcomes for other
+    ``vision_model`` values on the same photo are left alone.
+    """
+    db.execute(
+        text(
+            "DELETE FROM photo_suggestion_outcomes "
+            "WHERE photo_id = :photo_id AND vision_model = :vision_model"
+        ),
+        {"photo_id": photo_id, "vision_model": vision_model},
+    )
+    if not decisions:
+        return
+    db.execute(
+        text(
+            """
+            INSERT INTO photo_suggestion_outcomes
+              (photo_id, vision_model, prompt_version, label, category,
+               confidence, bbox, shown_at, decision, edited_to_label)
+            VALUES
+              (:photo_id, :vision_model, :prompt_version, :label, :category,
+               :confidence, :bbox, :shown_at, :decision, :edited_to_label)
+            """
+        ),
+        [
+            {
+                "photo_id": photo_id,
+                "vision_model": vision_model,
+                "prompt_version": prompt_version,
+                **d,
+            }
+            for d in decisions
+        ],
+    )
+
+
 def update_bin_location(db: Session, bin_id: str, location_id: Optional[int]) -> bool:
     res = db.execute(
         text(
