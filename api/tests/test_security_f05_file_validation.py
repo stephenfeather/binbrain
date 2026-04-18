@@ -5,16 +5,15 @@ Tests FAIL until:
 - ingest and add-to-bin stream to a temp file, validate, then rename or unlink
 - non-image uploads return 415 and leave no residue in PHOTO_DIR
 """
+
 import struct
 import tempfile
 from pathlib import Path
 
 import pytest
 
-
 # ── Unit tests: validate_image_file (no DB needed) ───────────────────────────
-
-from app.services.image_validation import validate_image_file, ALLOWED_FORMATS
+from app.services.image_validation import ALLOWED_FORMATS, validate_image_file
 
 
 def _write_tmp(data: bytes, suffix: str = ".tmp") -> Path:
@@ -27,7 +26,8 @@ def _minimal_jpeg_bytes() -> bytes:
     """Minimal JPEG magic header + SOI + EOI so PIL can open it."""
     return (
         b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
-        b"\xff\xdb\x00C\x00" + bytes([8] * 64)
+        b"\xff\xdb\x00C\x00"
+        + bytes([8] * 64)
         + b"\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
         + b"\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01"
         + b"\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b"
@@ -38,6 +38,7 @@ def _minimal_jpeg_bytes() -> bytes:
 def _minimal_png_bytes() -> bytes:
     """Minimal 1×1 white PNG."""
     import zlib
+
     signature = b"\x89PNG\r\n\x1a\n"
 
     def chunk(tag: bytes, data: bytes) -> bytes:
@@ -69,6 +70,7 @@ def _minimal_heif_bytes() -> bytes:
     """
     pytest.importorskip("pillow_heif")
     import io
+
     import pillow_heif
     from PIL import Image
 
@@ -150,9 +152,11 @@ class TestValidateImageFileRejectsNonImages:
 
 # ── Integration tests: endpoint returns 415 and leaves no residue ─────────────
 
+
 def test_ingest_rejects_exe_as_jpg_and_leaves_no_residue(client, app_module):
     """Uploading an EXE with .jpg extension must return 415 and leave no files."""
     from app.deps import photo_root
+
     bin_id = "F05RESIDUE01"
     before = set(photo_root.rglob("*")) if photo_root.exists() else set()
 
@@ -161,9 +165,9 @@ def test_ingest_rejects_exe_as_jpg_and_leaves_no_residue(client, app_module):
         data={"bin_id": bin_id},
         files=[("photos", ("evil.jpg", _exe_bytes(), "image/jpeg"))],
     )
-    assert resp.status_code == 415, (
-        f"Expected 415 for EXE masquerading as JPEG, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 415
+    ), f"Expected 415 for EXE masquerading as JPEG, got {resp.status_code}: {resp.text}"
 
     after = set(photo_root.rglob("*"))
     new_files = after - before
@@ -177,9 +181,9 @@ def test_ingest_rejects_pt_model_as_jpg(client):
         data={"bin_id": "F05PTTEST01"},
         files=[("photos", ("model.jpg", _pt_bytes(), "image/jpeg"))],
     )
-    assert resp.status_code == 415, (
-        f"Expected 415 for .pt disguised as JPEG, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 415
+    ), f"Expected 415 for .pt disguised as JPEG, got {resp.status_code}: {resp.text}"
 
 
 def test_ingest_accepts_valid_jpeg(client):
@@ -189,9 +193,9 @@ def test_ingest_accepts_valid_jpeg(client):
         data={"bin_id": "F05VALID01"},
         files=[("photos", ("real.jpg", _minimal_jpeg_bytes(), "image/jpeg"))],
     )
-    assert resp.status_code == 200, (
-        f"Expected 200 for valid JPEG, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 200
+    ), f"Expected 200 for valid JPEG, got {resp.status_code}: {resp.text}"
 
 
 def test_ingest_accepts_valid_heif(client):
@@ -201,6 +205,6 @@ def test_ingest_accepts_valid_heif(client):
         data={"bin_id": "F05HEIF01"},
         files=[("photos", ("real.heic", _minimal_heif_bytes(), "image/heic"))],
     )
-    assert resp.status_code == 200, (
-        f"Expected 200 for valid HEIF, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 200
+    ), f"Expected 200 for valid HEIF, got {resp.status_code}: {resp.text}"

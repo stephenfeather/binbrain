@@ -4,6 +4,7 @@ Kept separate from conftest.py so the validator is importable from test modules
 without tangling with pytest's conftest resolution. The underscore prefix keeps
 pytest from collecting this file.
 """
+
 from typing import Optional
 from urllib.parse import urlparse
 

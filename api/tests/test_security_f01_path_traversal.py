@@ -3,11 +3,10 @@
 Tests must FAIL until api/app/security.py exists with validate_bin_id()
 AND bins.py / photos.py apply it at every entry point.
 """
+
 import pytest
 
-
 # ── Unit tests: validate_bin_id (no DB needed) ───────────────────────────────
-
 from app.security import validate_bin_id  # noqa: E402 — must be at module level
 
 
@@ -89,6 +88,7 @@ class TestValidateBinIdAcceptsValid:
 # ── Integration tests: endpoint rejects traversal attempts ───────────────────
 # These require TEST_DATABASE_URL and a valid image to upload.
 
+
 def _minimal_jpeg() -> bytes:
     """Return a minimal valid JPEG (1×1 white pixel)."""
     return (
@@ -100,23 +100,26 @@ def _minimal_jpeg() -> bytes:
         b"\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00"
         b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b"
         b"\xff\xc4\x00\xb5\x10\x00\x02\x01\x03\x03\x02\x04\x03\x05\x05\x04\x04\x00\x00\x01}"
-        b"\x01\x02\x03\x00\x04\x11\x05\x12!1A\x06\x13Qa\x07\"q\x142\x81\x91\xa1"
+        b'\x01\x02\x03\x00\x04\x11\x05\x12!1A\x06\x13Qa\x07"q\x142\x81\x91\xa1'
         b"\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xfb\xd4\xb8\xff\xd9"
     )
 
 
-@pytest.mark.parametrize("bad_bin_id", [
-    "../evil",
-    "../../etc/passwd",
-    "foo/bar",
-    "foo\\bar",
-    "%2e%2e",
-    ".hidden",
-    "/etc/passwd",
-    "bin\x00evil",
-    "A" * 65,
-    "bin id",
-])
+@pytest.mark.parametrize(
+    "bad_bin_id",
+    [
+        "../evil",
+        "../../etc/passwd",
+        "foo/bar",
+        "foo\\bar",
+        "%2e%2e",
+        ".hidden",
+        "/etc/passwd",
+        "bin\x00evil",
+        "A" * 65,
+        "bin id",
+    ],
+)
 def test_ingest_rejects_traversal_bin_id(client, bad_bin_id):
     """POST /ingest with a bad bin_id must return 400."""
     resp = client.post(
@@ -124,9 +127,9 @@ def test_ingest_rejects_traversal_bin_id(client, bad_bin_id):
         data={"bin_id": bad_bin_id},
         files=[("photos", ("test.jpg", _minimal_jpeg(), "image/jpeg"))],
     )
-    assert resp.status_code == 400, (
-        f"Expected 400 for bin_id={bad_bin_id!r}, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 400
+    ), f"Expected 400 for bin_id={bad_bin_id!r}, got {resp.status_code}: {resp.text}"
 
 
 def test_ingest_valid_bin_id_accepted(client, tmp_path):
@@ -137,16 +140,19 @@ def test_ingest_valid_bin_id_accepted(client, tmp_path):
         files=[("photos", ("test.jpg", _minimal_jpeg(), "image/jpeg"))],
     )
     # 200 means bin_id was accepted; other errors (e.g., DB) are unrelated to F-01
-    assert resp.status_code != 400 or "invalid bin_id" not in resp.text.lower(), (
-        f"Valid bin_id was rejected: {resp.text}"
-    )
+    assert (
+        resp.status_code != 400 or "invalid bin_id" not in resp.text.lower()
+    ), f"Valid bin_id was rejected: {resp.text}"
 
 
-@pytest.mark.parametrize("bad_bin_id", [
-    "../evil",
-    "foo/bar",
-    "%2e%2e",
-])
+@pytest.mark.parametrize(
+    "bad_bin_id",
+    [
+        "../evil",
+        "foo/bar",
+        "%2e%2e",
+    ],
+)
 def test_add_to_bin_rejects_traversal_bin_id(client, bad_bin_id):
     """POST /bins/{bin_id}/add with a bad bin_id must be rejected (400 or 404).
 
@@ -165,6 +171,7 @@ def test_add_to_bin_rejects_traversal_bin_id(client, bad_bin_id):
         f"/bins/{bad_bin_id}/add",
         data={"name": "test item"},
     )
-    assert resp.status_code in (400, 404), (
-        f"Expected 400 or 404 for bin_id={bad_bin_id!r}, got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code in (
+        400,
+        404,
+    ), f"Expected 400 or 404 for bin_id={bad_bin_id!r}, got {resp.status_code}: {resp.text}"

@@ -7,6 +7,7 @@ pin down:
   * the status is retrievable and reported on /health,
   * the config default points at a writable directory.
 """
+
 from __future__ import annotations
 
 

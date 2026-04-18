@@ -58,8 +58,6 @@ jobs:
     name: ruff (lint + format)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Initial rollout: flip to blocking once baseline violations are cleared.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 

@@ -16,24 +16,19 @@ def test_ingest_response_does_not_include_path(client, valid_jpeg_bytes):
     )
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     for entry in resp.json()["photos"]:
-        assert "path" not in entry, (
-            f"Filesystem path disclosed in /ingest response: {entry}"
-        )
+        assert "path" not in entry, f"Filesystem path disclosed in /ingest response: {entry}"
         assert "photo_id" in entry, "photo_id must still be present"
 
 
 def test_ingest_multiple_does_not_include_path(client, valid_jpeg_bytes):
     """POST /ingest with multiple files must omit path from all entries."""
-    files = [
-        ("photos", (f"p{i}.jpg", valid_jpeg_bytes, "image/jpeg"))
-        for i in range(3)
-    ]
+    files = [("photos", (f"p{i}.jpg", valid_jpeg_bytes, "image/jpeg")) for i in range(3)]
     resp = client.post("/ingest", data={"bin_id": "F10INGEST02"}, files=files)
     assert resp.status_code == 200
     for entry in resp.json()["photos"]:
-        assert "path" not in entry, (
-            f"Filesystem path disclosed in multi-file /ingest response: {entry}"
-        )
+        assert (
+            "path" not in entry
+        ), f"Filesystem path disclosed in multi-file /ingest response: {entry}"
 
 
 def test_get_bin_photos_do_not_include_path(client, valid_jpeg_bytes):
@@ -46,7 +41,5 @@ def test_get_bin_photos_do_not_include_path(client, valid_jpeg_bytes):
     resp = client.get("/bins/F10GETBIN01")
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     for photo in resp.json()["photos"]:
-        assert "path" not in photo, (
-            f"Filesystem path disclosed in GET /bins response: {photo}"
-        )
+        assert "path" not in photo, f"Filesystem path disclosed in GET /bins response: {photo}"
         assert "photo_id" in photo, "photo_id must still be present"

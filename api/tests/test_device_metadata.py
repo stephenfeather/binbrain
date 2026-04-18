@@ -2,7 +2,6 @@
 
 import json
 
-
 SAMPLE_METADATA = {
     "device_processing": {
         "version": "1",

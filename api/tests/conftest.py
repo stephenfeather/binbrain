@@ -257,7 +257,7 @@ def _init_schema(engine) -> None:
 # Ensure this directory is on sys.path so sibling modules (e.g. _db_guard) are
 # importable during conftest evaluation, before pytest's usual rootdir setup.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _db_guard import test_db_isolation_error as _test_db_isolation_error
+from _db_guard import test_db_isolation_error as _test_db_isolation_error  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -281,8 +281,9 @@ def app_module():
     for mod in [m for m in sys.modules if m.startswith("app.")]:
         del sys.modules[mod]
 
-    import app.main as main
     import app.deps as deps
+    import app.main as main
+
     importlib.reload(deps)
     importlib.reload(main)
 
@@ -294,6 +295,7 @@ def app_module():
     # Stub detection so integration tests don't need real YOLOE weights.
     # Patch on the route module because it binds these at import time.
     import app.routes.photos as photos_route
+
     photos_route.detect = lambda photo_path: []
     photos_route.get_model_name = lambda: "stub"
 
@@ -378,7 +380,9 @@ def db(app_module):
 def valid_jpeg_bytes():
     """Real 1×1 JPEG produced by Pillow — passes magic-byte + PIL.verify() checks."""
     from io import BytesIO
+
     from PIL import Image
+
     buf = BytesIO()
     Image.new("RGB", (1, 1), "red").save(buf, format="JPEG")
     return buf.getvalue()
@@ -397,6 +401,7 @@ def _truncate_mutable_tables_between_tests(request):
     if not db_fixture_names & set(request.fixturenames):
         return
     from app.deps import engine
+
     with engine.begin() as conn:
         conn.execute(text(_TRUNCATE_BETWEEN_TESTS_SQL))
 
@@ -417,6 +422,7 @@ def reset_rate_limiters():
     """
     try:
         from app.services import rate_limiter
+
         rate_limiter.global_limiter.reset()
         rate_limiter.vision_limiter.reset()
         rate_limiter.warmup_limiter.reset()

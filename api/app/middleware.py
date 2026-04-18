@@ -2,6 +2,7 @@
 
 Imported by route modules; must not import from app.routes.* to avoid circulars.
 """
+
 from fastapi import HTTPException, Request
 
 

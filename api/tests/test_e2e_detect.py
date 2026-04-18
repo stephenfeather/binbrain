@@ -8,6 +8,7 @@ Requires:
 Run:
   cd api && uv run python -m pytest tests/test_e2e_detect.py -v -s
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -24,7 +25,12 @@ DB_DSN = os.environ.get(
     "postgresql://binbrain:claude_dev@localhost:5434/binbrain",
 )
 SAMPLE_IMAGE = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "samples", "image_01-1200x900.jpg",
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "..",
+    "samples",
+    "image_01-1200x900.jpg",
 )
 
 
@@ -136,6 +142,6 @@ class TestE2EDetect:
                 "SELECT COUNT(*) FROM photo_detections WHERE photo_id = %s",
                 (photo_id,),
             ).fetchone()[0]
-        assert count == len(detections), (
-            f"DB has {count} detections but API returned {len(detections)}"
-        )
+        assert count == len(
+            detections
+        ), f"DB has {count} detections but API returned {len(detections)}"

@@ -1,12 +1,11 @@
 """Vision pipeline tests: tolerant parser (F#24), schema enforcement (F#27),
 OpenAI-protocol backend (Dev2_007).
 """
+
 from __future__ import annotations
 
 import json
 import logging
-
-import pytest
 
 from app.services import vision as vision_mod
 from app.services.vision import (
@@ -154,9 +153,9 @@ def _patch_openai(monkeypatch, captured: dict, response_content: str):
 
 def test_suggest_response_schema_shape():
     """The Pydantic schema must have a 'suggestions' array of name-bearing items."""
-    assert hasattr(vision_mod, "SuggestResponseSchema"), (
-        "vision module must expose SuggestResponseSchema (Finding #27)"
-    )
+    assert hasattr(
+        vision_mod, "SuggestResponseSchema"
+    ), "vision module must expose SuggestResponseSchema (Finding #27)"
     schema = vision_mod.SuggestResponseSchema.model_json_schema()
     assert schema.get("type") == "object"
     props = schema.get("properties", {})
@@ -175,13 +174,17 @@ def test_describe_photo_uses_openai_client(tmp_path, valid_jpeg_bytes, monkeypat
     send image via data-URI image_url format, and use response_format json_object."""
     captured: dict = {}
     _patch_openai(
-        monkeypatch, captured,
+        monkeypatch,
+        captured,
         response_content='{"suggestions": [{"name": "M3 Bolt"}]}',
     )
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
     suggestions, _elapsed = describe_photo(
-        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+        photo_path,
+        "http://fake:11434/v1",
+        "test-key",
+        "qwen3-vl:2b",
     )
 
     assert suggestions == [{"name": "M3 Bolt"}]
@@ -198,7 +201,9 @@ def test_describe_photo_uses_openai_client(tmp_path, valid_jpeg_bytes, monkeypat
     content_parts = user_msg["content"]
     assert isinstance(content_parts, list), "content should be a multi-part list"
     image_part = [p for p in content_parts if p.get("type") == "image_url"]
-    assert image_part, f"expected image_url part in content, got types: {[p.get('type') for p in content_parts]}"
+    assert (
+        image_part
+    ), f"expected image_url part in content, got types: {[p.get('type') for p in content_parts]}"
     assert image_part[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
     # Verify response_format is set for JSON mode.
@@ -218,13 +223,17 @@ def test_describe_photo_single_item_response_propagates(tmp_path, valid_jpeg_byt
     """1-item response must propagate without being dropped."""
     captured: dict = {}
     _patch_openai(
-        monkeypatch, captured,
+        monkeypatch,
+        captured,
         response_content='{"suggestions": [{"name": "Only Item"}]}',
     )
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
     suggestions, _elapsed = describe_photo(
-        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+        photo_path,
+        "http://fake:11434/v1",
+        "test-key",
+        "qwen3-vl:2b",
     )
     assert suggestions == [{"name": "Only Item"}]
 
@@ -234,13 +243,17 @@ def test_describe_photo_bare_list_response_still_parses(tmp_path, valid_jpeg_byt
     parser must still handle the bare-list fallback shape."""
     captured: dict = {}
     _patch_openai(
-        monkeypatch, captured,
+        monkeypatch,
+        captured,
         response_content='[{"name": "Fallback Item", "category": "other"}]',
     )
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
     suggestions, _elapsed = describe_photo(
-        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+        photo_path,
+        "http://fake:11434/v1",
+        "test-key",
+        "qwen3-vl:2b",
     )
     assert suggestions == [{"name": "Fallback Item", "category": "other"}]
 
@@ -262,7 +275,10 @@ def test_describe_photo_error_returns_empty(tmp_path, valid_jpeg_bytes, monkeypa
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
     suggestions, elapsed = describe_photo(
-        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+        photo_path,
+        "http://fake:11434/v1",
+        "test-key",
+        "qwen3-vl:2b",
     )
     assert suggestions == []
     assert elapsed >= 0
@@ -277,10 +293,18 @@ def test_describe_photo_error_returns_empty(tmp_path, valid_jpeg_bytes, monkeypa
 
 def test_parse_suggestions_bbox_passthrough():
     """bbox field must survive parsing and appear in the output dict."""
-    raw = json.dumps({"suggestions": [
-        {"name": "Resistor", "category": "electronics", "confidence": 0.8,
-         "bbox": [0.1, 0.2, 0.5, 0.6]},
-    ]})
+    raw = json.dumps(
+        {
+            "suggestions": [
+                {
+                    "name": "Resistor",
+                    "category": "electronics",
+                    "confidence": 0.8,
+                    "bbox": [0.1, 0.2, 0.5, 0.6],
+                },
+            ]
+        }
+    )
     out = _parse_suggestions(raw)
     assert len(out) == 1
     assert out[0]["bbox"] == [0.1, 0.2, 0.5, 0.6]
@@ -288,9 +312,13 @@ def test_parse_suggestions_bbox_passthrough():
 
 def test_parse_suggestions_bbox_none_when_absent():
     """Items without bbox must still parse; bbox simply absent from dict."""
-    raw = json.dumps({"suggestions": [
-        {"name": "Bolt", "category": "fastener", "confidence": 0.9},
-    ]})
+    raw = json.dumps(
+        {
+            "suggestions": [
+                {"name": "Bolt", "category": "fastener", "confidence": 0.9},
+            ]
+        }
+    )
     out = _parse_suggestions(raw)
     assert len(out) == 1
     assert "bbox" not in out[0] or out[0].get("bbox") is None
@@ -300,16 +328,28 @@ def test_describe_photo_bbox_passthrough(tmp_path, valid_jpeg_bytes, monkeypatch
     """describe_photo must pass bbox floats through to the caller."""
     captured: dict = {}
     _patch_openai(
-        monkeypatch, captured,
-        response_content=json.dumps({"suggestions": [
-            {"name": "Capacitor", "category": "electronics", "confidence": 0.7,
-             "bbox": [0.12, 0.34, 0.56, 0.78]},
-        ]}),
+        monkeypatch,
+        captured,
+        response_content=json.dumps(
+            {
+                "suggestions": [
+                    {
+                        "name": "Capacitor",
+                        "category": "electronics",
+                        "confidence": 0.7,
+                        "bbox": [0.12, 0.34, 0.56, 0.78],
+                    },
+                ]
+            }
+        ),
     )
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
     suggestions, _elapsed = describe_photo(
-        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+        photo_path,
+        "http://fake:11434/v1",
+        "test-key",
+        "qwen3-vl:2b",
     )
     assert len(suggestions) == 1
     assert suggestions[0]["bbox"] == [0.12, 0.34, 0.56, 0.78]
@@ -319,16 +359,24 @@ def test_describe_photo_mixed_bbox_and_no_bbox(tmp_path, valid_jpeg_bytes, monke
     """Response with some items having bbox and others not must preserve both."""
     captured: dict = {}
     _patch_openai(
-        monkeypatch, captured,
-        response_content=json.dumps({"suggestions": [
-            {"name": "Bolt", "bbox": [0.0, 0.0, 0.5, 0.5]},
-            {"name": "Washer"},
-        ]}),
+        monkeypatch,
+        captured,
+        response_content=json.dumps(
+            {
+                "suggestions": [
+                    {"name": "Bolt", "bbox": [0.0, 0.0, 0.5, 0.5]},
+                    {"name": "Washer"},
+                ]
+            }
+        ),
     )
 
     photo_path = _write_jpeg(tmp_path, valid_jpeg_bytes)
     suggestions, _elapsed = describe_photo(
-        photo_path, "http://fake:11434/v1", "test-key", "qwen3-vl:2b",
+        photo_path,
+        "http://fake:11434/v1",
+        "test-key",
+        "qwen3-vl:2b",
     )
     assert len(suggestions) == 2
     assert suggestions[0]["bbox"] == [0.0, 0.0, 0.5, 0.5]
@@ -338,6 +386,7 @@ def test_describe_photo_mixed_bbox_and_no_bbox(tmp_path, valid_jpeg_bytes, monke
 def test_suggested_item_bbox_accepts_floats():
     """SuggestedItem.bbox must accept float values (normalized 0–1 coords)."""
     from app.services.vision import SuggestedItem
+
     item = SuggestedItem(name="Screw", bbox=[0.1, 0.2, 0.3, 0.4])
     assert item.bbox == [0.1, 0.2, 0.3, 0.4]
     assert all(isinstance(v, float) for v in item.bbox)
@@ -353,13 +402,10 @@ def test_suggest_response_schema_bbox_is_number():
         item_schema = schema["$defs"][ref]
     bbox_prop = item_schema["properties"]["bbox"]
     # bbox is anyOf: [list-of-number, null]
-    array_schema = next(
-        s for s in bbox_prop.get("anyOf", [bbox_prop])
-        if s.get("type") == "array"
-    )
-    assert array_schema["items"]["type"] == "number", (
-        f"bbox items must be 'number' (float), got {array_schema['items']}"
-    )
+    array_schema = next(s for s in bbox_prop.get("anyOf", [bbox_prop]) if s.get("type") == "array")
+    assert (
+        array_schema["items"]["type"] == "number"
+    ), f"bbox items must be 'number' (float), got {array_schema['items']}"
 
 
 def test_prompt_requests_normalized_bbox():
@@ -375,6 +421,5 @@ def test_prompt_requests_normalized_bbox():
     p = prompt.lower()
     if "pixel" in p:
         assert any(
-            marker in p
-            for marker in ("do not use pixel", "not pixel", "reject", "invalid")
+            marker in p for marker in ("do not use pixel", "not pixel", "reject", "invalid")
         ), "if prompt mentions 'pixel', it must explicitly reject/forbid it"

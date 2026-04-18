@@ -1,9 +1,8 @@
 """Integration tests for the /classes API endpoints."""
+
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import patch
 
 
 class TestClassesAPI:
@@ -18,11 +17,14 @@ class TestClassesAPI:
         assert body["count"] == len(body["classes"])
 
     def test_confirm_class(self, client, db):
-        resp = client.post("/classes/confirm", json={
-            "class_name": "Phillips screwdriver",
-            "category": "tools",
-            "source": "vision_llm",
-        })
+        resp = client.post(
+            "/classes/confirm",
+            json={
+                "class_name": "Phillips screwdriver",
+                "category": "tools",
+                "source": "vision_llm",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["version"] == "1"
@@ -32,43 +34,58 @@ class TestClassesAPI:
         assert body["active_class_count"] >= 1
 
     def test_confirm_class_duplicate_is_idempotent(self, client, db):
-        client.post("/classes/confirm", json={
-            "class_name": "bolt",
-            "category": "fastener",
-            "source": "manual",
-        })
-        resp = client.post("/classes/confirm", json={
-            "class_name": "Bolt",
-            "category": "fastener",
-            "source": "manual",
-        })
+        client.post(
+            "/classes/confirm",
+            json={
+                "class_name": "bolt",
+                "category": "fastener",
+                "source": "manual",
+            },
+        )
+        resp = client.post(
+            "/classes/confirm",
+            json={
+                "class_name": "Bolt",
+                "category": "fastener",
+                "source": "manual",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["added"] is False
 
     def test_confirm_class_empty_name(self, client):
-        resp = client.post("/classes/confirm", json={
-            "class_name": "   ",
-            "source": "manual",
-        })
+        resp = client.post(
+            "/classes/confirm",
+            json={
+                "class_name": "   ",
+                "source": "manual",
+            },
+        )
         assert resp.status_code == 400
 
     def test_list_classes_after_confirm(self, client, db):
-        client.post("/classes/confirm", json={
-            "class_name": "capacitor",
-            "category": "electronics",
-            "source": "vision_llm",
-        })
+        client.post(
+            "/classes/confirm",
+            json={
+                "class_name": "capacitor",
+                "category": "electronics",
+                "source": "vision_llm",
+            },
+        )
         resp = client.get("/classes")
         body = resp.json()
         names = [c["class_name"] for c in body["classes"]]
         assert "capacitor" in names
 
     def test_delete_class(self, client, db):
-        client.post("/classes/confirm", json={
-            "class_name": "to_delete",
-            "source": "manual",
-        })
+        client.post(
+            "/classes/confirm",
+            json={
+                "class_name": "to_delete",
+                "source": "manual",
+            },
+        )
         resp = client.delete("/classes/to_delete")
         assert resp.status_code == 200
         body = resp.json()

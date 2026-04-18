@@ -25,16 +25,20 @@ def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
 
 
 def find_item_by_upc(db: Session, upc: str) -> dict | None:
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             SELECT item_id, name, category, upc
             FROM items
             WHERE upc = :upc AND deleted_at IS NULL
             """
-        ),
-        {"upc": upc},
-    ).mappings().first()
+            ),
+            {"upc": upc},
+        )
+        .mappings()
+        .first()
+    )
     return dict(row) if row else None
 
 
@@ -71,9 +75,10 @@ def insert_item_with_status(
     notes: Optional[str],
     upc: Optional[str] = None,
 ) -> tuple[int, bool]:
-    res = db.execute(
-        text(
-            """
+    res = (
+        db.execute(
+            text(
+                """
             INSERT INTO items (name, category, notes, upc)
             VALUES (:name, :category, :notes, :upc)
             ON CONFLICT (fingerprint) DO UPDATE
@@ -84,9 +89,12 @@ def insert_item_with_status(
                 deleted_at = NULL
             RETURNING item_id, (xmax = 0) AS inserted
             """
-        ),
-        {"name": name, "category": category, "notes": notes, "upc": upc},
-    ).mappings().one()
+            ),
+            {"name": name, "category": category, "notes": notes, "upc": upc},
+        )
+        .mappings()
+        .one()
+    )
     return int(res["item_id"]), bool(res["inserted"])
 
 
@@ -130,9 +138,7 @@ def insert_bin_item(
 
 def delete_bin_item(db: Session, bin_id: str, item_id: int) -> bool:
     res = db.execute(
-        text(
-            "DELETE FROM bin_items WHERE bin_id = :bin_id AND item_id = :item_id RETURNING id"
-        ),
+        text("DELETE FROM bin_items WHERE bin_id = :bin_id AND item_id = :item_id RETURNING id"),
         {"bin_id": bin_id, "item_id": item_id},
     )
     return res.scalar() is not None
@@ -198,9 +204,10 @@ def bin_exists(db: Session, bin_id: str) -> bool:
 
 
 def fetch_bin_items(db: Session, bin_id: str) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT
               i.item_id,
               i.name,
@@ -214,16 +221,20 @@ def fetch_bin_items(db: Session, bin_id: str) -> list[dict]:
               AND i.deleted_at IS NULL
             ORDER BY i.item_id
             """
-        ),
-        {"bin_id": bin_id},
-    ).mappings().all()
+            ),
+            {"bin_id": bin_id},
+        )
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
 def fetch_bin_photos(db: Session, bin_id: str) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT
               photo_id,
               path,
@@ -232,9 +243,12 @@ def fetch_bin_photos(db: Session, bin_id: str) -> list[dict]:
             WHERE bin_id = :bin_id
             ORDER BY photo_id
             """
-        ),
-        {"bin_id": bin_id},
-    ).mappings().all()
+            ),
+            {"bin_id": bin_id},
+        )
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
@@ -263,9 +277,10 @@ def fetch_photo_path(db: Session, photo_id: int) -> str | None:
 
 
 def fetch_photo_groups(db: Session, photo_id: int) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT
               (label || '|' || COALESCE(category, '')) AS group_key,
               label,
@@ -277,9 +292,12 @@ def fetch_photo_groups(db: Session, photo_id: int) -> list[dict]:
             GROUP BY label, category
             ORDER BY confidence DESC, label ASC, category ASC
             """
-        ),
-        {"photo_id": photo_id},
-    ).mappings().all()
+            ),
+            {"photo_id": photo_id},
+        )
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
@@ -328,17 +346,21 @@ def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
     ``{"label", "category", "confidence", "bbox"}`` where ``bbox`` is a
     4-element ``[x1, y1, x2, y2]`` list.
     """
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT label, category, confidence, x1, y1, x2, y2
             FROM photo_detections
             WHERE photo_id = :photo_id AND model = :model
             ORDER BY id
             """
-        ),
-        {"photo_id": photo_id, "model": model},
-    ).mappings().all()
+            ),
+            {"photo_id": photo_id, "model": model},
+        )
+        .mappings()
+        .all()
+    )
     return [
         {
             "label": row["label"],
@@ -357,26 +379,23 @@ def clear_photo_detections(db: Session, photo_id: int, model: str) -> None:
     before writing new detections from a fresh Fireworks call.
     """
     db.execute(
-        text(
-            "DELETE FROM photo_detections WHERE photo_id = :photo_id AND model = :model"
-        ),
+        text("DELETE FROM photo_detections WHERE photo_id = :photo_id AND model = :model"),
         {"photo_id": photo_id, "model": model},
     )
 
 
 def clear_detection_groups(db: Session, photo_id: int, model: str) -> None:
     db.execute(
-        text(
-            "DELETE FROM photo_detection_groups WHERE photo_id = :photo_id AND model = :model"
-        ),
+        text("DELETE FROM photo_detection_groups WHERE photo_id = :photo_id AND model = :model"),
         {"photo_id": photo_id, "model": model},
     )
 
 
 def fetch_cached_groups(db: Session, photo_id: int, model: str) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT
               (label || '|' || COALESCE(category, '')) AS group_key,
               label,
@@ -387,16 +406,20 @@ def fetch_cached_groups(db: Session, photo_id: int, model: str) -> list[dict]:
             WHERE photo_id = :photo_id AND model = :model
             ORDER BY confidence_avg DESC, label ASC, category ASC
             """
-        ),
-        {"photo_id": photo_id, "model": model},
-    ).mappings().all()
+            ),
+            {"photo_id": photo_id, "model": model},
+        )
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
 def compute_groups_from_detections(db: Session, photo_id: int, model: str) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT
               (label || '|' || COALESCE(category, '')) AS group_key,
               label,
@@ -408,9 +431,12 @@ def compute_groups_from_detections(db: Session, photo_id: int, model: str) -> li
             GROUP BY label, category
             ORDER BY confidence DESC, label ASC, category ASC
             """
-        ),
-        {"photo_id": photo_id, "model": model},
-    ).mappings().all()
+            ),
+            {"photo_id": photo_id, "model": model},
+        )
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
@@ -472,9 +498,10 @@ def insert_photo_group_item(
 
 
 def list_bins(db: Session) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             WITH item_agg AS (
               SELECT
                 bi.bin_id,
@@ -511,15 +538,19 @@ def list_bins(db: Session) -> list[dict]:
             WHERE b.deleted_at IS NULL
             ORDER BY last_updated DESC
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
 def search_items_by_embedding(db: Session, qvec_str: str, limit: int) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT
               i.item_id,
               i.name,
@@ -535,9 +566,12 @@ def search_items_by_embedding(db: Session, qvec_str: str, limit: int) -> list[di
             ORDER BY e.embedding <=> CAST(:qvec AS vector)
             LIMIT :limit
             """
-        ),
-        {"qvec": qvec_str, "limit": limit},
-    ).mappings().all()
+            ),
+            {"qvec": qvec_str, "limit": limit},
+        )
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
@@ -549,9 +583,10 @@ def search_items(
     min_score: Optional[float],
 ) -> list[dict]:
     if min_score is None:
-        rows = db.execute(
-            text(
-                """
+        rows = (
+            db.execute(
+                text(
+                    """
                 SELECT
                   i.item_id,
                   i.name,
@@ -568,14 +603,18 @@ def search_items(
                 LIMIT :limit
                 OFFSET :offset
                 """
-            ),
-            {"qvec": qvec_str, "limit": limit, "offset": offset},
-        ).mappings().all()
+                ),
+                {"qvec": qvec_str, "limit": limit, "offset": offset},
+            )
+            .mappings()
+            .all()
+        )
     else:
         max_distance = 1.0 - min_score
-        rows = db.execute(
-            text(
-                """
+        rows = (
+            db.execute(
+                text(
+                    """
                 SELECT
                   i.item_id,
                   i.name,
@@ -593,9 +632,12 @@ def search_items(
                 LIMIT :limit
                 OFFSET :offset
                 """
-            ),
-            {"qvec": qvec_str, "limit": limit, "offset": offset, "max_distance": max_distance},
-        ).mappings().all()
+                ),
+                {"qvec": qvec_str, "limit": limit, "offset": offset, "max_distance": max_distance},
+            )
+            .mappings()
+            .all()
+        )
     return [dict(row) for row in rows]
 
 
@@ -610,9 +652,7 @@ def create_api_key(db: Session, name: str, role: str = "user") -> tuple[str, str
     raw_key = "bb_" + secrets.token_urlsafe(32)
     key_hash = hash_api_key(raw_key)
     db.execute(
-        text(
-            "INSERT INTO api_keys (key_hash, name, role) VALUES (:key_hash, :name, :role)"
-        ),
+        text("INSERT INTO api_keys (key_hash, name, role) VALUES (:key_hash, :name, :role)"),
         {"key_hash": key_hash, "name": name, "role": role},
     )
     return key_hash, raw_key
@@ -620,12 +660,14 @@ def create_api_key(db: Session, name: str, role: str = "user") -> tuple[str, str
 
 def validate_api_key(db: Session, key_hash: str) -> dict | None:
     # F-03: include role so the auth middleware can attach it to request.state.
-    row = db.execute(
-        text(
-            "SELECT id, name, role, revoked_at FROM api_keys WHERE key_hash = :key_hash"
-        ),
-        {"key_hash": key_hash},
-    ).mappings().first()
+    row = (
+        db.execute(
+            text("SELECT id, name, role, revoked_at FROM api_keys WHERE key_hash = :key_hash"),
+            {"key_hash": key_hash},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
         return None
     if row["revoked_at"] is not None:
@@ -634,11 +676,15 @@ def validate_api_key(db: Session, key_hash: str) -> dict | None:
 
 
 def list_api_keys(db: Session) -> list[dict]:
-    rows = db.execute(
-        text(
-            "SELECT id, name, role, created_at, revoked_at, last_used FROM api_keys ORDER BY id"
+    rows = (
+        db.execute(
+            text(
+                "SELECT id, name, role, created_at, revoked_at, last_used FROM api_keys ORDER BY id"
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
@@ -688,16 +734,20 @@ def set_setting(db: Session, key: str, value: str) -> None:
 
 
 def fetch_active_classes(db: Session) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT class_name, category, source, confirmed_at
             FROM confirmed_classes
             WHERE removed_at IS NULL
             ORDER BY class_name
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
@@ -708,23 +758,27 @@ def insert_confirmed_class(
     source: str,
     confirmed_by: Optional[str] = None,
 ) -> dict | None:
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             INSERT INTO confirmed_classes (class_name, category, source, confirmed_by)
             VALUES (lower(trim(:class_name)), :category, :source, :confirmed_by)
             ON CONFLICT (lower(trim(class_name))) WHERE removed_at IS NULL
             DO NOTHING
             RETURNING id, class_name
             """
-        ),
-        {
-            "class_name": class_name,
-            "category": category,
-            "source": source,
-            "confirmed_by": confirmed_by,
-        },
-    ).mappings().first()
+            ),
+            {
+                "class_name": class_name,
+                "category": category,
+                "source": source,
+                "confirmed_by": confirmed_by,
+            },
+        )
+        .mappings()
+        .first()
+    )
     return dict(row) if row else None
 
 
@@ -748,46 +802,60 @@ def soft_delete_class(db: Session, class_name: str) -> bool:
 
 
 def fetch_bin_location(db: Session, bin_id: str) -> dict:
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             SELECT b.location_id, l.name AS location_name
             FROM bins b
             LEFT JOIN locations l ON l.location_id = b.location_id AND l.deleted_at IS NULL
             WHERE b.bin_id = :bin_id
             """
-        ),
-        {"bin_id": bin_id},
-    ).mappings().first()
-    return {"location_id": row["location_id"] if row else None,
-            "location_name": row["location_name"] if row else None}
+            ),
+            {"bin_id": bin_id},
+        )
+        .mappings()
+        .first()
+    )
+    return {
+        "location_id": row["location_id"] if row else None,
+        "location_name": row["location_name"] if row else None,
+    }
 
 
 def list_locations(db: Session) -> list[dict]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text(
+                """
             SELECT location_id, name, description, created_at
             FROM locations
             WHERE deleted_at IS NULL
             ORDER BY name
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
 def get_location(db: Session, location_id: int) -> dict | None:
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             SELECT location_id, name, description, created_at
             FROM locations
             WHERE location_id = :location_id AND deleted_at IS NULL
             """
-        ),
-        {"location_id": location_id},
-    ).mappings().first()
+            ),
+            {"location_id": location_id},
+        )
+        .mappings()
+        .first()
+    )
     return dict(row) if row else None
 
 
@@ -796,18 +864,22 @@ def create_location(
     name: str,
     description: Optional[str],
 ) -> dict | None:
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             INSERT INTO locations (name, description)
             VALUES (trim(:name), :description)
             ON CONFLICT (lower(trim(name))) WHERE deleted_at IS NULL
             DO NOTHING
             RETURNING location_id, name, description, created_at
             """
-        ),
-        {"name": name, "description": description},
-    ).mappings().first()
+            ),
+            {"name": name, "description": description},
+        )
+        .mappings()
+        .first()
+    )
     return dict(row) if row else None
 
 
@@ -859,17 +931,21 @@ def update_location(
     if not sets:
         return get_location(db, location_id)
 
-    row = db.execute(
-        text(
-            f"""
+    row = (
+        db.execute(
+            text(
+                f"""
             UPDATE locations
             SET {", ".join(sets)}
             WHERE location_id = :location_id AND deleted_at IS NULL
             RETURNING location_id, name, description, created_at
             """
-        ),
-        params,
-    ).mappings().first()
+            ),
+            params,
+        )
+        .mappings()
+        .first()
+    )
     return dict(row) if row else None
 
 
@@ -889,9 +965,7 @@ def soft_delete_location(db: Session, location_id: int) -> bool:
     deleted = res.scalar() is not None
     if deleted:
         db.execute(
-            text(
-                "UPDATE bins SET location_id = NULL WHERE location_id = :location_id"
-            ),
+            text("UPDATE bins SET location_id = NULL WHERE location_id = :location_id"),
             {"location_id": location_id},
         )
     return deleted

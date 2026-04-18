@@ -1,7 +1,7 @@
 """Tests for location data in bin list/detail responses."""
+
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
 
 

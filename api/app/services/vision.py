@@ -29,23 +29,23 @@ PROMPT_VERSION = "v2"
 # normalization safety net (`_normalize_bboxes`) remains in place in case the
 # model still ignores these instructions.
 _PROMPT = (
-    'RULE: Every bbox value must be a decimal between 0.0 and 1.0 inclusive. '
-    'Do NOT use pixel coordinates under any circumstances. '
-    'Return ONLY valid JSON using the schema '
+    "RULE: Every bbox value must be a decimal between 0.0 and 1.0 inclusive. "
+    "Do NOT use pixel coordinates under any circumstances. "
+    "Return ONLY valid JSON using the schema "
     '{"suggestions":[{"name":"string","category":"fastener|electronics|tool|label_packaging|other","confidence":0.0,"bbox":[x1,y1,x2,y2]}]} '
-    'Coordinates are normalized 0-1 with the top-left origin. '
-    'Each bbox MUST tightly enclose ONLY the named object, cropped to its visible extent. '
-    'Do NOT return the whole image as a bbox. A single object\'s bbox should almost never exceed 50% of the image area '
-    '(unless it is a single large surface — e.g. a wall or floor — that fills the frame). '
-    'VALID bbox: [0.05, 0.30, 0.45, 0.80] (all values in [0, 1]). '
-    'INVALID bbox: [50, 300, 450, 800] (these are pixel values — REJECT and REDO). '
-    'Emit one bbox per visible instance: if you see a stapler AND a mug, return TWO suggestions: '
+    "Coordinates are normalized 0-1 with the top-left origin. "
+    "Each bbox MUST tightly enclose ONLY the named object, cropped to its visible extent. "
+    "Do NOT return the whole image as a bbox. A single object's bbox should almost never exceed 50% of the image area "
+    "(unless it is a single large surface — e.g. a wall or floor — that fills the frame). "
+    "VALID bbox: [0.05, 0.30, 0.45, 0.80] (all values in [0, 1]). "
+    "INVALID bbox: [50, 300, 450, 800] (these are pixel values — REJECT and REDO). "
+    "Emit one bbox per visible instance: if you see a stapler AND a mug, return TWO suggestions: "
     '[{"name":"stapler","bbox":[0.1,0.4,0.4,0.75]},{"name":"mug","bbox":[0.55,0.2,0.85,0.6]}]. '
-    'Do NOT merge distinct objects into a single whole-image bbox. '
+    "Do NOT merge distinct objects into a single whole-image bbox. "
     'If you cannot precisely localize distinct objects, return an empty list "suggestions": [] — '
-    'do NOT return approximate, placeholder, or whole-image boxes. OMIT items you cannot localize. '
-    'FINAL REMINDER: each bbox coordinate must be a decimal between 0.0 and 1.0. '
-    'No explanation, no markdown.'
+    "do NOT return approximate, placeholder, or whole-image boxes. OMIT items you cannot localize. "
+    "FINAL REMINDER: each bbox coordinate must be a decimal between 0.0 and 1.0. "
+    "No explanation, no markdown."
 )
 
 
@@ -134,7 +134,15 @@ def _normalize_bboxes(
         logger.info(
             "event=vision.bbox.normalized photo_id=%s name=%s from_pixel=%s "
             "to_normalized=[%.3f,%.3f,%.3f,%.3f] image_size=(%d,%d)",
-            photo_id, s.get("name"), original, nx1, ny1, nx2, ny2, width, height,
+            photo_id,
+            s.get("name"),
+            original,
+            nx1,
+            ny1,
+            nx2,
+            ny2,
+            width,
+            height,
         )
 
 
@@ -159,7 +167,10 @@ def _log_suspicious_bboxes(suggestions: list[dict], photo_id: int | None) -> Non
         if coverage >= _WHOLE_IMAGE_BBOX_COVERAGE_THRESHOLD:
             logger.warning(
                 "event=vision.suggest.whole_image_bbox photo_id=%s name=%s coverage=%.3f bbox=%s",
-                photo_id, s.get("name"), coverage, bbox,
+                photo_id,
+                s.get("name"),
+                coverage,
+                bbox,
             )
 
 
@@ -176,7 +187,9 @@ def _extract_suggestions(parsed: object, photo_id: int | None, sample: str) -> l
         if not isinstance(items, list):
             logger.warning(
                 "event=vision_parse_failed reason=missing_suggestions_key photo_id=%s keys=%s sample=%r",
-                photo_id, list(parsed.keys()), sample,
+                photo_id,
+                list(parsed.keys()),
+                sample,
             )
             return []
     elif isinstance(parsed, list):
@@ -184,7 +197,9 @@ def _extract_suggestions(parsed: object, photo_id: int | None, sample: str) -> l
     else:
         logger.warning(
             "event=vision_parse_failed reason=unexpected_type photo_id=%s type=%s sample=%r",
-            photo_id, type(parsed).__name__, sample,
+            photo_id,
+            type(parsed).__name__,
+            sample,
         )
         return []
 
@@ -207,7 +222,9 @@ def _parse_suggestions(raw_content: str, photo_id: int | None = None) -> list[di
     except json.JSONDecodeError as exc:
         logger.warning(
             "event=vision_parse_failed reason=json_decode photo_id=%s exc=%s sample=%r",
-            photo_id, exc.__class__.__name__, content[:200],
+            photo_id,
+            exc.__class__.__name__,
+            content[:200],
         )
         return []
 
@@ -258,7 +275,9 @@ def describe_photo(
     data_uri = f"data:image/jpeg;base64,{image_b64}"
 
     client = openai.OpenAI(base_url=base_url, api_key=api_key)
-    logger.info("event=vision_request_start photo_id=%s base_url=%s model=%s", photo_id, base_url, model)
+    logger.info(
+        "event=vision_request_start photo_id=%s base_url=%s model=%s", photo_id, base_url, model
+    )
 
     t0 = time.monotonic()
     try:
@@ -278,7 +297,14 @@ def describe_photo(
         )
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
-        logger.warning("event=vision_request_failed photo_id=%s base_url=%s model=%s ms=%s exc=%s", photo_id, base_url, model, elapsed_ms, exc.__class__.__name__)
+        logger.warning(
+            "event=vision_request_failed photo_id=%s base_url=%s model=%s ms=%s exc=%s",
+            photo_id,
+            base_url,
+            model,
+            elapsed_ms,
+            exc.__class__.__name__,
+        )
         return [], elapsed_ms
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
@@ -287,8 +313,18 @@ def describe_photo(
     except (IndexError, AttributeError):
         return [], elapsed_ms
 
-    logger.info("event=vision_response photo_id=%s base_url=%s model=%s ms=%s", photo_id, base_url, model, elapsed_ms)
-    logger.debug("event=vision_response_raw photo_id=%s content=%r", photo_id, content[:500] if content else None)
+    logger.info(
+        "event=vision_response photo_id=%s base_url=%s model=%s ms=%s",
+        photo_id,
+        base_url,
+        model,
+        elapsed_ms,
+    )
+    logger.debug(
+        "event=vision_response_raw photo_id=%s content=%r",
+        photo_id,
+        content[:500] if content else None,
+    )
 
     suggestions = _parse_suggestions(content, photo_id)
     # Dev2_015 iter 2: normalize pixel coords BEFORE the whole-image check.

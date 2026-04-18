@@ -1,4 +1,5 @@
 """Pure configuration constants — no I/O, no DB, safe to import in unit tests."""
+
 import os
 from pathlib import Path
 

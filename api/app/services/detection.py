@@ -58,8 +58,8 @@ def set_deferred_classes(classes: list[str]) -> None:
 def _get_model():
     """Lazy-load YOLOE model, reloading if the configured model changes."""
     global _model, _model_path, _deferred_classes
-    from ultralytics import YOLOE
     from app.deps import get_detection_model
+    from ultralytics import YOLOE
 
     desired_path = get_detection_model()
     if _model is None or _model_path != desired_path:
@@ -124,6 +124,7 @@ def get_device() -> str:
 def get_model_name() -> str:
     """Return the current detection model name for metadata."""
     from app.deps import get_detection_model
+
     return get_detection_model()
 
 
@@ -157,11 +158,13 @@ def detect(photo_path: str) -> list[Detection]:
             conf = float(boxes.conf[i])
             x1, y1, x2, y2 = boxes.xyxy[i].tolist()
 
-            detections.append(Detection(
-                label=label,
-                category=class_registry.get_category(label),
-                confidence=round(conf, 3),
-                bbox=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
-            ))
+            detections.append(
+                Detection(
+                    label=label,
+                    category=class_registry.get_category(label),
+                    confidence=round(conf, 3),
+                    bbox=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+                )
+            )
 
     return detections

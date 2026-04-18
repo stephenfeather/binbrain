@@ -9,11 +9,11 @@ Constraints enforced:
 - HMAC-SHA256 hashing of sensitive fields (device_id, imei, mac, serial)
   with server-side pepper from env METADATA_HASH_PEPPER
 """
+
 import hashlib
 import hmac
 import json
 import os
-
 
 SAMPLE_METADATA = {
     "device_processing": {
@@ -26,26 +26,31 @@ SAMPLE_METADATA = {
 
 # ── Unit tests: validation logic (no DB needed) ───────────────────────────────
 
+
 def test_validate_device_metadata_module_exists():
     from app.services.metadata_schema import validate_device_metadata
+
     assert callable(validate_device_metadata)
 
 
 def test_validate_device_metadata_accepts_allowed_key():
     from app.services.metadata_schema import validate_device_metadata
+
     validate_device_metadata(json.dumps(SAMPLE_METADATA))
 
 
 def test_validate_device_metadata_rejects_unknown_top_level_key():
-    from app.services.metadata_schema import validate_device_metadata
     import pytest
+    from app.services.metadata_schema import validate_device_metadata
+
     with pytest.raises(ValueError, match="disallowed"):
         validate_device_metadata(json.dumps({"unknown_key": "value"}))
 
 
 def test_validate_device_metadata_rejects_unknown_inner_key():
-    from app.services.metadata_schema import validate_device_metadata
     import pytest
+    from app.services.metadata_schema import validate_device_metadata
+
     bad = {"device_processing": {"version": "1", "injected": "extra"}}
     with pytest.raises(ValueError, match="disallowed"):
         validate_device_metadata(json.dumps(bad))
@@ -53,8 +58,9 @@ def test_validate_device_metadata_rejects_unknown_inner_key():
 
 def test_validate_device_metadata_rejects_oversized():
     """Payload exceeding 4 KiB is rejected with 'size' error."""
-    from app.services.metadata_schema import validate_device_metadata, METADATA_MAX_BYTES
     import pytest
+    from app.services.metadata_schema import METADATA_MAX_BYTES, validate_device_metadata
+
     # Many small ocr entries — each text < 1 KiB but total > 4 KiB.
     many_ocr = [{"text": f"item-{i:05d}", "confidence": 0.9} for i in range(200)]
     big = json.dumps({"device_processing": {"ocr": many_ocr}})
@@ -65,8 +71,9 @@ def test_validate_device_metadata_rejects_oversized():
 
 def test_validate_device_metadata_rejects_deep_nesting():
     """Nesting depth > 4 is rejected."""
-    from app.services.metadata_schema import validate_device_metadata
     import pytest
+    from app.services.metadata_schema import validate_device_metadata
+
     # root(0) → device_processing(1) → quality_scores(2) → level3(3) → level4(4) → level5(5)
     deep = {"device_processing": {"quality_scores": {"a": {"b": {"c": "too deep"}}}}}
     with pytest.raises(ValueError, match="depth"):
@@ -75,8 +82,9 @@ def test_validate_device_metadata_rejects_deep_nesting():
 
 def test_validate_device_metadata_rejects_oversized_string_value():
     """A single string value > 1 KiB is rejected."""
-    from app.services.metadata_schema import validate_device_metadata, STRING_MAX_BYTES
     import pytest
+    from app.services.metadata_schema import STRING_MAX_BYTES, validate_device_metadata
+
     bad = {"device_processing": {"version": "x" * (STRING_MAX_BYTES + 1)}}
     with pytest.raises(ValueError, match="string"):
         validate_device_metadata(json.dumps(bad))
@@ -84,22 +92,26 @@ def test_validate_device_metadata_rejects_oversized_string_value():
 
 def test_validate_device_metadata_accepts_empty_device_processing():
     from app.services.metadata_schema import validate_device_metadata
+
     validate_device_metadata(json.dumps({"device_processing": {}}))
 
 
 def test_metadata_max_bytes_is_4kib():
     from app.services.metadata_schema import METADATA_MAX_BYTES
+
     assert METADATA_MAX_BYTES == 4 * 1024
 
 
 def test_metadata_string_max_bytes_is_1kib():
     from app.services.metadata_schema import STRING_MAX_BYTES
+
     assert STRING_MAX_BYTES == 1 * 1024
 
 
 def test_sensitive_field_device_id_is_hashed():
     """device_id values are HMAC-SHA256 hashed, not stored raw."""
     from app.services.metadata_schema import validate_device_metadata
+
     raw_value = "IMEI-123456789012345"
     metadata = {"device_processing": {"device_id": raw_value}}
     result = validate_device_metadata(json.dumps(metadata))
@@ -108,14 +120,15 @@ def test_sensitive_field_device_id_is_hashed():
         raw_value.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    assert result["device_processing"]["device_id"] == expected, (
-        f"device_id should be HMAC-SHA256 hash, got {result['device_processing']['device_id']!r}"
-    )
+    assert (
+        result["device_processing"]["device_id"] == expected
+    ), f"device_id should be HMAC-SHA256 hash, got {result['device_processing']['device_id']!r}"
     assert result["device_processing"]["device_id"] != raw_value
 
 
 def test_sensitive_field_imei_is_hashed():
     from app.services.metadata_schema import validate_device_metadata
+
     raw = "990000862471854"
     result = validate_device_metadata(json.dumps({"device_processing": {"device_imei": raw}}))
     expected = hmac.new(
@@ -128,6 +141,7 @@ def test_sensitive_field_imei_is_hashed():
 
 def test_sensitive_field_mac_is_hashed():
     from app.services.metadata_schema import validate_device_metadata
+
     raw = "AA:BB:CC:DD:EE:FF"
     result = validate_device_metadata(json.dumps({"device_processing": {"wifi_mac": raw}}))
     expected = hmac.new(
@@ -141,6 +155,7 @@ def test_sensitive_field_mac_is_hashed():
 def test_non_string_sensitive_field_unchanged():
     """Non-string values for sensitive-named fields are left as-is."""
     from app.services.metadata_schema import validate_device_metadata
+
     metadata = {"device_processing": {"device_id": 12345}}
     result = validate_device_metadata(json.dumps(metadata))
     assert result["device_processing"]["device_id"] == 12345
@@ -149,6 +164,7 @@ def test_non_string_sensitive_field_unchanged():
 def test_allowed_fields_pass_through_unmodified():
     """Non-sensitive fields are not altered."""
     from app.services.metadata_schema import validate_device_metadata
+
     metadata = {"device_processing": {"version": "1", "pipeline_ms": 999}}
     result = validate_device_metadata(json.dumps(metadata))
     assert result["device_processing"]["version"] == "1"
@@ -156,6 +172,7 @@ def test_allowed_fields_pass_through_unmodified():
 
 
 # ── Integration tests: /ingest endpoint enforces schema ──────────────────────
+
 
 def test_ingest_rejects_unknown_top_level_metadata_key(client, valid_jpeg_bytes):
     resp = client.post(
@@ -173,7 +190,9 @@ def test_ingest_rejects_unknown_nested_metadata_key(client, valid_jpeg_bytes):
         data={"bin_id": "F11SCHEMA05", "device_metadata": json.dumps(bad)},
         files=[("photos", ("a.jpg", valid_jpeg_bytes, "image/jpeg"))],
     )
-    assert resp.status_code == 400, f"Expected 400 for unknown nested key, got {resp.status_code}: {resp.text}"
+    assert (
+        resp.status_code == 400
+    ), f"Expected 400 for unknown nested key, got {resp.status_code}: {resp.text}"
 
 
 def test_ingest_rejects_oversized_metadata(client, valid_jpeg_bytes):
@@ -184,7 +203,9 @@ def test_ingest_rejects_oversized_metadata(client, valid_jpeg_bytes):
         data={"bin_id": "F11SCHEMA02", "device_metadata": huge},
         files=[("photos", ("a.jpg", valid_jpeg_bytes, "image/jpeg"))],
     )
-    assert resp.status_code == 400, f"Expected 400 for oversized metadata, got {resp.status_code}: {resp.text}"
+    assert (
+        resp.status_code == 400
+    ), f"Expected 400 for oversized metadata, got {resp.status_code}: {resp.text}"
 
 
 def test_ingest_accepts_valid_metadata(client, valid_jpeg_bytes):
@@ -199,6 +220,7 @@ def test_ingest_accepts_valid_metadata(client, valid_jpeg_bytes):
 def test_ingest_device_id_stored_hashed(client, db, valid_jpeg_bytes):
     """device_id is SHA-256 hashed before persistence."""
     from sqlalchemy import text
+
     raw_id = "IMEI:device-test-12345"
     metadata = {"device_processing": {"device_id": raw_id}}
     resp = client.post(
@@ -219,15 +241,14 @@ def test_ingest_device_id_stored_hashed(client, db, valid_jpeg_bytes):
         raw_id.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    assert stored == expected_hash, (
-        f"Expected HMAC-SHA256 hash of device_id, got {stored!r}"
-    )
+    assert stored == expected_hash, f"Expected HMAC-SHA256 hash of device_id, got {stored!r}"
     assert stored != raw_id, "Raw device_id must not be stored"
 
 
 def test_pepper_changes_hash_output(monkeypatch):
     """Different pepper values produce different hashes; neither equals plain SHA-256."""
     from app.services.metadata_schema import _hash_value
+
     raw = "test-device-id-42"
 
     monkeypatch.setenv("METADATA_HASH_PEPPER", "pepper-a")
@@ -246,6 +267,7 @@ def test_pepper_changes_hash_output(monkeypatch):
 def test_no_pepper_is_deterministic(monkeypatch):
     """Without a pepper, hashing the same value twice yields the same non-empty result."""
     from app.services.metadata_schema import _hash_value
+
     monkeypatch.delenv("METADATA_HASH_PEPPER", raising=False)
     raw = "test-device-id-42"
     assert _hash_value(raw) == _hash_value(raw)

@@ -1,9 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
-
 from app.deps import get_db, logger
 from app.middleware import require_admin
 from app.services import class_registry
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/classes", tags=["classes"])
 
@@ -19,6 +18,7 @@ class ConfirmRequest(BaseModel):
 def list_classes(request: Request = None):
     """List all active confirmed classes."""
     from app.db import repository
+
     db = next(get_db(request))
     rows = repository.fetch_active_classes(db)
     return {
@@ -44,7 +44,9 @@ def confirm_class(body: ConfirmRequest, request: Request = None):
     )
     logger.info(
         "event=class_confirm request_id=%s class=%s added=%s",
-        request_id, body.class_name, added,
+        request_id,
+        body.class_name,
+        added,
     )
     return {
         "version": "1",
@@ -65,7 +67,8 @@ def delete_class(class_name: str, request: Request = None):
         raise HTTPException(status_code=404, detail=f"class '{class_name}' not found")
     logger.info(
         "event=class_delete request_id=%s class=%s",
-        request_id, class_name,
+        request_id,
+        class_name,
     )
     return {
         "version": "1",
@@ -81,10 +84,12 @@ def reload_classes(request: Request = None):
     request_id = getattr(request.state, "request_id", None) if request else None
     classes = class_registry.get_classes()
     from app.services.detection import reload_classes as _reload
+
     _reload(classes)
     logger.info(
         "event=class_reload_forced request_id=%s count=%d",
-        request_id, len(classes),
+        request_id,
+        len(classes),
     )
     return {
         "version": "1",

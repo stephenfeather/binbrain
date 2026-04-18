@@ -3,6 +3,7 @@
 Covers: persistence, cache hit, ?refresh=true, cached flag, full-round-trip
 bbox fidelity.
 """
+
 import pytest
 from sqlalchemy import text
 
@@ -28,24 +29,35 @@ def _fake_describe(hits, elapsed=42):
     return calls, fn
 
 
-def test_suggest_persists_vision_hits_to_photo_detections(client, db, monkeypatch, valid_jpeg_bytes):
+def test_suggest_persists_vision_hits_to_photo_detections(
+    client, db, monkeypatch, valid_jpeg_bytes
+):
     photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-CACHE-0001")
     hits = [
         {"name": "Widget", "category": "tool", "confidence": 0.9, "bbox": [0.1, 0.2, 0.3, 0.4]},
-        {"name": "Gadget", "category": "electronics", "confidence": 0.7, "bbox": [0.5, 0.6, 0.7, 0.8]},
+        {
+            "name": "Gadget",
+            "category": "electronics",
+            "confidence": 0.7,
+            "bbox": [0.5, 0.6, 0.7, 0.8],
+        },
     ]
     _, fn = _fake_describe(hits)
     monkeypatch.setattr("app.routes.photos.describe_photo", fn)
 
     r = client.get(f"/photos/{photo_id}/suggest")
     assert r.status_code == 200
-    rows = db.execute(
-        text(
-            "SELECT label, category, confidence, x1, y1, x2, y2 FROM photo_detections "
-            "WHERE photo_id = :pid ORDER BY label"
-        ),
-        {"pid": photo_id},
-    ).mappings().all()
+    rows = (
+        db.execute(
+            text(
+                "SELECT label, category, confidence, x1, y1, x2, y2 FROM photo_detections "
+                "WHERE photo_id = :pid ORDER BY label"
+            ),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .all()
+    )
     assert len(rows) == 2
     # Stored rows carry the exact bbox coords that came back from Fireworks.
     by_label = {row["label"]: row for row in rows}
@@ -110,7 +122,9 @@ def test_suggest_cached_flag_reflects_source(client, monkeypatch, valid_jpeg_byt
 
 def test_suggest_response_bbox_preserved_across_cache_hop(client, monkeypatch, valid_jpeg_bytes):
     photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-CACHE-0005")
-    hits = [{"name": "Exact", "category": "tool", "confidence": 0.75, "bbox": [0.12, 0.34, 0.56, 0.78]}]
+    hits = [
+        {"name": "Exact", "category": "tool", "confidence": 0.75, "bbox": [0.12, 0.34, 0.56, 0.78]}
+    ]
     _, fn = _fake_describe(hits)
     monkeypatch.setattr("app.routes.photos.describe_photo", fn)
 

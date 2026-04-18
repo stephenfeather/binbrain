@@ -1,26 +1,36 @@
 import json
 import urllib.request
 
-from fastapi import APIRouter, Depends, HTTPException, Body, Request
-from sqlalchemy.orm import Session
-
 from app.db import repository
 from app.deps import (
-    get_db, SessionLocal, OLLAMA_URL, VISION_BASE_URL, logger,
-    get_active_vision_model, set_active_vision_model,
-    get_max_image_px, set_max_image_px,
-    get_detection_model_id, set_detection_model,
     DETECTION_MODEL_ALLOWLIST,
+    OLLAMA_URL,
+    VISION_BASE_URL,
+    SessionLocal,
+    get_active_vision_model,
+    get_db,
+    get_detection_model_id,
+    get_max_image_px,
+    logger,
+    set_active_vision_model,
+    set_detection_model,
+    set_max_image_px,
 )
 from app.middleware import require_admin
 from app.services.rate_limiter import require_warmup_rate_limit
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
 router = APIRouter()
 
 
 def _is_local_ollama() -> bool:
     """True when VISION_BASE_URL points to a local Ollama instance."""
-    return "localhost" in VISION_BASE_URL or "host.docker.internal" in VISION_BASE_URL or "127.0.0.1" in VISION_BASE_URL
+    return (
+        "localhost" in VISION_BASE_URL
+        or "host.docker.internal" in VISION_BASE_URL
+        or "127.0.0.1" in VISION_BASE_URL
+    )
 
 
 @router.get("/models")
@@ -36,8 +46,14 @@ def list_models(request: Request = None):
 
     if not _is_local_ollama():
         from urllib.parse import urlparse
+
         provider_host = urlparse(VISION_BASE_URL).hostname or VISION_BASE_URL
-        logger.info("event=models_list request_id=%s provider=%s active=%s", request_id, provider_host, active)
+        logger.info(
+            "event=models_list request_id=%s provider=%s active=%s",
+            request_id,
+            provider_host,
+            active,
+        )
         return {
             "version": "1",
             "active_model": active,
@@ -51,17 +67,21 @@ def list_models(request: Request = None):
             data = json.loads(resp.read())
     except Exception as e:
         logger.warning("event=models_list_failed request_id=%s error=%s", request_id, str(e)[:200])
-        raise HTTPException(status_code=502, detail="upstream service unavailable")
+        raise HTTPException(status_code=502, detail="upstream service unavailable") from e
 
     models = []
     for m in data.get("models", []):
-        models.append({
-            "name": m.get("name"),
-            "size": m.get("size"),
-            "modified_at": m.get("modified_at"),
-        })
+        models.append(
+            {
+                "name": m.get("name"),
+                "size": m.get("size"),
+                "modified_at": m.get("modified_at"),
+            }
+        )
 
-    logger.info("event=models_list request_id=%s count=%s active=%s", request_id, len(models), active)
+    logger.info(
+        "event=models_list request_id=%s count=%s active=%s", request_id, len(models), active
+    )
     return {
         "version": "1",
         "active_model": active,
@@ -79,17 +99,21 @@ def running_models(request: Request = None):
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
     except Exception as e:
-        logger.warning("event=models_running_failed request_id=%s error=%s", request_id, str(e)[:200])
-        raise HTTPException(status_code=502, detail="upstream service unavailable")
+        logger.warning(
+            "event=models_running_failed request_id=%s error=%s", request_id, str(e)[:200]
+        )
+        raise HTTPException(status_code=502, detail="upstream service unavailable") from e
 
     models = []
     for m in data.get("models", []):
-        models.append({
-            "name": m.get("name"),
-            "size": m.get("size"),
-            "size_vram": m.get("size_vram"),
-            "expires_at": m.get("expires_at"),
-        })
+        models.append(
+            {
+                "name": m.get("name"),
+                "size": m.get("size"),
+                "size_vram": m.get("size_vram"),
+                "expires_at": m.get("expires_at"),
+            }
+        )
 
     logger.info("event=models_running request_id=%s count=%s", request_id, len(models))
     return {
@@ -99,7 +123,9 @@ def running_models(request: Request = None):
     }
 
 
-@router.post("/models/select", dependencies=[Depends(require_admin), Depends(require_warmup_rate_limit)])
+@router.post(
+    "/models/select", dependencies=[Depends(require_admin), Depends(require_warmup_rate_limit)]
+)
 def select_model(
     payload: dict = Body(...),
     request: Request = None,
@@ -113,11 +139,13 @@ def select_model(
 
     # Warm up the model by sending a lightweight generate request with keep_alive=-1
     try:
-        warmup_payload = json.dumps({
-            "model": model_name,
-            "prompt": "",
-            "keep_alive": -1,
-        }).encode()
+        warmup_payload = json.dumps(
+            {
+                "model": model_name,
+                "prompt": "",
+                "keep_alive": -1,
+            }
+        ).encode()
         req = urllib.request.Request(
             f"{OLLAMA_URL}/api/generate",
             data=warmup_payload,
@@ -126,8 +154,13 @@ def select_model(
         with urllib.request.urlopen(req, timeout=120) as resp:
             resp.read()
     except Exception as e:
-        logger.warning("event=model_select_warmup_failed request_id=%s model=%s error=%s", request_id, model_name, str(e)[:200])
-        raise HTTPException(status_code=502, detail="upstream service unavailable")
+        logger.warning(
+            "event=model_select_warmup_failed request_id=%s model=%s error=%s",
+            request_id,
+            model_name,
+            str(e)[:200],
+        )
+        raise HTTPException(status_code=502, detail="upstream service unavailable") from e
 
     previous = get_active_vision_model()
     set_active_vision_model(model_name)
@@ -138,9 +171,13 @@ def select_model(
         settings_db.commit()
         settings_db.close()
     except Exception as e:
-        logger.warning("event=setting_persist_failed key=active_vision_model error=%s", str(e)[:200])
+        logger.warning(
+            "event=setting_persist_failed key=active_vision_model error=%s", str(e)[:200]
+        )
 
-    logger.info("event=model_select request_id=%s previous=%s active=%s", request_id, previous, model_name)
+    logger.info(
+        "event=model_select request_id=%s previous=%s active=%s", request_id, previous, model_name
+    )
     return {
         "version": "1",
         "previous_model": previous,
@@ -171,7 +208,7 @@ def set_image_size(
     try:
         value = int(value)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="max_image_px must be an integer")
+        raise HTTPException(status_code=400, detail="max_image_px must be an integer") from None
     if value < 128 or value > 4096:
         raise HTTPException(status_code=400, detail="max_image_px must be between 128 and 4096")
 
@@ -186,7 +223,9 @@ def set_image_size(
     except Exception as e:
         logger.warning("event=setting_persist_failed key=max_image_px error=%s", str(e)[:200])
 
-    logger.info("event=image_size_set request_id=%s previous=%s new=%s", request_id, previous, value)
+    logger.info(
+        "event=image_size_set request_id=%s previous=%s new=%s", request_id, previous, value
+    )
     return {
         "version": "1",
         "previous_max_image_px": previous,
@@ -243,7 +282,9 @@ def set_detection_model_setting(
     except Exception as e:
         logger.warning("event=setting_persist_failed key=detection_model error=%s", str(e)[:200])
 
-    logger.info("event=detection_model_set request_id=%s previous=%s new=%s", request_id, previous, model_id)
+    logger.info(
+        "event=detection_model_set request_id=%s previous=%s new=%s", request_id, previous, model_id
+    )
     return {
         "version": "1",
         "previous_detection_model": previous,

@@ -1,11 +1,10 @@
 import hashlib
 
+from app.db import repository
+from app.deps import EMBED_MODEL_NAME, get_db
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-
-from app.db import repository
-from app.deps import get_db, EMBED_MODEL_NAME
 
 router = APIRouter()
 
@@ -15,7 +14,7 @@ def health(request: Request, db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
     except Exception:
-        raise HTTPException(status_code=503, detail="database unavailable")
+        raise HTTPException(status_code=503, detail="database unavailable") from None
 
     body: dict = {
         "version": "1",
@@ -29,6 +28,7 @@ def health(request: Request, db: Session = Depends(get_db)):
     # background-thread failures (e.g. mkdir permission errors) are visible
     # to ops and, eventually, the iOS client.
     from app.services import detection
+
     body["model_reload"] = detection.get_reload_status()
 
     # Optional auth probe: if the caller supplied X-API-Key, report whether

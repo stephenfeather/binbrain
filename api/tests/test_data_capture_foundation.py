@@ -9,14 +9,13 @@ Covers the three unanimous gaps from the Data Capture Synthesis report:
 All DB-touching tests piggyback on the existing conftest fixtures (``client``,
 ``db``, ``valid_jpeg_bytes``) and the autouse TRUNCATE between tests.
 """
+
 from __future__ import annotations
 
 from io import BytesIO
 
-import pytest
 from PIL import Image
 from sqlalchemy import text
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -35,7 +34,9 @@ def _png_bytes(width: int, height: int) -> bytes:
     return buf.getvalue()
 
 
-def _seed_photo(client, body_bytes, bin_id: str, *, mime: str = "image/jpeg", ext: str = "jpg") -> int:
+def _seed_photo(
+    client, body_bytes, bin_id: str, *, mime: str = "image/jpeg", ext: str = "jpg"
+) -> int:
     r = client.post(
         "/ingest",
         data={"bin_id": bin_id},
@@ -71,10 +72,14 @@ def test_ingest_persists_image_dimensions(client, db):
     assert r.status_code == 200, r.text
     photo_id = r.json()["photos"][0]["photo_id"]
 
-    row = db.execute(
-        text("SELECT width, height FROM photos WHERE photo_id = :pid"),
-        {"pid": photo_id},
-    ).mappings().one()
+    row = (
+        db.execute(
+            text("SELECT width, height FROM photos WHERE photo_id = :pid"),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
     assert row["width"] == 200
     assert row["height"] == 300
 
@@ -109,16 +114,20 @@ def test_ingest_records_null_dimensions_when_pil_fails(client, db, monkeypatch, 
     assert r.status_code == 200, r.text
     photo_id = r.json()["photos"][0]["photo_id"]
 
-    row = db.execute(
-        text("SELECT width, height FROM photos WHERE photo_id = :pid"),
-        {"pid": photo_id},
-    ).mappings().one()
+    row = (
+        db.execute(
+            text("SELECT width, height FROM photos WHERE photo_id = :pid"),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
     assert row["width"] is None
     assert row["height"] is None
 
-    assert any("ingest_dims_failed" in rec.getMessage() for rec in caplog.records), (
-        "expected an ingest_dims_failed warning log"
-    )
+    assert any(
+        "ingest_dims_failed" in rec.getMessage() for rec in caplog.records
+    ), "expected an ingest_dims_failed warning log"
 
 
 # ---------------------------------------------------------------------------
@@ -196,10 +205,14 @@ def test_suggest_persists_prompt_version(client, db, monkeypatch, valid_jpeg_byt
     r = client.get(f"/photos/{photo_id}/suggest")
     assert r.status_code == 200, r.text
 
-    rows = db.execute(
-        text("SELECT prompt_version FROM photo_detections WHERE photo_id = :pid"),
-        {"pid": photo_id},
-    ).scalars().all()
+    rows = (
+        db.execute(
+            text("SELECT prompt_version FROM photo_detections WHERE photo_id = :pid"),
+            {"pid": photo_id},
+        )
+        .scalars()
+        .all()
+    )
     assert rows, "expected at least one detection row"
     assert all(v == "v2" for v in rows), rows
 
@@ -221,10 +234,14 @@ def test_suggest_cached_rows_prompt_version_roundtrip(client, db, monkeypatch, v
     assert first["cached"] is False
     assert second["cached"] is True
 
-    rows = db.execute(
-        text("SELECT prompt_version FROM photo_detections WHERE photo_id = :pid"),
-        {"pid": photo_id},
-    ).scalars().all()
+    rows = (
+        db.execute(
+            text("SELECT prompt_version FROM photo_detections WHERE photo_id = :pid"),
+            {"pid": photo_id},
+        )
+        .scalars()
+        .all()
+    )
     assert rows == ["v2"]
 
 
@@ -244,19 +261,29 @@ def test_yolo_detection_writes_null_prompt_version(client, db, monkeypatch, vali
     # Conftest patches photos_route.detect to return []; swap in a stub with rows.
     import app.routes.photos as photos_route
 
-    stub_rows = [{"label": "bolt", "category": "fastener", "confidence": 0.88,
-                  "bbox": [0.10, 0.10, 0.40, 0.40]}]
+    stub_rows = [
+        {
+            "label": "bolt",
+            "category": "fastener",
+            "confidence": 0.88,
+            "bbox": [0.10, 0.10, 0.40, 0.40],
+        }
+    ]
     monkeypatch.setattr(photos_route, "detect", lambda photo_path: stub_rows)
     monkeypatch.setattr(photos_route, "get_model_name", lambda: "yoloe-stub")
 
     r = client.post(f"/photos/{photo_id}/detect")
     assert r.status_code == 200, r.text
 
-    rows = db.execute(
-        text(
-            "SELECT prompt_version FROM photo_detections "
-            "WHERE photo_id = :pid AND model = :model"
-        ),
-        {"pid": photo_id, "model": "yoloe-stub"},
-    ).scalars().all()
+    rows = (
+        db.execute(
+            text(
+                "SELECT prompt_version FROM photo_detections "
+                "WHERE photo_id = :pid AND model = :model"
+            ),
+            {"pid": photo_id, "model": "yoloe-stub"},
+        )
+        .scalars()
+        .all()
+    )
     assert rows == [None]

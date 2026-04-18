@@ -7,26 +7,32 @@ from pathlib import Path
 from typing import Optional
 
 import aiofiles
-from fastapi import APIRouter, Depends, HTTPException, Form, Body, UploadFile, File
+from app.db import repository
+from app.deps import (
+    EMBED_MODEL_NAME,
+    MAX_FILE_BYTES,
+    MAX_FILES_PER_REQUEST,
+    canonical_item_text,
+    embed_text,
+    get_db,
+    logger,
+    photo_root,
+    vec_to_pgvector,
+)
+from app.security import validate_bin_id
+from app.services.image_validation import validate_image_file
+from app.services.metadata_schema import validate_device_metadata
+from app.services.upc_lookup import validate_upc
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-
-from app.db import repository
-from app.deps import (
-    get_db, embed_text, canonical_item_text,
-    vec_to_pgvector, photo_root, EMBED_MODEL_NAME, logger,
-    MAX_FILE_BYTES, MAX_FILES_PER_REQUEST,
-)
 
 # Dev2_016: session_id is client-supplied, opaque, length-capped. Reject
 # non-printable ASCII and anything longer than this so a misbehaving client
 # cannot smuggle arbitrary bytes through a grouping key.
 _SESSION_ID_MAX_LEN = 128
-from app.security import validate_bin_id
-from app.services.image_validation import validate_image_file
-from app.services.metadata_schema import validate_device_metadata
-from app.services.upc_lookup import validate_upc
+
 
 class BinLocationUpdate(BaseModel):
     location_id: int | None = None
@@ -105,7 +111,7 @@ def _check_bin_id(raw: str) -> str:
                 "invalid bin_id: must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ "
                 "(no path separators, dots, or special characters)"
             ),
-        )
+        ) from None
 
 
 async def _stream_upload(up: UploadFile, dest: Path) -> None:
@@ -152,7 +158,7 @@ def _validate_and_place(tmp: Path, final: Path) -> None:
         raise HTTPException(
             status_code=415,
             detail="unsupported file type",
-        )
+        ) from None
     final.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(tmp), str(final))
 
@@ -180,9 +186,11 @@ async def ingest(
         try:
             parsed_metadata = validate_device_metadata(device_metadata)
         except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="device_metadata must be valid JSON")
+            raise HTTPException(
+                status_code=400, detail="device_metadata must be valid JSON"
+            ) from None
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Dev2_016: session_id is opaque but must be short and printable ASCII so
     # a misbehaving client can't smuggle bytes through a grouping key. Reject
@@ -205,7 +213,7 @@ async def ingest(
     try:
         repository.ensure_bin_active_or_create(db, bin_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="bin not found")
+        raise HTTPException(status_code=404, detail="bin not found") from None
     db.commit()
 
     logger.info(
@@ -321,7 +329,7 @@ async def add_to_bin(
         try:
             repository.ensure_bin_active_or_create(db, bin_id)
         except ValueError:
-            raise HTTPException(status_code=404, detail="bin not found")
+            raise HTTPException(status_code=404, detail="bin not found") from None
 
         item_id = None
         if upc and not name:
@@ -341,7 +349,9 @@ async def add_to_bin(
             vec = embed_text(canonical_item_text(name, category, notes))
             dims = len(vec)
             if dims != 384:
-                raise HTTPException(status_code=500, detail=f"unexpected embedding dims {dims}, expected 384")
+                raise HTTPException(
+                    status_code=500, detail=f"unexpected embedding dims {dims}, expected 384"
+                )
             vec_str = vec_to_pgvector(vec)
 
             repository.upsert_item_embedding(db, item_id, EMBED_MODEL_NAME, dims, vec_str)
@@ -510,9 +520,13 @@ def update_item_in_bin(
     confidence = payload.get("confidence")
 
     if quantity is None and confidence is None:
-        raise HTTPException(status_code=400, detail="at least one of quantity or confidence is required")
+        raise HTTPException(
+            status_code=400, detail="at least one of quantity or confidence is required"
+        )
 
-    updated = repository.update_bin_item(db, bin_id, item_id, quantity=quantity, confidence=confidence)
+    updated = repository.update_bin_item(
+        db, bin_id, item_id, quantity=quantity, confidence=confidence
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="item not in bin")
 
@@ -525,7 +539,13 @@ def update_item_in_bin(
         quantity,
         confidence,
     )
-    return {"version": "1", "bin_id": bin_id, "item_id": item_id, "quantity": quantity, "confidence": confidence}
+    return {
+        "version": "1",
+        "bin_id": bin_id,
+        "item_id": item_id,
+        "quantity": quantity,
+        "confidence": confidence,
+    }
 
 
 @router.patch("/bins/{bin_id}/location")

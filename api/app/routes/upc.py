@@ -1,13 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-
 from app.db import repository
 from app.deps import (
-    get_db, embed_text, canonical_item_text, vec_to_pgvector,
-    EMBED_MODEL_NAME, logger,
+    EMBED_MODEL_NAME,
+    canonical_item_text,
+    embed_text,
+    get_db,
+    logger,
+    vec_to_pgvector,
 )
 from app.services.rate_limiter import require_upc_rate_limit
-from app.services.upc_lookup import validate_upc, lookup_upc
+from app.services.upc_lookup import lookup_upc, validate_upc
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 router = APIRouter()
 
@@ -26,7 +29,9 @@ def upc_lookup(
     if existing:
         logger.info(
             "event=upc_lookup request_id=%s upc=%s source=local item_id=%s",
-            db.info.get("request_id"), upc, existing["item_id"],
+            db.info.get("request_id"),
+            upc,
+            existing["item_id"],
         )
         return {
             "version": "1",
@@ -49,19 +54,26 @@ def upc_lookup(
             dims = len(vec)
             if dims != 384:
                 raise ValueError(f"unexpected embedding dims {dims}")
-            repository.upsert_item_embedding(db, item_id, EMBED_MODEL_NAME, dims, vec_to_pgvector(vec))
+            repository.upsert_item_embedding(
+                db, item_id, EMBED_MODEL_NAME, dims, vec_to_pgvector(vec)
+            )
             db.commit()
         except Exception as e:
             db.rollback()
             logger.warning(
                 "event=upc_lookup_cache_failed request_id=%s upc=%s error=%s",
-                db.info.get("request_id"), upc, str(e)[:200],
+                db.info.get("request_id"),
+                upc,
+                str(e)[:200],
             )
             item_id = None
 
     logger.info(
         "event=upc_lookup request_id=%s upc=%s source=%s item_id=%s",
-        db.info.get("request_id"), upc, result.source, item_id,
+        db.info.get("request_id"),
+        upc,
+        result.source,
+        item_id,
     )
     return {
         "version": "1",
