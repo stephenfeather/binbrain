@@ -422,3 +422,104 @@ def test_vision_calls_are_not_deduped_across_repeated_suggest_calls(
     assert len(rows) == 3
     # First row is fresh; subsequent two are cache hits.
     assert [r["cached"] for r in rows] == [False, True, True]
+
+
+# ---------------------------------------------------------------------------
+# PR#21 review follow-up: late-stage crash + match-insert best-effort
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_match_insert_failure_does_not_break_response(
+    client, db, monkeypatch, valid_jpeg_bytes, caplog
+):
+    """insert_photo_suggestion_matches raising must not propagate — it is
+    telemetry and must be as best-effort as the vision_calls writer.
+    """
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-M-0004")
+    item_id = _seed_item(db, name="Flange", category="tool")
+    hits = [
+        {"name": "Flange", "category": "tool", "confidence": 0.9, "bbox": [0.1, 0.1, 0.2, 0.2]}
+    ]
+    _, fn = _fake_describe(hits)
+    monkeypatch.setattr("app.routes.photos.describe_photo", fn)
+
+    def fake_search(db_, qvec, limit):
+        return [
+            {
+                "item_id": item_id,
+                "name": "Flange",
+                "category": "tool",
+                "upc": None,
+                "score": 0.95,
+                "bins": [],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.routes.photos.repository.search_items_by_embedding", fake_search
+    )
+
+    def boom(*a, **kw):
+        raise RuntimeError("telemetry DB offline")
+
+    monkeypatch.setattr(
+        "app.routes.photos.repository.insert_photo_suggestion_matches", boom
+    )
+
+    with caplog.at_level("WARNING"):
+        r = client.get(f"/photos/{photo_id}/suggest")
+    assert r.status_code == 200, r.text
+    assert len(r.json()["suggestions"]) == 1
+    assert any(
+        "photo_suggestion_matches_write_failed" in rec.getMessage()
+        for rec in caplog.records
+    )
+    # vision_calls row is still written (outer finally), with outcome=ok —
+    # match-insert failure is telemetry-internal and doesn't mark the call
+    # itself as failed.
+    vc_rows = _vision_call_rows(db, photo_id)
+    assert len(vc_rows) == 1
+    assert vc_rows[0]["outcome"] == "ok"
+
+
+def test_suggest_late_stage_crash_records_outcome_error(
+    app_module, test_api_key, db, monkeypatch, valid_jpeg_bytes
+):
+    """A crash after describe_photo returns (e.g. in the detection-persistence
+    block) must still land outcome=error + a non-null error_code on the
+    vision_calls row. Without the broad outer except, the row would claim
+    outcome=ok while the response was HTTP 500 — corrupting error-rate
+    metrics.
+    """
+    from fastapi.testclient import TestClient
+
+    c = TestClient(app_module.app, raise_server_exceptions=False)
+    c.headers["X-API-Key"] = test_api_key
+
+    photo_id = _seed_photo(c, valid_jpeg_bytes, "BIN-VC-0008")
+    hits = [
+        {"name": "Widget", "category": "tool", "confidence": 0.9, "bbox": [0.1, 0.1, 0.2, 0.2]}
+    ]
+    _, fn = _fake_describe(hits)
+    monkeypatch.setattr("app.routes.photos.describe_photo", fn)
+
+    class LateStageError(RuntimeError):
+        pass
+
+    def boom(*a, **kw):
+        raise LateStageError("detection persistence db dead")
+
+    # insert_photo_detections is called AFTER describe_photo succeeds —
+    # simulating a DB failure in the persistence block.
+    monkeypatch.setattr(
+        "app.routes.photos.repository.insert_photo_detections", boom
+    )
+
+    r = c.get(f"/photos/{photo_id}/suggest")
+    assert r.status_code >= 500
+
+    rows = _vision_call_rows(db, photo_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["outcome"] == "error"
+    assert row["error_code"] == "LateStageError"

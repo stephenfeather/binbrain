@@ -189,38 +189,27 @@ def suggest_for_photo(
         # -- fresh VLM path --------------------------------------------------
         if not cached_flag:
             flags["stages"].append("vlm")
-            try:
-                logger.info(
-                    "event=photo_suggest_vision_start request_id=%s photo_id=%s",
-                    request_id,
-                    photo_id,
-                )
-                vision_hits, vision_elapsed_ms = describe_photo(
-                    str(resolved_path),
-                    VISION_BASE_URL,
-                    VISION_API_KEY,
-                    vision_model,
-                    get_max_image_px(),
-                    photo_id=photo_id,
-                    flags_out=flags,
-                )
-                logger.info(
-                    "event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s",
-                    request_id,
-                    photo_id,
-                    vision_elapsed_ms,
-                    len(vision_hits),
-                )
-            except Exception as exc:
-                tracker.mark_failed(photo_id, type(exc).__name__.lower())
-                outcome = "error"
-                error_code = type(exc).__name__
-                logger.exception(
-                    "event=photo_suggest_crash request_id=%s photo_id=%s",
-                    request_id,
-                    photo_id,
-                )
-                raise
+            logger.info(
+                "event=photo_suggest_vision_start request_id=%s photo_id=%s",
+                request_id,
+                photo_id,
+            )
+            vision_hits, vision_elapsed_ms = describe_photo(
+                str(resolved_path),
+                VISION_BASE_URL,
+                VISION_API_KEY,
+                vision_model,
+                get_max_image_px(),
+                photo_id=photo_id,
+                flags_out=flags,
+            )
+            logger.info(
+                "event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s",
+                request_id,
+                photo_id,
+                vision_elapsed_ms,
+                len(vision_hits),
+            )
 
             # Persist detections for future cache hits. Clear first so re-runs
             # replace rather than accumulate (decision 1: "latest vision
@@ -320,9 +309,21 @@ def suggest_for_photo(
 
             suggestions.sort(key=lambda s: (-s["confidence"], s["name"] or ""))
 
+            # Dev2_018 (PR#21 review follow-up): match-telemetry is as
+            # best-effort as the vision_calls row. A DB failure here must not
+            # break the /suggest response contract.
             if match_rows:
-                repository.insert_photo_suggestion_matches(db2, rows=match_rows)
-                db2.commit()
+                try:
+                    repository.insert_photo_suggestion_matches(db2, rows=match_rows)
+                    db2.commit()
+                except Exception as m_exc:
+                    logger.warning(
+                        "event=photo_suggestion_matches_write_failed "
+                        "photo_id=%s rows=%s err=%s",
+                        photo_id,
+                        len(match_rows),
+                        m_exc,
+                    )
         finally:
             db2.close()
 
@@ -349,6 +350,24 @@ def suggest_for_photo(
             "prompt_version": response_prompt_version,
             "suggestions": suggestions,
         }
+    except Exception as exc:
+        # Dev2_018 (PR#21 review follow-up): any exception reaching the outer
+        # try — VLM call, detection persistence, embedding match — updates the
+        # telemetry fields before the finally block writes the row. Without
+        # this, a late-stage DB failure would return HTTP 500 while
+        # vision_calls recorded outcome=ok, corrupting the error-rate metric.
+        outcome = "error"
+        error_code = type(exc).__name__
+        tracker.mark_failed(photo_id, type(exc).__name__.lower())
+        logger.exception(
+            "event=photo_suggest_crash request_id=%s photo_id=%s "
+            "stage=%s error_code=%s",
+            request_id,
+            photo_id,
+            flags.get("stages", [])[-1] if flags.get("stages") else None,
+            error_code,
+        )
+        raise
     finally:
         # Dev2_018: best-effort vision_calls telemetry. Runs on every terminal
         # state (success, cache hit, or error). NEVER lets its own failure
@@ -356,6 +375,10 @@ def suggest_for_photo(
         # and swallowed so the user-facing behaviour is unchanged.
         try:
             elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+            # Telemetry uses a fresh session intentionally: if the main
+            # /suggest session rolled back due to an exception, the
+            # vision_calls row still needs to persist. Pool checkout cost is
+            # microseconds versus the value of preserving the error row.
             db_tel = SessionLocal()
             try:
                 repository.insert_vision_call(
