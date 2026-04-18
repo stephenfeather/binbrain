@@ -243,7 +243,9 @@ def suggest_for_photo(
                     )
                     detection_id_by_hit_idx = {
                         hit_idx: det_id
-                        for (hit_idx, _), det_id in zip(persistable, detection_ids)
+                        for (hit_idx, _), det_id in zip(
+                            persistable, detection_ids, strict=True
+                        )
                     }
                 db_write.commit()
             finally:
