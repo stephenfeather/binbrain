@@ -19,6 +19,11 @@ WARMUP_RATE_LIMIT          int  per-key req/min for model warmup / admin model r
 UPC_RATE_LIMIT             int  per-key req/min for /upc/{upc}                (default 30)
 RATE_LIMIT_ADMIN_MULTIPLIER  float multiplier applied to each limit for admin keys (default 4)
 RATE_LIMIT_MAX_TRACKED_KEYS  int  maximum number of API-key slots held in memory (default 10000)
+RATE_LIMIT_DISABLED        bool  dev-only kill-switch ("1"/"true"/"yes" => bypass every limiter)
+                                 (default unset). DO NOT enable in production — this short-circuits
+                                 all four limiters (global + vision + warmup + UPC) regardless of
+                                 their configured budgets, removing the only in-process backpressure
+                                 against runaway clients and outbound-vision/UPC cost amplification.
 """
 
 import os
@@ -31,6 +36,17 @@ from fastapi import HTTPException, Request
 
 _MAX_TRACKED_KEYS: int = int(os.environ.get("RATE_LIMIT_MAX_TRACKED_KEYS", "10000"))
 _ADMIN_MULTIPLIER: float = float(os.environ.get("RATE_LIMIT_ADMIN_MULTIPLIER", "4"))
+_DISABLED: bool = os.environ.get("RATE_LIMIT_DISABLED", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+"""Read once at import time so the kill-switch state is stable for the process lifetime
+(matches the deliberate immutability of the other module-level config). Tests that need
+to toggle this should monkeypatch ``rate_limiter._DISABLED`` directly — module-global
+function lookups (see the IMPORTANT comment below the limiters) make the swap visible
+without re-importing."""
 
 
 class SlidingWindowRateLimiter:
@@ -60,7 +76,19 @@ class SlidingWindowRateLimiter:
 
         Returns False (without recording) when the caller is over their quota.
         The effective limit is ``int(max_calls * role_multiplier)``.
+
+        When the module-level ``RATE_LIMIT_DISABLED`` env var is truthy this
+        short-circuits to True without touching the deque, so rate-limit state
+        does not accumulate during dev/test runs that bypass the limiter. The
+        lookup is via the module global (not a closed-over copy) so tests can
+        monkeypatch ``rate_limiter._DISABLED`` without re-importing.
         """
+        # Read through the module global — this is the IMPORTANT note's pattern.
+        from app.services import rate_limiter as _rl
+
+        if _rl._DISABLED:
+            return True
+
         now = self._time_fn()
         cutoff = now - self._period
         effective_limit = max(1, int(self._max_calls * role_multiplier))
