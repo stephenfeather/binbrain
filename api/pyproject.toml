@@ -14,11 +14,15 @@ dependencies = [
   "python-multipart>=0.0.22",
   "fastembed==0.3.6",
   "ultralytics==8.4.0",
-  # F-06/CVE-2026-25990: Pillow 12.1.1 fixes a PSD OOB-write CVE, but fastembed==0.3.6
-  # pins Pillow<11.0.0 (the fastembed pin itself is load-bearing — a prior upgrade
-  # broke the bge-small embedding harness). Mitigated in-depth by
-  # app/services/image_validation.py: the magic-byte allowlist rejects PSD before
-  # Image.open() is ever called. Revisit when migrating off fastembed.
+  # Load-bearing Pillow pin, blocked by fastembed==0.3.6 (a prior fastembed
+  # upgrade broke the bge-small embedding harness). Residual CVEs — both
+  # ignored in .github/workflows/ci.yml:pip-audit until fastembed unblocks:
+  #   F-06/CVE-2026-25990 — Pillow PSD OOB-write, fixed in 12.1.1.
+  #     Mitigated in-depth by app/services/image_validation.py: the
+  #     magic-byte allowlist rejects PSD before Image.open() is ever called.
+  #   CVE-2026-40192 — Pillow, fixed in 12.2.0. Same fastembed-pin blocker;
+  #     same defense-in-depth (image_validation.py) limits exposure.
+  # Revisit all of the above when migrating off fastembed 0.3.6.
   "Pillow>=10.4.0,<11.0.0",
   # HEIF support (iOS depth-map capable). pillow-heif 1.x requires Pillow>=11,
   # so we pin the last 0.x line that supports Pillow 10.
