@@ -41,7 +41,7 @@
   "$id": "https://binbrain.local/schemas/photo.suggest.response.json",
   "title": "PhotoSuggestResponse",
   "type": "object",
-  "required": ["version", "photo_id", "suggestions"],
+  "required": ["version", "photo_id", "prompt_version", "suggestions"],
   "properties": {
     "version": { "type": "string", "enum": ["1"] },
     "photo_id": { "type": "integer", "minimum": 1 },

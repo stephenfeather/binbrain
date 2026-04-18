@@ -343,8 +343,10 @@ def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
 
     Keys match the ``insert_photo_detections`` write shape so callers can
     round-trip a detection set through the DB without format translation:
-    ``{"label", "category", "confidence", "bbox"}`` where ``bbox`` is a
-    4-element ``[x1, y1, x2, y2]`` list.
+    ``{"label", "category", "confidence", "bbox", "prompt_version"}`` where
+    ``bbox`` is a 4-element ``[x1, y1, x2, y2]`` list and ``prompt_version``
+    is the VLM prompt revision stamped at write time (``None`` for rows
+    written before Dev2_016 prompt-version instrumentation).
     """
     rows = (
         db.execute(

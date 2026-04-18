@@ -335,7 +335,7 @@ components:
 
     PhotoSuggestResponse:
       type: object
-      required: [version, photo_id, model, vision_elapsed_ms, suggestions]
+      required: [version, photo_id, model, vision_elapsed_ms, prompt_version, suggestions]
       properties:
         version:           { type: string, enum: ["1"] }
         photo_id:          { type: integer, minimum: 1 }
