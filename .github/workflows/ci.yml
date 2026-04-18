@@ -105,7 +105,12 @@ jobs:
 
       - name: Export requirements from uv.lock
         working-directory: api
-        run: uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /tmp/requirements.txt
+        # --no-hashes: pip-audit only needs name==version for CVE lookup.
+        # With hashes, pip enforces hashed-mode across the whole file; the
+        # `clip @ git+https://github.com/ultralytics/CLIP.git` VCS dep has no
+        # hash, so any hashed-mode install fails with
+        # "Can't verify hashes for ... version control repositories".
+        run: uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt -o /tmp/requirements.txt
 
       - name: Run pip-audit
         run: uvx pip-audit --requirement /tmp/requirements.txt --strict
