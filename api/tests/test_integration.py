@@ -749,6 +749,98 @@ def test_upc_lookup_provenance_insert_failure_does_not_break_route(client, monke
     assert body["item_id"] is not None
 
 
+def test_upc_lookup_upcitemdb_oversize_body_returns_none(caplog, monkeypatch):
+    # ApiDev2_002b (SEC-24-1): a 50+MB upstream response would balloon jsonb
+    # storage. _lookup_upcitemdb caps the read at 256 KB + 1 and treats
+    # any buffer > 256 KB as an upstream failure: None returned, WARN
+    # logged with status=oversize.
+    import io
+    import logging
+
+    import app.services.upc_lookup as upc_mod
+    from app.services.upc_lookup import _MAX_BODY_BYTES, _lookup_upcitemdb
+
+    oversize = b"x" * (_MAX_BODY_BYTES + 1)
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(_req, timeout):
+        return _Resp(oversize)
+
+    monkeypatch.setattr(upc_mod.urllib.request, "urlopen", fake_urlopen)
+
+    with caplog.at_level(logging.WARNING, logger="binbrain"):
+        result = _lookup_upcitemdb("012345678905")
+
+    assert result is None
+    assert any("status=oversize" in rec.getMessage() for rec in caplog.records)
+
+
+def test_item_upc_lookups_metadata_view_projects_non_sensitive_columns(client, db, monkeypatch):
+    # ApiDev2_002b (SEC-24-3): the item_upc_lookups_metadata view exposes
+    # everything except raw_response. Row count and projected columns must
+    # match the base table.
+    import app.services.upc_lookup as upc_mod
+    from app.services.upc_lookup import UPCResult
+
+    raw_body = {
+        "code": "OK",
+        "total": 1,
+        "items": [{"title": "View Test", "category": "Tools", "brand": "Acme"}],
+    }
+
+    def fake_lookup(upc):
+        return UPCResult(
+            name="View Test",
+            category="Tools",
+            brand="Acme",
+            source="upcitemdb",
+            raw_response=raw_body,
+            elapsed_ms=42,
+        )
+
+    monkeypatch.setattr(upc_mod, "_lookup_upcitemdb", fake_lookup)
+
+    resp = client.get("/upc/880000000001")
+    assert resp.status_code == 200
+
+    base_count = db.execute(text("SELECT COUNT(*) FROM item_upc_lookups")).scalar_one()
+    view_count = db.execute(text("SELECT COUNT(*) FROM item_upc_lookups_metadata")).scalar_one()
+    assert base_count == view_count
+    assert base_count >= 1
+
+    base_rows = (
+        db.execute(
+            text(
+                "SELECT id, item_id, upc, source, elapsed_ms, created_at "
+                "FROM item_upc_lookups ORDER BY id"
+            )
+        )
+        .mappings()
+        .all()
+    )
+    view_rows = (
+        db.execute(
+            text(
+                "SELECT id, item_id, upc, source, elapsed_ms, created_at "
+                "FROM item_upc_lookups_metadata ORDER BY id"
+            )
+        )
+        .mappings()
+        .all()
+    )
+    assert [dict(r) for r in base_rows] == [dict(r) for r in view_rows]
+
+    # The view must not expose raw_response at all.
+    with pytest.raises(Exception):
+        db.execute(text("SELECT raw_response FROM item_upc_lookups_metadata"))
+
+
 def test_add_to_bin_with_upc(client, db):
     bin_id = "BIN-UPC-ADD-001"
     resp = client.post(

@@ -290,6 +290,10 @@ def _init_schema(engine) -> None:
     CREATE INDEX item_upc_lookups_source_created_idx
         ON item_upc_lookups (source, created_at DESC);
 
+    CREATE OR REPLACE VIEW item_upc_lookups_metadata AS
+    SELECT id, item_id, upc, source, elapsed_ms, created_at
+    FROM item_upc_lookups;
+
     DROP TABLE IF EXISTS api_keys CASCADE;
     CREATE TABLE api_keys (
         id          bigserial PRIMARY KEY,

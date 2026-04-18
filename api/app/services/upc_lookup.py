@@ -21,6 +21,25 @@ logger = logging.getLogger("binbrain")
 
 _UPCITEMDB_URL = "https://api.upcitemdb.com/prod/trial/lookup"
 _TIMEOUT = 5  # seconds
+_MAX_BODY_BYTES = 256 * 1024  # 256 KB cap on upcitemdb response body (SEC-24-1)
+
+
+def _project_upcitemdb_response(body: dict) -> dict:
+    """Project upstream response to an allow-listed subset (SEC-24-2).
+
+    Preserves audit value (what upstream said about THIS UPC) without
+    hoarding unbounded ancillary fields (image URLs, descriptions,
+    offers[], arbitrary keys) that have no business use.
+    """
+    items = body.get("items") or []
+    first_item = items[0] if items else {}
+    item_allowlist = {"title", "category", "brand", "upc", "ean"}
+    projected_item = {k: first_item.get(k) for k in item_allowlist if k in first_item}
+    return {
+        "code": body.get("code"),
+        "total": body.get("total"),
+        "items": [projected_item] if projected_item else [],
+    }
 
 
 @dataclass
@@ -73,8 +92,17 @@ def _lookup_upcitemdb(upc: str) -> UPCResult | None:
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            body = json.loads(resp.read())
+            raw = resp.read(_MAX_BODY_BYTES + 1)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+        if len(raw) > _MAX_BODY_BYTES:
+            logger.warning(
+                "event=upc_lookup_external source=upcitemdb upc=%s elapsed_ms=%s status=oversize size=%s",
+                upc,
+                elapsed_ms,
+                len(raw),
+            )
+            return None
+        body = json.loads(raw)
     except urllib.error.HTTPError as exc:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         logger.warning(
@@ -108,11 +136,12 @@ def _lookup_upcitemdb(upc: str) -> UPCResult | None:
         category=_simplify_category(item.get("category")),
         brand=item.get("brand") or None,
         source="upcitemdb",
-        # ApiDev2_002 (Gap #7): carry the full upstream body and the network
-        # latency up to the route so ``item_upc_lookups`` has a full audit
-        # trail of what upcitemdb returned and how long it took. Not logged
-        # at INFO — the raw payload is DB-only, not stdout-only.
-        raw_response=body,
+        # ApiDev2_002 (Gap #7): carry upstream body + latency to the route
+        # so ``item_upc_lookups`` records provenance.
+        # ApiDev2_002b (SEC-24-2): project to an allow-listed subset before
+        # persist — attacker-influenced upstream fields are not trusted to
+        # sit unbounded in prod jsonb.
+        raw_response=_project_upcitemdb_response(body),
         elapsed_ms=elapsed_ms,
     )
     logger.info(

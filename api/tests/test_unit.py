@@ -99,6 +99,68 @@ def test_lookup_upcitemdb_populates_raw_response_and_elapsed_ms(monkeypatch):
     assert result.elapsed_ms >= 0
 
 
+def test_project_upcitemdb_response_happy_path():
+    # ApiDev2_002b (SEC-24-2): allow-list projection strips non-allowed keys
+    # from items[0] and preserves top-level code/total. Ancillary fields
+    # (images, description, offers, etc.) must not survive.
+    from app.services.upc_lookup import _project_upcitemdb_response
+
+    body = {
+        "code": "OK",
+        "total": 1,
+        "extra_top_level": "drop me",
+        "items": [
+            {
+                "title": "Allow-list Test",
+                "category": "Hardware",
+                "brand": "Bench",
+                "upc": "012345678905",
+                "ean": "0012345678905",
+                "description": "should be dropped",
+                "images": ["https://example.com/a.jpg"],
+                "offers": [{"merchant": "x", "price": 9.99}],
+            }
+        ],
+    }
+
+    projected = _project_upcitemdb_response(body)
+
+    assert projected == {
+        "code": "OK",
+        "total": 1,
+        "items": [
+            {
+                "title": "Allow-list Test",
+                "category": "Hardware",
+                "brand": "Bench",
+                "upc": "012345678905",
+                "ean": "0012345678905",
+            }
+        ],
+    }
+    assert "extra_top_level" not in projected
+    assert "description" not in projected["items"][0]
+    assert "images" not in projected["items"][0]
+    assert "offers" not in projected["items"][0]
+
+
+def test_project_upcitemdb_response_missing_items():
+    # Empty / absent items[] is a valid upstream response (code=OK,total=0).
+    # Projection must yield items=[] rather than items=[{}].
+    from app.services.upc_lookup import _project_upcitemdb_response
+
+    assert _project_upcitemdb_response({"code": "OK", "total": 0}) == {
+        "code": "OK",
+        "total": 0,
+        "items": [],
+    }
+    assert _project_upcitemdb_response({"code": "OK", "total": 0, "items": []}) == {
+        "code": "OK",
+        "total": 0,
+        "items": [],
+    }
+
+
 def test_embedding_dimension_validation(client, app_module, monkeypatch):
     import app.routes.items as items_mod
 
