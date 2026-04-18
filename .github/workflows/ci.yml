@@ -88,8 +88,10 @@ jobs:
     name: pip-audit (dependency CVEs)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Non-blocking until fastembed==0.3.6 can be upgraded past its Pillow<11 pin
-    # (tracked residual CVE-2026-25990). Remove continue-on-error once resolved.
+    # Non-blocking backstop: specific CVEs pinned by the load-bearing
+    # fastembed==0.3.6 dep are listed explicitly in the pip-audit invocation
+    # below so any NEW unrelated CVE still surfaces. Remove continue-on-error
+    # once fastembed can be upgraded and the Pillow pin is dropped.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -105,10 +107,35 @@ jobs:
 
       - name: Export requirements from uv.lock
         working-directory: api
-        run: uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /tmp/requirements.txt
+        # pip-audit resolves each installed distribution back to PyPI to look
+        # up CVEs. VCS installs (e.g. `clip @ git+https://github.com/...`) have
+        # no PyPI record, so pip-audit with --strict exits 1 with
+        #   "Dependency not found on PyPI and could not be audited: clip (1.0)".
+        #
+        # Two-step workaround:
+        #   1. --no-hashes so pip does not enforce hashed-mode install of the
+        #      requirements file (hashed-mode fails on VCS deps that legitimately
+        #      cannot be hashed).
+        #   2. Strip `@ git+` lines after export so pip-audit only sees PyPI
+        #      packages — the only ones it can meaningfully audit. uv.lock
+        #      remains the authoritative source of truth for reproducible
+        #      installs (including hashes); this file is audit-only.
+        run: |
+          uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt -o /tmp/requirements.txt
+          sed -i -e '/ @ git+/d' /tmp/requirements.txt
 
       - name: Run pip-audit
-        run: uvx pip-audit --requirement /tmp/requirements.txt --strict
+        # Ignored CVEs are load-bearing pins we cannot upgrade today. Both
+        # affect Pillow<11, which fastembed==0.3.6 blocks us from leaving
+        # (see api/pyproject.toml for the full rationale and mitigations).
+        # When the fastembed pin is dropped, delete these --ignore-vuln lines.
+        #   CVE-2026-25990 — PSD OOB write. Mitigated: image_validation.py
+        #                    magic-byte allowlist rejects PSD pre-Image.open.
+        #   CVE-2026-40192 — pillow CVE fixed in 12.2.0.
+        run: |
+          uvx pip-audit --requirement /tmp/requirements.txt --strict \
+            --ignore-vuln CVE-2026-25990 \
+            --ignore-vuln CVE-2026-40192
 
   secret-scan:
     name: gitleaks (secret scan)
