@@ -29,6 +29,15 @@ class UPCResult:
     category: Optional[str]
     brand: Optional[str]
     source: str  # "upcitemdb" | "go-upc" | "unknown"
+    # ApiDev2_002 (Gap #7): provenance fields. ``raw_response`` carries the
+    # full upstream body for non-local successful hits so the route can
+    # persist it to ``item_upc_lookups.raw_response``; ``None`` for the
+    # ``unknown`` fallback and for lookup failures. ``elapsed_ms`` records
+    # the external call latency (``None`` for the ``unknown`` fallback that
+    # made no network call). Additive and optional to preserve existing
+    # call sites.
+    raw_response: Optional[dict] = None
+    elapsed_ms: Optional[int] = None
 
 
 def validate_upc(upc: str) -> bool:
@@ -99,6 +108,12 @@ def _lookup_upcitemdb(upc: str) -> UPCResult | None:
         category=_simplify_category(item.get("category")),
         brand=item.get("brand") or None,
         source="upcitemdb",
+        # ApiDev2_002 (Gap #7): carry the full upstream body and the network
+        # latency up to the route so ``item_upc_lookups`` has a full audit
+        # trail of what upcitemdb returned and how long it took. Not logged
+        # at INFO — the raw payload is DB-only, not stdout-only.
+        raw_response=body,
+        elapsed_ms=elapsed_ms,
     )
     logger.info(
         "event=upc_lookup_external source=upcitemdb upc=%s elapsed_ms=%s status=ok name=%s",
