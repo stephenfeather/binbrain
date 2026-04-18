@@ -149,19 +149,14 @@ def test_most_recent_accepted_outcome_wins(client, db, valid_jpeg_bytes):
     assert item_id_again == item_id
 
     linked = db.execute(
-        text(
-            "SELECT COUNT(*) FROM photo_suggestion_outcomes "
-            "WHERE item_id = :item_id"
-        ),
+        text("SELECT COUNT(*) FROM photo_suggestion_outcomes " "WHERE item_id = :item_id"),
         {"item_id": item_id},
     ).scalar_one()
     assert linked == 2
 
     resp = client.get(f"/bins/{bin_id}")
     assert resp.status_code == 200
-    match = next(
-        (it for it in resp.json()["items"] if it["name"] == "widget"), None
-    )
+    match = next((it for it in resp.json()["items"] if it["name"] == "widget"), None)
     assert match is not None
     assert match["source_photo_id"] == second_photo
     assert match["source_bbox"] == second_bbox
@@ -241,10 +236,7 @@ def test_rejected_outcome_does_not_link(client, db, valid_jpeg_bytes):
     item_id = _confirm(client, photo_id, bin_id, "random thing", "misc")
 
     linked = db.execute(
-        text(
-            "SELECT COUNT(*) FROM photo_suggestion_outcomes "
-            "WHERE item_id = :item_id"
-        ),
+        text("SELECT COUNT(*) FROM photo_suggestion_outcomes " "WHERE item_id = :item_id"),
         {"item_id": item_id},
     ).scalar_one()
     assert linked == 0
