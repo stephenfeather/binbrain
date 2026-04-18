@@ -34,7 +34,7 @@ def _stub_fastembed() -> None:
 # ``confirmed_classes`` are EXCLUDED because they are populated by
 # session-scope fixtures or app startup and must survive across tests.
 _TRUNCATE_BETWEEN_TESTS_SQL = (
-    "TRUNCATE photo_suggestion_matches, vision_calls, "
+    "TRUNCATE search_queries, photo_suggestion_matches, vision_calls, "
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
     "item_embeddings, bin_items, photos, items, bins, "
@@ -45,7 +45,7 @@ _TRUNCATE_BETWEEN_TESTS_SQL = (
 # from the same state as the very first run. (Problem A acceptance:
 # SELECT COUNT(*) FROM api_keys post-run == pre-run.)
 _TRUNCATE_ALL_SQL = (
-    "TRUNCATE photo_suggestion_matches, vision_calls, "
+    "TRUNCATE search_queries, photo_suggestion_matches, vision_calls, "
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
     "item_embeddings, bin_items, photos, items, bins, "
@@ -57,6 +57,7 @@ def _init_schema(engine) -> None:
     ddl = """
     CREATE EXTENSION IF NOT EXISTS vector;
 
+    DROP TABLE IF EXISTS search_queries CASCADE;
     DROP TABLE IF EXISTS photo_suggestion_matches CASCADE;
     DROP TABLE IF EXISTS vision_calls CASCADE;
     DROP TABLE IF EXISTS photo_suggestion_outcomes CASCADE;
@@ -253,6 +254,20 @@ def _init_schema(engine) -> None:
         ON photo_suggestion_matches (photo_detection_id);
     CREATE INDEX photo_suggestion_matches_item_idx
         ON photo_suggestion_matches (matched_item_id);
+
+    CREATE TABLE search_queries (
+      id                    bigserial PRIMARY KEY,
+      request_id            text,
+      q                     text NOT NULL,
+      qvec_dims             integer NOT NULL,
+      min_score_effective   double precision NOT NULL,
+      result_count          integer NOT NULL,
+      created_at            timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX search_queries_created_at_idx
+        ON search_queries (created_at);
+    CREATE INDEX search_queries_result_created_idx
+        ON search_queries (result_count, created_at DESC);
 
     DROP TABLE IF EXISTS api_keys CASCADE;
     CREATE TABLE api_keys (
