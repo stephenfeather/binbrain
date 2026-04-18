@@ -266,8 +266,8 @@ def _init_schema(engine) -> None:
     );
     CREATE INDEX search_queries_created_at_idx
         ON search_queries (created_at);
-    CREATE INDEX search_queries_result_count_idx
-        ON search_queries (result_count);
+    CREATE INDEX search_queries_result_created_idx
+        ON search_queries (result_count, created_at DESC);
 
     DROP TABLE IF EXISTS api_keys CASCADE;
     CREATE TABLE api_keys (

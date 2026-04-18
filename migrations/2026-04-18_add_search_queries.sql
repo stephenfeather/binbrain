@@ -20,9 +20,18 @@
 --
 -- Indexes cover the two queries we expect to run:
 --   1. "show recent zero-result queries" — filtered by result_count=0
---      ordered by created_at desc.
+--      ordered by created_at desc. Served by the composite
+--      (result_count, created_at DESC) index which supports both the
+--      equality filter and the ordering without a separate sort.
 --   2. "count queries per day at each floor" — grouped by created_at,
---      min_score_effective.
+--      min_score_effective. Served by the standalone created_at index.
+--
+-- Retention / purge policy for this table is a DEFERRED follow-up (Gap
+-- #11 closeout). `q` is persisted verbatim (up to a 1024-char cap applied
+-- at write time in the route). No time-based purge job is implemented
+-- here — populate-now, retain-forever, revisit once we have volume to
+-- decide on a retention window. Mirrored in the route-level comment in
+-- api/app/routes/items.py.
 --
 -- Idempotent: IF NOT EXISTS guards on every DDL statement. Safe to re-apply.
 
@@ -40,7 +49,7 @@ CREATE TABLE IF NOT EXISTS search_queries (
 
 CREATE INDEX IF NOT EXISTS search_queries_created_at_idx
     ON search_queries (created_at);
-CREATE INDEX IF NOT EXISTS search_queries_result_count_idx
-    ON search_queries (result_count);
+CREATE INDEX IF NOT EXISTS search_queries_result_created_idx
+    ON search_queries (result_count, created_at DESC);
 
 COMMIT;
