@@ -100,16 +100,20 @@ def test_search_writes_search_queries_row_on_each_invocation(client, db):
     )
     assert resp.status_code == 200, resp.text
 
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             SELECT q, qvec_dims, min_score_effective, result_count
             FROM search_queries
             ORDER BY id DESC
             LIMIT 1
             """
+            )
         )
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
     assert row is not None, "telemetry row missing"
     assert row["q"] == "Delta Widget"
     assert row["qvec_dims"] == 384
@@ -127,16 +131,20 @@ def test_search_flags_zero_result_queries_with_result_count_zero(client, db):
     assert resp.status_code == 200, resp.text
     assert resp.json()["results"] == []
 
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             SELECT q, min_score_effective, result_count
             FROM search_queries
             ORDER BY id DESC
             LIMIT 1
             """
+            )
         )
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
     assert row is not None
     assert row["q"] == "Epsilon Widget"
     assert row["min_score_effective"] == 1.01
@@ -173,3 +181,26 @@ def test_search_telemetry_write_failure_does_not_break_response(client, db):
 
     assert resp.status_code == 200, resp.text
     assert len(resp.json()["results"]) >= 1
+
+
+# ---------------------------------------------------------------------------
+# 4. PR22-01 — malformed env value must fall back to 0.35, not 500
+# ---------------------------------------------------------------------------
+
+
+def test_search_falls_back_to_default_on_malformed_env(client, db):
+    """A typo in SEARCH_DEFAULT_MIN_SCORE (e.g. 'not-a-float', empty string,
+    European decimal like '0,35') must not 500 the endpoint. The documented
+    default 0.35 is applied and a warning is logged."""
+    _seed_items(client, ["Theta Widget"])
+
+    for bad_value in ("not-a-float", "", "0,35"):
+        with mock.patch.dict("os.environ", {"SEARCH_DEFAULT_MIN_SCORE": bad_value}):
+            resp = client.get("/search", params={"q": "Theta Widget", "limit": 10})
+        assert resp.status_code == 200, (
+            f"malformed env {bad_value!r} should not 500; got {resp.status_code}"
+        )
+        body = resp.json()
+        assert body["min_score"] == 0.35, (
+            f"malformed env {bad_value!r} should fall back to 0.35; got {body['min_score']}"
+        )
