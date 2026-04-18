@@ -232,9 +232,7 @@ def suggest_for_photo(
                     )
                     detection_id_by_hit_idx = {
                         hit_idx: det_id
-                        for (hit_idx, _), det_id in zip(
-                            persistable, detection_ids, strict=True
-                        )
+                        for (hit_idx, _), det_id in zip(persistable, detection_ids, strict=True)
                     }
                 db_write.commit()
             finally:
@@ -318,8 +316,7 @@ def suggest_for_photo(
                     db2.commit()
                 except Exception as m_exc:
                     logger.warning(
-                        "event=photo_suggestion_matches_write_failed "
-                        "photo_id=%s rows=%s err=%s",
+                        "event=photo_suggestion_matches_write_failed " "photo_id=%s rows=%s err=%s",
                         photo_id,
                         len(match_rows),
                         m_exc,
@@ -360,8 +357,7 @@ def suggest_for_photo(
         error_code = type(exc).__name__
         tracker.mark_failed(photo_id, type(exc).__name__.lower())
         logger.exception(
-            "event=photo_suggest_crash request_id=%s photo_id=%s "
-            "stage=%s error_code=%s",
+            "event=photo_suggest_crash request_id=%s photo_id=%s " "stage=%s error_code=%s",
             request_id,
             photo_id,
             flags.get("stages", [])[-1] if flags.get("stages") else None,
