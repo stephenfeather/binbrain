@@ -243,7 +243,14 @@
           "category": { "type": ["string", "null"] },
           "upc": { "type": ["string", "null"] },
           "quantity": { "type": ["number", "null"] },
-          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+          "source_photo_id": { "type": ["integer", "null"], "minimum": 1 },
+          "source_bbox": {
+            "type": ["array", "null"],
+            "minItems": 4,
+            "maxItems": 4,
+            "items": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
         },
         "additionalProperties": false
       }
