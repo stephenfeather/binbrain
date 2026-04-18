@@ -95,6 +95,37 @@ def _init_schema(engine) -> None:
       created_at timestamptz DEFAULT now()
     );
 
+    -- FEAT-3: protect the UNASSIGNED sentinel from accidental DELETE or
+    -- soft-delete (UPDATE setting deleted_at). Mirrors
+    -- migrations/2026-04-18_add_unassigned_bin_sentinel.sql.
+    CREATE OR REPLACE FUNCTION protect_unassigned_bin()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+        IF TG_OP = 'DELETE' AND OLD.bin_id = 'UNASSIGNED' THEN
+            RAISE EXCEPTION 'cannot delete sentinel UNASSIGNED bin'
+                USING ERRCODE = 'check_violation';
+        END IF;
+        IF TG_OP = 'UPDATE'
+           AND OLD.bin_id = 'UNASSIGNED'
+           AND NEW.deleted_at IS NOT NULL THEN
+            RAISE EXCEPTION 'cannot soft-delete sentinel UNASSIGNED bin'
+                USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+    END;
+    $$;
+
+    DROP TRIGGER IF EXISTS bins_protect_unassigned ON bins;
+    CREATE TRIGGER bins_protect_unassigned
+        BEFORE UPDATE OR DELETE ON bins
+        FOR EACH ROW
+        EXECUTE FUNCTION protect_unassigned_bin();
+
+    INSERT INTO bins (bin_id) VALUES ('UNASSIGNED')
+    ON CONFLICT (bin_id) DO NOTHING;
+
     CREATE TABLE items (
       item_id bigserial PRIMARY KEY,
       name text NOT NULL,
@@ -487,6 +518,10 @@ def _truncate_mutable_tables_between_tests(request):
 
     with engine.begin() as conn:
         conn.execute(text(_TRUNCATE_BETWEEN_TESTS_SQL))
+        # FEAT-3: TRUNCATE wipes the sentinel; re-seed it before any test
+        # exercises bin lookups. INSERT bypasses the protect_unassigned_bin
+        # trigger (it only fires on UPDATE/DELETE).
+        conn.execute(text("INSERT INTO bins (bin_id) VALUES ('UNASSIGNED') ON CONFLICT DO NOTHING"))
 
 
 @pytest.fixture(autouse=True)

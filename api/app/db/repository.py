@@ -13,6 +13,16 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger("binbrain")
 
 
+UNASSIGNED_BIN_ID = "UNASSIGNED"
+"""FEAT-3 sentinel bin. Items whose parent bin is soft-deleted are
+reattributed here so they remain reachable through ``GET /bins/UNASSIGNED``
+instead of vanishing into the hidden bin. Created in
+``migrations/2026-04-18_add_unassigned_bin_sentinel.sql``; mirrored in
+``api/tests/conftest.py`` ``_init_schema`` and re-seeded after every
+truncate. A DB trigger refuses both DELETE and ``UPDATE … SET deleted_at``
+on this row."""
+
+
 def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
     row = db.execute(
         text("SELECT deleted_at FROM bins WHERE bin_id = :bin_id"),
@@ -26,6 +36,59 @@ def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
         return
     if row[0] is not None:
         raise ValueError("bin is deleted")
+
+
+def reattribute_bin_items_to_unassigned(db: Session, source_bin_id: str) -> int:
+    """Move every ``bin_items`` row from ``source_bin_id`` to ``UNASSIGNED``.
+
+    FEAT-3 — used by the bin soft-delete handler so items don't vanish when
+    their parent bin is hidden. Two-phase to avoid colliding with the
+    ``bin_items_unique (bin_id, item_id)`` constraint:
+
+    1. Delete source rows whose ``item_id`` already exists in ``UNASSIGNED``
+       (those associations are dropped — we don't merge quantities).
+    2. Update the surviving source rows to point at ``UNASSIGNED``.
+
+    Idempotent. Returns the number of bin_items rows that ended up in
+    ``UNASSIGNED`` as a result of this call (moved + dropped). Raises
+    ``ValueError`` if the caller tries to reattribute the sentinel itself.
+    """
+    if source_bin_id == UNASSIGNED_BIN_ID:
+        raise ValueError("cannot reattribute the UNASSIGNED sentinel bin to itself")
+
+    dropped = (
+        db.execute(
+            text(
+                """
+            DELETE FROM bin_items
+            WHERE bin_id = :source
+              AND EXISTS (
+                  SELECT 1 FROM bin_items existing
+                  WHERE existing.bin_id = :unassigned
+                    AND existing.item_id = bin_items.item_id
+              )
+            """
+            ),
+            {"source": source_bin_id, "unassigned": UNASSIGNED_BIN_ID},
+        ).rowcount
+        or 0
+    )
+
+    moved = (
+        db.execute(
+            text(
+                """
+            UPDATE bin_items
+            SET bin_id = :unassigned
+            WHERE bin_id = :source
+            """
+            ),
+            {"source": source_bin_id, "unassigned": UNASSIGNED_BIN_ID},
+        ).rowcount
+        or 0
+    )
+
+    return int(dropped + moved)
 
 
 def find_item_by_upc(db: Session, upc: str) -> dict | None:
