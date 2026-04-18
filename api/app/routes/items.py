@@ -1,3 +1,4 @@
+import math
 import os
 from typing import Optional
 
@@ -18,6 +19,54 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 router = APIRouter()
+
+# Dev2_019 PR22-01: SEARCH_DEFAULT_MIN_SCORE is parsed once per invocation.
+# If ops deploys a malformed value ("abc", "", "0,35"), or an out-of-range
+# value (e.g. 1.5 or a non-finite like "inf"/"nan"), we log a warning and
+# fall back to this constant rather than 500'ing every /search.
+_SEARCH_DEFAULT_MIN_SCORE_FALLBACK: float = 0.35
+
+# Dev2_019 PR22-02: upper bound on telemetry-persisted ``q`` — prevents
+# unbounded rows from buggy or malicious clients pushing arbitrary-length
+# strings into ``search_queries.q``. Calibration queries need enough length
+# to recover the intent; 1024 chars is orders of magnitude above any real
+# user query and still caps worst-case storage.
+_SEARCH_Q_TELEMETRY_MAX_LEN: int = 1024
+
+
+def _resolve_default_min_score() -> float:
+    """Parse ``SEARCH_DEFAULT_MIN_SCORE`` defensively.
+
+    Falls back to :data:`_SEARCH_DEFAULT_MIN_SCORE_FALLBACK` on any of:
+    ValueError (non-numeric / European decimal), non-finite (nan/inf), or
+    out-of-range (outside ``[0.0, 1.0]``). Logs a warning at the point of
+    rejection so ops can spot a bad deploy without grepping for 500s.
+    """
+    raw = os.environ.get("SEARCH_DEFAULT_MIN_SCORE", str(_SEARCH_DEFAULT_MIN_SCORE_FALLBACK))
+    try:
+        parsed = float(raw)
+    except (ValueError, TypeError):
+        logger.warning(
+            "event=search_default_min_score_invalid value=%r fallback=%s",
+            raw,
+            _SEARCH_DEFAULT_MIN_SCORE_FALLBACK,
+        )
+        return _SEARCH_DEFAULT_MIN_SCORE_FALLBACK
+    if not math.isfinite(parsed):
+        logger.warning(
+            "event=search_default_min_score_non_finite value=%r fallback=%s",
+            raw,
+            _SEARCH_DEFAULT_MIN_SCORE_FALLBACK,
+        )
+        return _SEARCH_DEFAULT_MIN_SCORE_FALLBACK
+    if not 0.0 <= parsed <= 1.0:
+        logger.warning(
+            "event=search_default_min_score_out_of_range value=%s fallback=%s",
+            parsed,
+            _SEARCH_DEFAULT_MIN_SCORE_FALLBACK,
+        )
+        return _SEARCH_DEFAULT_MIN_SCORE_FALLBACK
+    return parsed
 
 
 class CreateItemBody(BaseModel):
@@ -157,13 +206,12 @@ def search(
     qvec_str = vec_to_pgvector(qvec)
 
     # Dev2_019: apply the server-side default floor when the client omits
-    # ``min_score``. Read env per-invocation so tests can monkeypatch and so
-    # ops can change the default without restarting the API. Explicit client
-    # values (including 0.0) still win over the default.
-    if min_score is None:
-        effective_min_score = float(os.environ.get("SEARCH_DEFAULT_MIN_SCORE", "0.35"))
-    else:
-        effective_min_score = min_score
+    # ``min_score``. Env is resolved per-invocation (so ops can flip the
+    # default without restart, and tests can monkeypatch) and defensively
+    # parsed — a malformed or out-of-range deploy falls back to the
+    # documented constant rather than 500'ing the endpoint (PR22-01).
+    # Explicit client values (including 0.0) still win.
+    effective_min_score = _resolve_default_min_score() if min_score is None else min_score
 
     rows = repository.search_items(db, qvec_str, limit, offset, effective_min_score)
 
@@ -177,6 +225,14 @@ def search(
         len(rows),
     )
 
+    # Dev2_019 PR22-02: ``q`` is persisted verbatim (up to the telemetry
+    # length cap). Retention / purge policy for ``search_queries`` is a
+    # deferred follow-up — the Gap #11 closeout task is populate now,
+    # retain-forever, and revisit once we have a few months of volume to
+    # decide on a retention window. Until then this table grows
+    # append-only. Mirrored in the migration header.
+    q_for_telemetry = q[:_SEARCH_Q_TELEMETRY_MAX_LEN]
+
     # Dev2_019: telemetry write is best-effort. A failure here must never
     # regress the /search response contract. Uses a fresh session so a
     # rolled-back main session (future exception paths) would still persist
@@ -187,7 +243,7 @@ def search(
             repository.insert_search_query(
                 db_tel,
                 request_id=request_id,
-                q=q,
+                q=q_for_telemetry,
                 qvec_dims=len(qvec),
                 min_score_effective=effective_min_score,
                 result_count=len(rows),
