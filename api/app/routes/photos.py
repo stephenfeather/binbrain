@@ -604,6 +604,13 @@ def confirm_photo_groups(
             item_id, inserted = repository.insert_item_with_status(db, label, category, None)
             linked = repository.insert_bin_item(db, bin_id, item_id, None, quantity)
             repository.insert_photo_group_item(db, photo_id, model, label, category, item_id)
+            repository.link_suggestion_outcomes_to_item(
+                db,
+                photo_id=photo_id,
+                label=label,
+                category=category,
+                item_id=item_id,
+            )
 
             status = "created" if inserted else "updated"
             if not linked:
