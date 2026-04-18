@@ -151,8 +151,10 @@ def _init_schema(engine) -> None:
       width integer,
       height integer,
       session_id text,
+      photo_uuid uuid NOT NULL DEFAULT gen_random_uuid(),
       created_at timestamptz DEFAULT now()
     );
+    CREATE UNIQUE INDEX photos_photo_uuid_uq ON photos (photo_uuid);
 
     CREATE TABLE photo_labels (
       id bigserial PRIMARY KEY,
