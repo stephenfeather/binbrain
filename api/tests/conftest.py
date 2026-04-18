@@ -117,7 +117,7 @@ def _init_schema(engine) -> None:
                     USING ERRCODE = 'check_violation';
             END IF;
         END IF;
-        RETURN NEW;
+        RETURN COALESCE(NEW, OLD);
     END;
     $$;
 

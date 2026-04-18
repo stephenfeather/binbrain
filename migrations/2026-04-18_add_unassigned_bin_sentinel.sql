@@ -14,9 +14,10 @@
 -- deletion. The reattribution helper and the eventual DELETE /bins/{bin_id}
 -- endpoint live in app code.
 --
--- Idempotent: ON CONFLICT DO NOTHING on the INSERT, CREATE OR REPLACE on
--- the trigger function, DROP TRIGGER IF EXISTS before re-creating.
--- Safe to re-apply.
+-- Idempotent: the INSERT uses ON CONFLICT (bin_id) DO UPDATE so a re-run
+-- on a partially-migrated DB will reset deleted_at + location_id back to
+-- their canonical sentinel values. CREATE OR REPLACE on the trigger
+-- function, DROP TRIGGER IF EXISTS before re-creating. Safe to re-apply.
 
 BEGIN;
 
@@ -53,7 +54,11 @@ BEGIN
                 USING ERRCODE = 'check_violation';
         END IF;
     END IF;
-    RETURN NEW;
+    -- BEFORE DELETE triggers see NEW as NULL; returning NULL would silently
+    -- cancel the delete on every bin (not just the sentinel). COALESCE
+    -- yields OLD for DELETE and NEW for UPDATE so non-sentinel deletes
+    -- proceed normally and updates apply the (possibly modified) NEW row.
+    RETURN COALESCE(NEW, OLD);
 END;
 $$;
 

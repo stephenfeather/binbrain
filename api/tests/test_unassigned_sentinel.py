@@ -78,6 +78,24 @@ def test_other_bins_can_still_be_soft_deleted(db):
     assert deleted_at is not None
 
 
+def test_other_bins_can_still_be_hard_deleted(db):
+    # Regression test for a Postgres trigger semantics bug Copilot caught on
+    # PR #28: a BEFORE DELETE trigger sees NEW as NULL, so RETURN NEW would
+    # silently cancel every delete on bins (not just the sentinel). The fix
+    # is RETURN COALESCE(NEW, OLD), which yields OLD on DELETE so non-sentinel
+    # rows still drop. TRUNCATE bypasses row triggers, so this case isn't
+    # caught by the autouse cleanup — only an explicit DELETE exercises it.
+    db.execute(text("INSERT INTO bins (bin_id) VALUES ('BIN-HARD-DEL-0001')"))
+    db.commit()
+    db.execute(text("DELETE FROM bins WHERE bin_id = 'BIN-HARD-DEL-0001'"))
+    db.commit()
+
+    count = db.execute(
+        text("SELECT COUNT(*) FROM bins WHERE bin_id = 'BIN-HARD-DEL-0001'")
+    ).scalar_one()
+    assert count == 0
+
+
 def _seed_bin_with_item(db, bin_id: str, item_name: str) -> int:
     db.execute(text("INSERT INTO bins (bin_id) VALUES (:b)"), {"b": bin_id})
     item_id = db.execute(

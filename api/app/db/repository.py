@@ -13,14 +13,15 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger("binbrain")
 
 
-UNASSIGNED_BIN_ID = "UNASSIGNED"
-"""FEAT-3 sentinel bin. Items whose parent bin is soft-deleted are
-reattributed here so they remain reachable through ``GET /bins/UNASSIGNED``
-instead of vanishing into the hidden bin. Created in
-``migrations/2026-04-18_add_unassigned_bin_sentinel.sql``; mirrored in
-``api/tests/conftest.py`` ``_init_schema`` and re-seeded after every
-truncate. A DB trigger refuses both DELETE and ``UPDATE … SET deleted_at``
-on this row."""
+# FEAT-3 sentinel bin. Items whose parent bin is soft-deleted are
+# reattributed here so they remain reachable through
+# ``GET /bins/UNASSIGNED`` instead of vanishing into the hidden bin.
+# Created in ``migrations/2026-04-18_add_unassigned_bin_sentinel.sql``;
+# mirrored in ``api/tests/conftest.py`` ``_init_schema`` and re-seeded
+# after every truncate. A DB trigger refuses DELETE, soft-delete via
+# ``UPDATE … SET deleted_at``, and rename via ``UPDATE … SET bin_id`` on
+# this row.
+UNASSIGNED_BIN_ID: str = "UNASSIGNED"
 
 
 def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
