@@ -41,6 +41,32 @@ def test_cannot_soft_delete_unassigned_sentinel(db):
     db.rollback()
 
 
+def test_cannot_rename_unassigned_sentinel(db):
+    with pytest.raises(IntegrityError) as exc:
+        db.execute(text("UPDATE bins SET bin_id = 'NOT_UNASSIGNED' WHERE bin_id = 'UNASSIGNED'"))
+        db.flush()
+    assert "cannot rename sentinel UNASSIGNED bin" in str(exc.value)
+    db.rollback()
+
+
+def test_sentinel_location_can_be_reassigned(db):
+    # The trigger intentionally permits location_id changes on the sentinel
+    # so it can sit under a "Misc" location like any other bin.
+    location_id = db.execute(
+        text("INSERT INTO locations (name) VALUES ('Misc') RETURNING location_id")
+    ).scalar_one()
+    db.execute(
+        text("UPDATE bins SET location_id = :loc WHERE bin_id = 'UNASSIGNED'"),
+        {"loc": location_id},
+    )
+    db.commit()
+    got = db.execute(text("SELECT location_id FROM bins WHERE bin_id = 'UNASSIGNED'")).scalar_one()
+    assert got == location_id
+    # Cleanup so the next test sees a clean sentinel.
+    db.execute(text("UPDATE bins SET location_id = NULL WHERE bin_id = 'UNASSIGNED'"))
+    db.commit()
+
+
 def test_other_bins_can_still_be_soft_deleted(db):
     db.execute(text("INSERT INTO bins (bin_id) VALUES ('BIN-DELETABLE-0001')"))
     db.execute(text("UPDATE bins SET deleted_at = now() WHERE bin_id = 'BIN-DELETABLE-0001'"))

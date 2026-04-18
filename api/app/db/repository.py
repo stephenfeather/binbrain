@@ -42,53 +42,51 @@ def reattribute_bin_items_to_unassigned(db: Session, source_bin_id: str) -> int:
     """Move every ``bin_items`` row from ``source_bin_id`` to ``UNASSIGNED``.
 
     FEAT-3 — used by the bin soft-delete handler so items don't vanish when
-    their parent bin is hidden. Two-phase to avoid colliding with the
-    ``bin_items_unique (bin_id, item_id)`` constraint:
+    their parent bin is hidden. Atomic single-statement CTE that respects the
+    existing ``bin_items_unique (bin_id, item_id)`` constraint without a
+    DELETE-then-UPDATE race: another transaction inserting a conflicting
+    ``(UNASSIGNED, item_id)`` between the two steps would have caused the
+    UPDATE to fail with a unique-violation. The CTE pattern (reviewed by
+    Gemini on PR #28) is race-free in a single statement:
 
-    1. Delete source rows whose ``item_id`` already exists in ``UNASSIGNED``
-       (those associations are dropped — we don't merge quantities).
-    2. Update the surviving source rows to point at ``UNASSIGNED``.
+    1. ``DELETE FROM bin_items WHERE bin_id = source RETURNING …`` removes
+       every source-bin row in one shot.
+    2. ``INSERT … SELECT FROM deleted ON CONFLICT (bin_id, item_id) DO
+       NOTHING`` re-inserts each into ``UNASSIGNED``. Conflicts (item already
+       in UNASSIGNED) silently no-op — we don't merge quantities.
 
-    Idempotent. Returns the number of bin_items rows that ended up in
-    ``UNASSIGNED`` as a result of this call (moved + dropped). Raises
-    ``ValueError`` if the caller tries to reattribute the sentinel itself.
+    Note: rows are physically replaced (new ``id``, ``created_at`` is
+    preserved by carrying it through). If preserving the row identity ever
+    matters, a SERIALIZABLE transaction or table lock would be the next step.
+
+    Idempotent. Returns the number of source rows the CTE consumed (moved +
+    dropped via conflict). Raises ``ValueError`` if the caller tries to
+    reattribute the sentinel itself.
     """
     if source_bin_id == UNASSIGNED_BIN_ID:
         raise ValueError("cannot reattribute the UNASSIGNED sentinel bin to itself")
 
-    dropped = (
-        db.execute(
-            text(
-                """
-            DELETE FROM bin_items
-            WHERE bin_id = :source
-              AND EXISTS (
-                  SELECT 1 FROM bin_items existing
-                  WHERE existing.bin_id = :unassigned
-                    AND existing.item_id = bin_items.item_id
-              )
+    res = db.execute(
+        text(
             """
+            WITH deleted AS (
+                DELETE FROM bin_items
+                WHERE bin_id = :source
+                RETURNING item_id, quantity, confidence, created_at
             ),
-            {"source": source_bin_id, "unassigned": UNASSIGNED_BIN_ID},
-        ).rowcount
-        or 0
-    )
-
-    moved = (
-        db.execute(
-            text(
-                """
-            UPDATE bin_items
-            SET bin_id = :unassigned
-            WHERE bin_id = :source
+            inserted AS (
+                INSERT INTO bin_items (bin_id, item_id, quantity, confidence, created_at)
+                SELECT :unassigned, item_id, quantity, confidence, created_at
+                FROM deleted
+                ON CONFLICT (bin_id, item_id) DO NOTHING
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM deleted
             """
-            ),
-            {"source": source_bin_id, "unassigned": UNASSIGNED_BIN_ID},
-        ).rowcount
-        or 0
+        ),
+        {"source": source_bin_id, "unassigned": UNASSIGNED_BIN_ID},
     )
-
-    return int(dropped + moved)
+    return int(res.scalar() or 0)
 
 
 def find_item_by_upc(db: Session, upc: str) -> dict | None:

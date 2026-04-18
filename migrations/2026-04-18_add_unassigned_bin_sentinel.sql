@@ -26,10 +26,14 @@ ON CONFLICT (bin_id) DO UPDATE
     SET deleted_at = NULL,
         location_id = NULL;
 
--- Block any future attempt to remove the sentinel: hard DELETE, soft-delete
--- (UPDATE setting deleted_at), or location reassignment. Raises a
--- recognisable SQLSTATE so route-layer error handlers can map cleanly to a
--- 409/422 response without string-matching.
+-- Block any future attempt to remove or rename the sentinel: hard DELETE,
+-- soft-delete (UPDATE setting deleted_at), or rename via UPDATE on bin_id
+-- (a rename would silently break every code path that hard-codes the
+-- 'UNASSIGNED' constant). Other UPDATE shapes — notably location
+-- reassignment via UPDATE on location_id — are intentionally allowed so the
+-- sentinel can sit under a "Misc" or "Garage" location like any other bin.
+-- Raises a recognisable SQLSTATE so route-layer error handlers can map
+-- cleanly to a 409/422 response without string-matching.
 CREATE OR REPLACE FUNCTION protect_unassigned_bin()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -39,11 +43,15 @@ BEGIN
         RAISE EXCEPTION 'cannot delete sentinel UNASSIGNED bin'
             USING ERRCODE = 'check_violation';
     END IF;
-    IF TG_OP = 'UPDATE'
-       AND OLD.bin_id = 'UNASSIGNED'
-       AND NEW.deleted_at IS NOT NULL THEN
-        RAISE EXCEPTION 'cannot soft-delete sentinel UNASSIGNED bin'
-            USING ERRCODE = 'check_violation';
+    IF TG_OP = 'UPDATE' AND OLD.bin_id = 'UNASSIGNED' THEN
+        IF NEW.deleted_at IS NOT NULL THEN
+            RAISE EXCEPTION 'cannot soft-delete sentinel UNASSIGNED bin'
+                USING ERRCODE = 'check_violation';
+        END IF;
+        IF NEW.bin_id <> OLD.bin_id THEN
+            RAISE EXCEPTION 'cannot rename sentinel UNASSIGNED bin'
+                USING ERRCODE = 'check_violation';
+        END IF;
     END IF;
     RETURN NEW;
 END;

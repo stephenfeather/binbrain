@@ -107,11 +107,15 @@ def _init_schema(engine) -> None:
             RAISE EXCEPTION 'cannot delete sentinel UNASSIGNED bin'
                 USING ERRCODE = 'check_violation';
         END IF;
-        IF TG_OP = 'UPDATE'
-           AND OLD.bin_id = 'UNASSIGNED'
-           AND NEW.deleted_at IS NOT NULL THEN
-            RAISE EXCEPTION 'cannot soft-delete sentinel UNASSIGNED bin'
-                USING ERRCODE = 'check_violation';
+        IF TG_OP = 'UPDATE' AND OLD.bin_id = 'UNASSIGNED' THEN
+            IF NEW.deleted_at IS NOT NULL THEN
+                RAISE EXCEPTION 'cannot soft-delete sentinel UNASSIGNED bin'
+                    USING ERRCODE = 'check_violation';
+            END IF;
+            IF NEW.bin_id <> OLD.bin_id THEN
+                RAISE EXCEPTION 'cannot rename sentinel UNASSIGNED bin'
+                    USING ERRCODE = 'check_violation';
+            END IF;
         END IF;
         RETURN NEW;
     END;
