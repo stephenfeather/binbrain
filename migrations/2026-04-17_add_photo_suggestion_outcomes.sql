@@ -51,4 +51,10 @@ CREATE INDEX IF NOT EXISTS photo_suggestion_outcomes_photo_idx
 CREATE INDEX IF NOT EXISTS photo_suggestion_outcomes_decision_idx
     ON photo_suggestion_outcomes (decision);
 
+-- Composite index supports the scoped DELETE in
+-- replace_photo_suggestion_outcomes, which filters by
+-- (photo_id, vision_model) on every idempotent replay.
+CREATE INDEX IF NOT EXISTS photo_suggestion_outcomes_photo_model_idx
+    ON photo_suggestion_outcomes (photo_id, vision_model);
+
 COMMIT;

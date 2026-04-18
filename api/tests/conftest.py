@@ -214,6 +214,8 @@ def _init_schema(engine) -> None:
         ON photo_suggestion_outcomes (photo_id);
     CREATE INDEX photo_suggestion_outcomes_decision_idx
         ON photo_suggestion_outcomes (decision);
+    CREATE INDEX photo_suggestion_outcomes_photo_model_idx
+        ON photo_suggestion_outcomes (photo_id, vision_model);
 
     DROP TABLE IF EXISTS api_keys CASCADE;
     CREATE TABLE api_keys (
