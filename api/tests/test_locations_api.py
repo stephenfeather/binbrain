@@ -1,7 +1,7 @@
 """Integration tests for the /locations API endpoints."""
+
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
 
 
@@ -33,10 +33,13 @@ class TestLocationsAPI:
 
     def test_create_location_with_description(self, client, db):
         self._cleanup(db)
-        resp = client.post("/locations", json={
-            "name": "Workshop",
-            "description": "Detached building",
-        })
+        resp = client.post(
+            "/locations",
+            json={
+                "name": "Workshop",
+                "description": "Detached building",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["location"]["description"] == "Detached building"
@@ -84,8 +87,10 @@ class TestLocationsAPI:
         self._cleanup(db)
         create_resp = client.post("/locations", json={"name": "Old Room"})
         loc_id = create_resp.json()["location"]["location_id"]
-        db.execute(text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-API-DEL', :loc_id)"),
-                   {"loc_id": loc_id})
+        db.execute(
+            text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-API-DEL', :loc_id)"),
+            {"loc_id": loc_id},
+        )
         db.commit()
         client.delete(f"/locations/{loc_id}")
         row = db.execute(text("SELECT location_id FROM bins WHERE bin_id = 'BIN-API-DEL'")).scalar()
@@ -121,8 +126,10 @@ class TestBinLocationAPI:
         self._cleanup(db)
         loc_resp = client.post("/locations", json={"name": "Temp"})
         loc_id = loc_resp.json()["location"]["location_id"]
-        db.execute(text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-CLEAR', :loc_id)"),
-                   {"loc_id": loc_id})
+        db.execute(
+            text("INSERT INTO bins (bin_id, location_id) VALUES ('BIN-CLEAR', :loc_id)"),
+            {"loc_id": loc_id},
+        )
         db.commit()
 
         resp = client.patch("/bins/BIN-CLEAR/location", json={"location_id": None})

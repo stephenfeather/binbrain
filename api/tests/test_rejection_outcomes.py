@@ -7,6 +7,7 @@ The endpoint is additive: ``/photos/{id}/confirm`` is NOT modified, and
 nothing in the acceptance path (``photo_group_items`` -> ``bin_items``)
 is touched from here.
 """
+
 from __future__ import annotations
 
 from sqlalchemy import text
@@ -78,14 +79,18 @@ def test_post_outcomes_writes_rows_for_each_decision(client, db, valid_jpeg_byte
         "outcomes_recorded": 3,
     }
 
-    rows = db.execute(
-        text(
-            "SELECT label, decision, edited_to_label, bbox, confidence "
-            "FROM photo_suggestion_outcomes WHERE photo_id = :pid "
-            "ORDER BY label"
-        ),
-        {"pid": photo_id},
-    ).mappings().all()
+    rows = (
+        db.execute(
+            text(
+                "SELECT label, decision, edited_to_label, bbox, confidence "
+                "FROM photo_suggestion_outcomes WHERE photo_id = :pid "
+                "ORDER BY label"
+            ),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .all()
+    )
     assert len(rows) == 3
     by_label = {r["label"]: r for r in rows}
 
@@ -171,9 +176,7 @@ def test_post_outcomes_preserves_other_models(client, db, valid_jpeg_bytes):
 def test_post_outcomes_404_on_missing_photo(client, db):
     before = db.execute(text("SELECT COUNT(*) FROM photo_suggestion_outcomes")).scalar()
 
-    payload = _payload(
-        [{"label": "x", "shown_at": "2026-04-17T19:00:00Z", "decision": "accepted"}]
-    )
+    payload = _payload([{"label": "x", "shown_at": "2026-04-17T19:00:00Z", "decision": "accepted"}])
     r = client.post("/photos/999999/outcomes", json=payload)
     assert r.status_code == 404, r.text
 
@@ -186,9 +189,7 @@ def test_post_outcomes_404_on_missing_photo(client, db):
 # ---------------------------------------------------------------------------
 
 
-def test_post_outcomes_422_on_edited_without_edited_to_label(
-    client, db, valid_jpeg_bytes
-):
+def test_post_outcomes_422_on_edited_without_edited_to_label(client, db, valid_jpeg_bytes):
     photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-OUTCOMES-0005")
 
     payload = _payload(
@@ -243,9 +244,7 @@ def test_post_outcomes_422_on_bbox_wrong_length(client, db, valid_jpeg_bytes):
 # ---------------------------------------------------------------------------
 
 
-def test_post_outcomes_empty_decisions_list_is_accepted_as_noop(
-    client, db, valid_jpeg_bytes
-):
+def test_post_outcomes_empty_decisions_list_is_accepted_as_noop(client, db, valid_jpeg_bytes):
     photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-OUTCOMES-0007")
 
     payload = _payload([])
@@ -314,13 +313,17 @@ def test_post_outcomes_survives_all_decision_kinds(client, db, valid_jpeg_bytes)
     assert r.status_code == 200, r.text
     assert r.json()["outcomes_recorded"] == 4
 
-    decisions = db.execute(
-        text(
-            "SELECT decision FROM photo_suggestion_outcomes "
-            "WHERE photo_id = :pid ORDER BY decision"
-        ),
-        {"pid": photo_id},
-    ).scalars().all()
+    decisions = (
+        db.execute(
+            text(
+                "SELECT decision FROM photo_suggestion_outcomes "
+                "WHERE photo_id = :pid ORDER BY decision"
+            ),
+            {"pid": photo_id},
+        )
+        .scalars()
+        .all()
+    )
     assert decisions == ["accepted", "edited", "ignored", "rejected"]
 
 
@@ -358,13 +361,14 @@ def test_post_outcomes_trims_label_and_category(client, db, valid_jpeg_bytes):
     r = client.post(f"/photos/{photo_id}/outcomes", json=payload)
     assert r.status_code == 200, r.text
 
-    row = db.execute(
-        text(
-            "SELECT label, category FROM photo_suggestion_outcomes "
-            "WHERE photo_id = :pid"
-        ),
-        {"pid": photo_id},
-    ).mappings().one()
+    row = (
+        db.execute(
+            text("SELECT label, category FROM photo_suggestion_outcomes " "WHERE photo_id = :pid"),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
     assert row["label"] == "hex bolt"
     assert row["category"] == "fastener"
 

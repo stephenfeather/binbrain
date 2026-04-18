@@ -15,9 +15,7 @@ def test_set_and_get_vision_model_persisted(client, db):
         return
 
     assert resp.status_code == 200
-    row = db.execute(
-        text("SELECT value FROM settings WHERE key = 'active_vision_model'")
-    ).scalar()
+    row = db.execute(text("SELECT value FROM settings WHERE key = 'active_vision_model'")).scalar()
     assert row == "test-model:latest"
 
 
@@ -27,9 +25,7 @@ def test_set_and_get_image_size_persisted(client, db):
     assert resp.status_code == 200
     assert resp.json()["max_image_px"] == 640
 
-    row = db.execute(
-        text("SELECT value FROM settings WHERE key = 'max_image_px'")
-    ).scalar()
+    row = db.execute(text("SELECT value FROM settings WHERE key = 'max_image_px'")).scalar()
     assert row == "640"
 
 
@@ -57,9 +53,7 @@ def test_image_size_overwrite(client, db):
     client.post("/settings/image-size", json={"max_image_px": 800})
     client.post("/settings/image-size", json={"max_image_px": 1024})
 
-    row = db.execute(
-        text("SELECT value FROM settings WHERE key = 'max_image_px'")
-    ).scalar()
+    row = db.execute(text("SELECT value FROM settings WHERE key = 'max_image_px'")).scalar()
     assert row == "1024"
 
 
@@ -72,8 +66,8 @@ def test_settings_table_empty_on_fresh_start(db):
 
 def test_load_settings_from_db(app_module, db):
     """load_settings_from_db reads persisted values into runtime globals."""
-    from app.deps import load_settings_from_db, get_max_image_px, set_max_image_px
     from app.db import repository
+    from app.deps import get_max_image_px, load_settings_from_db, set_max_image_px
 
     original = get_max_image_px()
 

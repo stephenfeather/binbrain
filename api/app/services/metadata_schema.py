@@ -18,6 +18,7 @@ The validator is strict on structure to prevent unbounded field injection into
 the jsonb column, while permissive on value types within allowed keys so that
 the iOS client can evolve its payload without server-side schema changes.
 """
+
 import hashlib
 import hmac
 import json
@@ -27,38 +28,41 @@ import re
 # ── Constants ────────────────────────────────────────────────────────────────
 
 METADATA_MAX_BYTES: int = 4 * 1024  # 4 KiB
-STRING_MAX_BYTES: int = 1 * 1024    # 1 KiB per string value
+STRING_MAX_BYTES: int = 1 * 1024  # 1 KiB per string value
 NESTING_MAX_DEPTH: int = 4
 
 _ALLOWED_TOP_LEVEL_KEYS: frozenset[str] = frozenset({"device_processing"})
 
 # Explicit allowlist for fields inside device_processing.
 # Covers all fields present in the iOS client's canonical payload.
-ALLOWED_DEVICE_PROCESSING_KEYS: frozenset[str] = frozenset({
-    # Operational / quality fields
-    "version",
-    "pipeline_ms",
-    "ios_version",
-    "device_model",
-    "quality_scores",
-    "ocr",
-    "barcodes",
-    "classifications",
-    "crop_applied",
-    # Device identity fields — values are HMAC-SHA256 hashed with server-side pepper
-    # (env METADATA_HASH_PEPPER) before persistence (see below).
-    "device_id",
-    "device_serial",
-    "device_imei",
-    "wifi_mac",
-    "bluetooth_mac",
-})
+ALLOWED_DEVICE_PROCESSING_KEYS: frozenset[str] = frozenset(
+    {
+        # Operational / quality fields
+        "version",
+        "pipeline_ms",
+        "ios_version",
+        "device_model",
+        "quality_scores",
+        "ocr",
+        "barcodes",
+        "classifications",
+        "crop_applied",
+        # Device identity fields — values are HMAC-SHA256 hashed with server-side pepper
+        # (env METADATA_HASH_PEPPER) before persistence (see below).
+        "device_id",
+        "device_serial",
+        "device_imei",
+        "wifi_mac",
+        "bluetooth_mac",
+    }
+)
 
 # Regex matching sensitive PII field names that must be hashed before persistence.
 _SENSITIVE_KEY_RE = re.compile(r"(device_id|imei|mac|serial)$", re.IGNORECASE)
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
+
 
 def _get_pepper() -> bytes:
     """Read METADATA_HASH_PEPPER from env each call (test-friendly)."""
@@ -73,9 +77,7 @@ def _hash_value(value: str) -> str:
 def _check_depth(obj: object, current: int) -> None:
     """Raise ValueError if *obj* contains nesting beyond NESTING_MAX_DEPTH."""
     if current > NESTING_MAX_DEPTH:
-        raise ValueError(
-            f"device_metadata nesting depth exceeds maximum of {NESTING_MAX_DEPTH}"
-        )
+        raise ValueError(f"device_metadata nesting depth exceeds maximum of {NESTING_MAX_DEPTH}")
     if isinstance(obj, dict):
         for v in obj.values():
             _check_depth(v, current + 1)
@@ -122,6 +124,7 @@ def _hash_sensitive_fields(obj: object) -> object:
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
+
 
 def validate_device_metadata(raw: str) -> dict:
     """Parse, validate, and sanitise *raw* device_metadata JSON.

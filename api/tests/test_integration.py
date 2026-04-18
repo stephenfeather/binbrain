@@ -101,8 +101,14 @@ def test_suggest_passes_bbox_through_from_vision(client, monkeypatch, valid_jpeg
     monkeypatch.setattr(
         "app.routes.photos.describe_photo",
         lambda *a, **kw: (
-            [{"name": "widget", "category": "tool", "confidence": 0.9,
-              "bbox": [0.1, 0.2, 0.8, 0.9]}],
+            [
+                {
+                    "name": "widget",
+                    "category": "tool",
+                    "confidence": 0.9,
+                    "bbox": [0.1, 0.2, 0.8, 0.9],
+                }
+            ],
             42,
         ),
     )
@@ -146,6 +152,7 @@ def test_suggest_bbox_absent_is_null(client, monkeypatch, valid_jpeg_bytes):
 
 def _reset_suggest_tracker():
     from app.services.suggest_tracker import get_tracker
+
     t = get_tracker()
     with t._lock:
         t._jobs.clear()
@@ -195,6 +202,7 @@ def test_suggest_status_during_vision_is_running_vision(client, monkeypatch, val
     photo_id = r_ingest.json()["photos"][0]["photo_id"]
 
     from app.services.suggest_tracker import get_tracker
+
     captured: dict = {}
 
     def fake_describe(*a, **kw):
@@ -242,9 +250,11 @@ def test_suggest_status_elapsed_ms_monotonic_between_polls(client, monkeypatch, 
     photo_id = r_ingest.json()["photos"][0]["photo_id"]
 
     from app.services.suggest_tracker import get_tracker
+
     get_tracker().start(photo_id)  # simulate an in-flight job, no terminal yet
 
     import time as _time
+
     first = client.get(f"/photos/{photo_id}/suggest/status").json()["elapsed_ms"]
     _time.sleep(0.02)
     second = client.get(f"/photos/{photo_id}/suggest/status").json()["elapsed_ms"]
@@ -416,8 +426,18 @@ def test_confirm_groups_idempotent(client, db, valid_jpeg_bytes):
         "version": "1",
         "bin_id": bin_id,
         "selected_groups": [
-            {"group_key": "M3 screw|fastener", "label": "M3 screw", "category": "fastener", "quantity": 34},
-            {"group_key": "washer|fastener", "label": "washer", "category": "fastener", "quantity": 12},
+            {
+                "group_key": "M3 screw|fastener",
+                "label": "M3 screw",
+                "category": "fastener",
+                "quantity": 34,
+            },
+            {
+                "group_key": "washer|fastener",
+                "label": "washer",
+                "category": "fastener",
+                "quantity": 12,
+            },
         ],
     }
     r1 = client.post(f"/photos/{photo_id}/confirm", json=payload)
@@ -458,7 +478,9 @@ def test_soft_deleted_bin_hidden(client, db):
     )
     assert r_item.status_code == 200
 
-    db.execute(text("UPDATE bins SET deleted_at = now() WHERE bin_id = :bin_id"), {"bin_id": bin_id})
+    db.execute(
+        text("UPDATE bins SET deleted_at = now() WHERE bin_id = :bin_id"), {"bin_id": bin_id}
+    )
     db.commit()
 
     r_bin = client.get(f"/bins/{bin_id}")
@@ -478,7 +500,9 @@ def test_soft_deleted_item_hidden_from_search(client, db):
     assert r_item.status_code == 200
     item_id = r_item.json()["item_id"]
 
-    db.execute(text("UPDATE items SET deleted_at = now() WHERE item_id = :item_id"), {"item_id": item_id})
+    db.execute(
+        text("UPDATE items SET deleted_at = now() WHERE item_id = :item_id"), {"item_id": item_id}
+    )
     db.commit()
 
     r_search = client.get("/search", params={"q": "Hidden Item"})
@@ -491,12 +515,17 @@ def test_soft_deleted_item_hidden_from_search(client, db):
 # UPC tests
 # ---------------------------------------------------------------------------
 
+
 def test_create_item_with_upc(client, db):
-    resp = client.post("/items", json={"name": "UPC Widget", "category": "test", "upc": "111111111111"})
+    resp = client.post(
+        "/items", json={"name": "UPC Widget", "category": "test", "upc": "111111111111"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["upc"] == "111111111111"
-    stored = db.execute(text("SELECT upc FROM items WHERE item_id = :id"), {"id": body["item_id"]}).scalar()
+    stored = db.execute(
+        text("SELECT upc FROM items WHERE item_id = :id"), {"id": body["item_id"]}
+    ).scalar()
     assert stored == "111111111111"
 
 
@@ -507,7 +536,9 @@ def test_create_item_without_upc_unchanged(client):
 
 
 def test_create_item_invalid_upc_rejected(client):
-    resp = client.post("/items", json={"name": "Bad UPC Item", "category": "test", "upc": "notaupc"})
+    resp = client.post(
+        "/items", json={"name": "Bad UPC Item", "category": "test", "upc": "notaupc"}
+    )
     assert resp.status_code == 400
     assert "invalid UPC" in resp.json()["error"]["message"]
 
@@ -523,7 +554,9 @@ def test_null_upcs_do_not_conflict(client):
 def test_upc_preserved_on_fingerprint_conflict(client, db):
     # Insert item with UPC, then re-insert same name+category without UPC.
     # The existing UPC must not be overwritten with NULL.
-    r1 = client.post("/items", json={"name": "Stable UPC Item", "category": "test", "upc": "222222222222"})
+    r1 = client.post(
+        "/items", json={"name": "Stable UPC Item", "category": "test", "upc": "222222222222"}
+    )
     assert r1.status_code == 200
     item_id = r1.json()["item_id"]
 
@@ -542,7 +575,9 @@ def test_upc_lookup_invalid_format(client):
 
 
 def test_upc_lookup_local_hit(client):
-    client.post("/items", json={"name": "Local UPC Item", "category": "test", "upc": "333333333333"})
+    client.post(
+        "/items", json={"name": "Local UPC Item", "category": "test", "upc": "333333333333"}
+    )
     resp = client.get("/upc/333333333333")
     assert resp.status_code == 200
     body = resp.json()
@@ -554,6 +589,7 @@ def test_upc_lookup_local_hit(client):
 
 def test_upc_lookup_unknown_degrades_gracefully(client, monkeypatch):
     import app.services.upc_lookup as upc_mod
+
     monkeypatch.setattr(upc_mod, "_lookup_upcitemdb", lambda upc: None)
     monkeypatch.setattr(upc_mod, "_lookup_goupc", lambda upc: None)
 
@@ -589,42 +625,60 @@ def test_upc_lookup_second_call_is_local(client, monkeypatch):
 
 def test_add_to_bin_with_upc(client, db):
     bin_id = "BIN-UPC-ADD-001"
-    resp = client.post(f"/bins/{bin_id}/add", data={
-        "name": "UPC Bin Item", "category": "test", "upc": "555555555555",
-    })
+    resp = client.post(
+        f"/bins/{bin_id}/add",
+        data={
+            "name": "UPC Bin Item",
+            "category": "test",
+            "upc": "555555555555",
+        },
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["upc"] == "555555555555"
-    stored = db.execute(text("SELECT upc FROM items WHERE item_id = :id"), {"id": body["item_id"]}).scalar()
+    stored = db.execute(
+        text("SELECT upc FROM items WHERE item_id = :id"), {"id": body["item_id"]}
+    ).scalar()
     assert stored == "555555555555"
 
 
 def test_add_to_bin_reuses_existing_upc(client, db):
     # Create item with UPC via POST /items
-    r = client.post("/items", json={"name": "Original Name", "category": "test", "upc": "666666666666"})
+    r = client.post(
+        "/items", json={"name": "Original Name", "category": "test", "upc": "666666666666"}
+    )
     assert r.status_code == 200
     original_id = r.json()["item_id"]
 
     # Add to bin with same UPC but different name — should reuse original item
     bin_id = "BIN-UPC-REUSE-001"
-    resp = client.post(f"/bins/{bin_id}/add", data={
-        "name": "Different Name", "category": "other", "upc": "666666666666",
-    })
+    resp = client.post(
+        f"/bins/{bin_id}/add",
+        data={
+            "name": "Different Name",
+            "category": "other",
+            "upc": "666666666666",
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["item_id"] == original_id
 
     # Only one item with this UPC in DB
-    count = db.execute(
-        text("SELECT COUNT(*) FROM items WHERE upc = '666666666666'")
-    ).scalar_one()
+    count = db.execute(text("SELECT COUNT(*) FROM items WHERE upc = '666666666666'")).scalar_one()
     assert count == 1
 
 
 def test_bin_items_include_upc(client):
     bin_id = "BIN-UPC-VIEW-001"
-    client.post("/items", json={
-        "name": "Bin UPC Item", "category": "test", "upc": "777777777777", "bin_id": bin_id,
-    })
+    client.post(
+        "/items",
+        json={
+            "name": "Bin UPC Item",
+            "category": "test",
+            "upc": "777777777777",
+            "bin_id": bin_id,
+        },
+    )
     resp = client.get(f"/bins/{bin_id}")
     assert resp.status_code == 200
     items = resp.json()["items"]
@@ -634,7 +688,9 @@ def test_bin_items_include_upc(client):
 
 
 def test_search_results_include_upc(client):
-    client.post("/items", json={"name": "Searchable UPC Item", "category": "test", "upc": "888888888888"})
+    client.post(
+        "/items", json={"name": "Searchable UPC Item", "category": "test", "upc": "888888888888"}
+    )
     # Use limit=100 — stub embeddings are all identical so ordering is arbitrary
     resp = client.get("/search", params={"q": "Searchable UPC Item", "limit": 100})
     assert resp.status_code == 200

@@ -3,6 +3,7 @@
 Tests FAIL until docker-compose.yml binds both the DB and API ports to 127.0.0.1,
 preventing exposure on networked interfaces.
 """
+
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,7 @@ def test_db_port_bound_to_localhost():
     text = _compose_text()
     # A raw "${DB_PORT:-5434}:5432" binding exposes on 0.0.0.0; require the
     # explicit host prefix.
-    assert '127.0.0.1:${DB_PORT' in text or "127.0.0.1:${DB_PORT" in text, (
+    assert "127.0.0.1:${DB_PORT" in text or "127.0.0.1:${DB_PORT" in text, (
         "DB port must be bound to 127.0.0.1 (e.g. '127.0.0.1:${DB_PORT:-5434}:5432'). "
         f"Found: {[ln for ln in text.splitlines() if '5432' in ln]}"
     )
@@ -40,7 +41,7 @@ def test_db_port_bound_to_localhost():
 def test_api_port_bound_to_localhost():
     """API must be bound to 127.0.0.1, not all interfaces."""
     text = _compose_text()
-    assert '127.0.0.1:${API_PORT' in text or "127.0.0.1:${API_PORT" in text, (
+    assert "127.0.0.1:${API_PORT" in text or "127.0.0.1:${API_PORT" in text, (
         "API port must be bound to 127.0.0.1 (e.g. '127.0.0.1:${API_PORT:-8000}:8000'). "
         f"Found: {[ln for ln in text.splitlines() if '8000' in ln]}"
     )
@@ -54,7 +55,7 @@ def test_db_port_not_exposed_bare():
         # A bare mapping starts with - and the port without a host prefix
         if stripped.startswith('- "${DB_PORT') or stripped.startswith("- '${DB_PORT"):
             assert False, f"DB port exposed without host binding: {line!r}"
-        if stripped.startswith('- ${DB_PORT'):
+        if stripped.startswith("- ${DB_PORT"):
             assert False, f"DB port exposed without host binding: {line!r}"
 
 
@@ -72,5 +73,5 @@ def test_api_port_not_exposed_bare():
         stripped = line.strip()
         if stripped.startswith('- "${API_PORT') or stripped.startswith("- '${API_PORT"):
             assert False, f"API port exposed without host binding: {line!r}"
-        if stripped.startswith('- ${API_PORT'):
+        if stripped.startswith("- ${API_PORT"):
             assert False, f"API port exposed without host binding: {line!r}"

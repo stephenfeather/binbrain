@@ -20,11 +20,12 @@ UPC_RATE_LIMIT             int  per-key req/min for /upc/{upc}                (d
 RATE_LIMIT_ADMIN_MULTIPLIER  float multiplier applied to each limit for admin keys (default 4)
 RATE_LIMIT_MAX_TRACKED_KEYS  int  maximum number of API-key slots held in memory (default 10000)
 """
+
 import os
 from collections import deque
+from collections.abc import Callable
 from threading import Lock
 from time import monotonic
-from typing import Callable
 
 from fastapi import HTTPException, Request
 
@@ -131,6 +132,7 @@ upc_limiter = SlidingWindowRateLimiter(
 # effect on the closed-over reference.  Module-global functions look up the
 # name in this module's __dict__ at *call time*, so attribute-swaps in tests
 # (e.g. rate_limiter.vision_limiter = stub) are always visible.
+
 
 def _limiter_key(request: Request) -> tuple[str, float]:
     """Return (key, role_multiplier) for the current request."""

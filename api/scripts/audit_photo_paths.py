@@ -44,17 +44,17 @@ def _resolve_under_root(raw: str | None, root: Path) -> tuple[bool, str]:
 
 
 def main() -> int:
-    from sqlalchemy import text
     from app.deps import SessionLocal, photo_root
+    from sqlalchemy import text
 
     total = 0
     offenders: list[tuple[int, str, str]] = []
 
     db = SessionLocal()
     try:
-        rows = db.execute(
-            text("SELECT photo_id, path FROM photos ORDER BY photo_id")
-        ).mappings().all()
+        rows = (
+            db.execute(text("SELECT photo_id, path FROM photos ORDER BY photo_id")).mappings().all()
+        )
         for row in rows:
             total += 1
             ok, reason = _resolve_under_root(row["path"], photo_root)

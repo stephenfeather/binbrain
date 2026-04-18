@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -61,9 +62,7 @@ def add_class(
         if normalized in _categories:
             return False
 
-    row = repository.insert_confirmed_class(
-        db, name, category, source, confirmed_by
-    )
+    row = repository.insert_confirmed_class(db, name, category, source, confirmed_by)
     if row is None:
         return False
 

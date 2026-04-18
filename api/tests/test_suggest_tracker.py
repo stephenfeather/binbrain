@@ -2,6 +2,7 @@
 
 Design note: thoughts/shared/designs/suggest-heartbeat-2026-04-17.md (iOS repo).
 """
+
 import pytest
 
 
@@ -9,6 +10,7 @@ import pytest
 def tracker():
     # Fresh tracker instance per test — don't pollute the module-level singleton.
     from app.services.suggest_tracker import SuggestTracker
+
     return SuggestTracker()
 
 
@@ -23,9 +25,7 @@ def test_start_creates_running_vision_entry(tracker):
 
 def test_start_elapsed_ms_is_monotonic(tracker, monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr(
-        "app.services.suggest_tracker.monotonic", lambda: clock[0]
-    )
+    monkeypatch.setattr("app.services.suggest_tracker.monotonic", lambda: clock[0])
     tracker.start(1)
     clock[0] = 100.5
     elapsed_a = tracker.elapsed_ms(tracker.get(1))
@@ -52,9 +52,7 @@ def test_update_stage_is_noop_after_terminal(tracker):
 
 def test_mark_done_freezes_elapsed(tracker, monkeypatch):
     clock = [10.0]
-    monkeypatch.setattr(
-        "app.services.suggest_tracker.monotonic", lambda: clock[0]
-    )
+    monkeypatch.setattr("app.services.suggest_tracker.monotonic", lambda: clock[0])
     tracker.start(1)
     clock[0] = 12.0
     tracker.mark_done(1)
@@ -80,9 +78,7 @@ def test_get_unknown_photo_returns_none(tracker):
 
 def test_terminal_entries_pruned_after_ttl(tracker, monkeypatch):
     clock = [0.0]
-    monkeypatch.setattr(
-        "app.services.suggest_tracker.monotonic", lambda: clock[0]
-    )
+    monkeypatch.setattr("app.services.suggest_tracker.monotonic", lambda: clock[0])
     tracker.start(1)
     clock[0] = 1.0
     tracker.mark_done(1)
@@ -96,9 +92,7 @@ def test_terminal_entries_pruned_after_ttl(tracker, monkeypatch):
 
 def test_running_entries_never_pruned_by_ttl(tracker, monkeypatch):
     clock = [0.0]
-    monkeypatch.setattr(
-        "app.services.suggest_tracker.monotonic", lambda: clock[0]
-    )
+    monkeypatch.setattr("app.services.suggest_tracker.monotonic", lambda: clock[0])
     tracker.start(1)
     # Huge gap while still running — should not be pruned.
     clock[0] = 10_000.0

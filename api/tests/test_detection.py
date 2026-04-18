@@ -1,9 +1,10 @@
 """Unit tests for the detection service (no DB or YOLO weights required)."""
+
 from __future__ import annotations
 
+import platform
 import sys
 import types
-import platform
 from unittest.mock import MagicMock, patch
 
 # Stub app.deps before importing detection, since deps requires DATABASE_URL
@@ -85,6 +86,7 @@ class TestDetect:
         class FakeXYXY:
             def __init__(self, coords):
                 self._coords = coords
+
             def tolist(self):
                 return self._coords
 
@@ -106,10 +108,12 @@ class TestDetect:
         mock_model = MagicMock()
         mock_model.names = {0: "scissors", 1: "bottle"}
         mock_model.predict.return_value = [
-            self._make_mock_result([
-                {"cls": 0, "conf": 0.92, "xyxy": [10.0, 20.0, 100.0, 200.0]},
-                {"cls": 1, "conf": 0.85, "xyxy": [150.0, 50.0, 300.0, 250.0]},
-            ])
+            self._make_mock_result(
+                [
+                    {"cls": 0, "conf": 0.92, "xyxy": [10.0, 20.0, 100.0, 200.0]},
+                    {"cls": 1, "conf": 0.85, "xyxy": [150.0, 50.0, 300.0, 250.0]},
+                ]
+            )
         ]
 
         category_map = {"scissors": "tools", "bottle": "household"}
@@ -153,9 +157,11 @@ class TestDetect:
         mock_model = MagicMock()
         mock_model.names = {0: "person"}
         mock_model.predict.return_value = [
-            self._make_mock_result([
-                {"cls": 0, "conf": 0.95, "xyxy": [5.0, 10.0, 50.0, 80.0]},
-            ])
+            self._make_mock_result(
+                [
+                    {"cls": 0, "conf": 0.95, "xyxy": [5.0, 10.0, 50.0, 80.0]},
+                ]
+            )
         ]
 
         with (

@@ -1,4 +1,5 @@
 """Unit tests for the class registry service."""
+
 from __future__ import annotations
 
 import sys

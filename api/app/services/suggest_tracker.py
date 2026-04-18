@@ -4,21 +4,21 @@ Design note: thoughts/shared/designs/suggest-heartbeat-2026-04-17.md (iOS repo).
 Option 1 of 3: polling endpoint with a per-process dict + lock. Revisit with
 a shared backend (Redis) when we scale beyond a single uvicorn worker.
 """
+
 from dataclasses import dataclass
 from threading import Lock
 from time import monotonic, time
 from typing import Optional
-
 
 TERMINAL_TTL_SECONDS = 300
 
 
 @dataclass
 class JobEntry:
-    state: str                      # "running" | "done" | "failed"
-    stage: Optional[str]            # "vision" | "embedding_match" | "final" | None
-    started_at: float               # wall-clock epoch seconds (for display)
-    started_monotonic: float        # monotonic seconds (for elapsed math)
+    state: str  # "running" | "done" | "failed"
+    stage: Optional[str]  # "vision" | "embedding_match" | "final" | None
+    started_at: float  # wall-clock epoch seconds (for display)
+    started_monotonic: float  # monotonic seconds (for elapsed math)
     terminal_monotonic: Optional[float]
     error_code: Optional[str]
 
@@ -74,7 +74,8 @@ class SuggestTracker:
     def _prune_locked(self) -> None:
         now = monotonic()
         stale = [
-            pid for pid, e in self._jobs.items()
+            pid
+            for pid, e in self._jobs.items()
             if e.terminal_monotonic is not None
             and (now - e.terminal_monotonic) > TERMINAL_TTL_SECONDS
         ]

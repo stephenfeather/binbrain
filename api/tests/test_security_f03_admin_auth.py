@@ -5,19 +5,21 @@ Tests FAIL until:
 - auth middleware attaches request.state.api_key_role
 - require_admin dependency exists and is applied to /admin/* routes
 """
+
 import hashlib
 import secrets
 
 import pytest
 from sqlalchemy import text
 
-
 # ── Fixtures: user key and admin key ─────────────────────────────────────────
+
 
 @pytest.fixture(scope="module")
 def user_api_key(app_module):
     """A 'user'-role key that must NOT access /admin/* routes."""
     from app.deps import SessionLocal
+
     raw = "bb_" + secrets.token_urlsafe(32)
     key_hash = hashlib.sha256(raw.encode()).hexdigest()
     db = SessionLocal()
@@ -36,6 +38,7 @@ def user_api_key(app_module):
 def admin_api_key(app_module):
     """An 'admin'-role key that CAN access /admin/* routes."""
     from app.deps import SessionLocal
+
     raw = "bb_" + secrets.token_urlsafe(32)
     key_hash = hashlib.sha256(raw.encode()).hexdigest()
     db = SessionLocal()
@@ -53,6 +56,7 @@ def admin_api_key(app_module):
 @pytest.fixture()
 def user_client(app_module, user_api_key):
     from fastapi.testclient import TestClient
+
     c = TestClient(app_module.app)
     c.headers["X-API-Key"] = user_api_key
     return c
@@ -61,12 +65,14 @@ def user_client(app_module, user_api_key):
 @pytest.fixture()
 def admin_client(app_module, admin_api_key):
     from fastapi.testclient import TestClient
+
     c = TestClient(app_module.app)
     c.headers["X-API-Key"] = admin_api_key
     return c
 
 
 # ── Tests: user key blocked from /admin/* ─────────────────────────────────────
+
 
 def test_user_key_blocked_from_admin_list_keys(user_client):
     """GET /admin/api-keys must return 403 for a user-role key."""
@@ -83,6 +89,7 @@ def test_user_key_blocked_from_admin_create_key(user_client):
 def test_user_key_blocked_from_detection_model_set(user_client):
     """POST /settings/detection-model must return 403 for a user-role key."""
     from app.deps import DETECTION_MODEL_ALLOWLIST
+
     first_id = next(iter(DETECTION_MODEL_ALLOWLIST))
     resp = user_client.post(
         "/settings/detection-model",
@@ -93,6 +100,7 @@ def test_user_key_blocked_from_detection_model_set(user_client):
 
 # ── Tests: admin key succeeds on /admin/* ────────────────────────────────────
 
+
 def test_admin_key_can_list_keys(admin_client):
     """GET /admin/api-keys must succeed for an admin-role key."""
     resp = admin_client.get("/admin/api-keys")
@@ -100,6 +108,7 @@ def test_admin_key_can_list_keys(admin_client):
 
 
 # ── Tests: user-plane routes still work with user-role key ───────────────────
+
 
 def test_user_key_can_list_bins(user_client):
     """GET /bins must work for a user-role key."""
@@ -110,6 +119,7 @@ def test_user_key_can_list_bins(user_client):
 def test_user_key_can_read_health(app_module):
     """GET /health must be public (no key required)."""
     from fastapi.testclient import TestClient
+
     c = TestClient(app_module.app)
     resp = c.get("/health")
     assert resp.status_code == 200
@@ -117,11 +127,10 @@ def test_user_key_can_read_health(app_module):
 
 # ── Tests: schema has role column ────────────────────────────────────────────
 
+
 def test_api_keys_table_has_role_column(db):
     """api_keys table must have a role column."""
-    row = db.execute(
-        text("SELECT role FROM api_keys LIMIT 1")
-    ).first()
+    row = db.execute(text("SELECT role FROM api_keys LIMIT 1")).first()
     # Just checking the column exists (no rows is fine)
     assert row is None or row[0] in ("user", "admin")
 

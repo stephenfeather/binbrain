@@ -1,15 +1,19 @@
 from typing import Optional
 
+from app.db import repository
+from app.deps import (
+    EMBED_MODEL_NAME,
+    canonical_item_text,
+    embed_text,
+    fingerprint_for,
+    get_db,
+    logger,
+    vec_to_pgvector,
+)
+from app.services.upc_lookup import validate_upc
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-
-from app.db import repository
-from app.deps import (
-    get_db, embed_text, canonical_item_text, fingerprint_for,
-    vec_to_pgvector, EMBED_MODEL_NAME, logger,
-)
-from app.services.upc_lookup import validate_upc
 
 router = APIRouter()
 
@@ -59,7 +63,9 @@ def create_item(
         vec = embed_text(canonical_item_text(name, category, notes))
         dims = len(vec)
         if dims != 384:
-            raise HTTPException(status_code=500, detail=f"unexpected embedding dims {dims}, expected 384")
+            raise HTTPException(
+                status_code=500, detail=f"unexpected embedding dims {dims}, expected 384"
+            )
         vec_str = vec_to_pgvector(vec)
 
         # 3) Upsert embedding row
@@ -71,7 +77,7 @@ def create_item(
             try:
                 repository.ensure_bin_active_or_create(db, bin_id)
             except ValueError:
-                raise HTTPException(status_code=404, detail="bin not found")
+                raise HTTPException(status_code=404, detail="bin not found") from None
             repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
 
         db.commit()
@@ -97,7 +103,7 @@ def create_item(
         raise
     except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="internal error")
+        raise HTTPException(status_code=500, detail="internal error") from None
 
 
 @router.post("/associate")
@@ -115,7 +121,7 @@ def associate_item(
     try:
         repository.ensure_bin_active_or_create(db, bin_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="bin not found")
+        raise HTTPException(status_code=404, detail="bin not found") from None
     repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
     db.commit()
 
@@ -139,10 +145,12 @@ def search(
     try:
         qvec = embed_text(q)
     except Exception:
-        raise HTTPException(status_code=400, detail="search unavailable")
+        raise HTTPException(status_code=400, detail="search unavailable") from None
 
     if len(qvec) != 384:
-        raise HTTPException(status_code=500, detail=f"unexpected query embedding dims {len(qvec)}, expected 384")
+        raise HTTPException(
+            status_code=500, detail=f"unexpected query embedding dims {len(qvec)}, expected 384"
+        )
 
     qvec_str = vec_to_pgvector(qvec)
 

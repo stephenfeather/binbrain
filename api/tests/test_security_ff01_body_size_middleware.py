@@ -17,11 +17,11 @@ These tests exercise the middleware directly as an ASGI callable via
 ``asyncio.run`` so no async pytest plugin is required. They will FAIL until
 ``app.body_size_middleware.BodySizeLimitMiddleware`` is implemented.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-
 
 # ── Tiny ASGI helpers ────────────────────────────────────────────────────────
 
@@ -36,16 +36,20 @@ async def _noop_app(scope, receive, send):
             break
         total += len(msg.get("body", b""))
         more = msg.get("more_body", False)
-    await send({
-        "type": "http.response.start",
-        "status": 200,
-        "headers": [(b"content-type", b"text/plain")],
-    })
-    await send({
-        "type": "http.response.body",
-        "body": f"ok:{total}".encode(),
-        "more_body": False,
-    })
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"text/plain")],
+        }
+    )
+    await send(
+        {
+            "type": "http.response.body",
+            "body": f"ok:{total}".encode(),
+            "more_body": False,
+        }
+    )
 
 
 def _http_scope(headers):
@@ -97,8 +101,7 @@ class _SendCollector:
     @property
     def body_bytes(self):
         return b"".join(
-            m.get("body", b"") for m in self.messages
-            if m["type"] == "http.response.body"
+            m.get("body", b"") for m in self.messages if m["type"] == "http.response.body"
         )
 
 
@@ -180,9 +183,7 @@ def test_under_cap_body_is_passed_through():
     _run(mw(scope, _receive_from(chunks), send))
 
     assert send.status == 200, f"expected 200, got {send.status}"
-    assert send.body_bytes == b"ok:300", (
-        f"body not replayed correctly: {send.body_bytes!r}"
-    )
+    assert send.body_bytes == b"ok:300", f"body not replayed correctly: {send.body_bytes!r}"
 
 
 # ── Non-http scope is passed straight through ────────────────────────────────

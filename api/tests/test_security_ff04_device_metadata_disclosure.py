@@ -8,7 +8,6 @@ bin responses. Admin endpoints would need to project it explicitly.
 
 import json
 
-
 SAMPLE_METADATA = {
     "device_processing": {
         "version": "1",
@@ -34,12 +33,12 @@ def test_get_bin_photos_do_not_include_device_metadata(client, valid_jpeg_bytes)
     photos = resp.json()["photos"]
     assert len(photos) == 1, "expected one photo in bin"
     for photo in photos:
-        assert "device_metadata" not in photo, (
-            f"device_metadata disclosed in GET /bins response: {photo}"
-        )
-        assert "path" not in photo, (
-            f"path disclosed in GET /bins response (F-10 regression): {photo}"
-        )
+        assert (
+            "device_metadata" not in photo
+        ), f"device_metadata disclosed in GET /bins response: {photo}"
+        assert (
+            "path" not in photo
+        ), f"path disclosed in GET /bins response (F-10 regression): {photo}"
         # Positive control: photo_id must still be present.
         assert "photo_id" in photo, "photo_id must still be present"
 
@@ -56,7 +55,7 @@ def test_get_bin_photos_omit_device_metadata_even_when_null(client, valid_jpeg_b
     resp = client.get("/bins/FF04GETBIN02")
     assert resp.status_code == 200
     for photo in resp.json()["photos"]:
-        assert "device_metadata" not in photo, (
-            f"device_metadata key present (even if null) in response: {photo}"
-        )
+        assert (
+            "device_metadata" not in photo
+        ), f"device_metadata key present (even if null) in response: {photo}"
         assert "photo_id" in photo

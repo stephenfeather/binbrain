@@ -4,6 +4,7 @@ Two tests that both create items and both expect the items table to be empty
 at the start. Without the autouse cleanup fixture, the second test would see
 the first test's row and fail.
 """
+
 from sqlalchemy import text
 
 
@@ -32,6 +33,7 @@ def test_cleanup_items_empty_at_start_pass_b(client, db):
 
 def test_guard_rejects_unset_test_url():
     from _db_guard import test_db_isolation_error as _test_db_isolation_error
+
     msg = _test_db_isolation_error("", "postgresql://x/y")
     assert msg is not None
     assert "not set" in msg.lower()
@@ -39,6 +41,7 @@ def test_guard_rejects_unset_test_url():
 
 def test_guard_rejects_continuous_claude_db():
     from _db_guard import test_db_isolation_error as _test_db_isolation_error
+
     msg = _test_db_isolation_error(
         "postgresql+psycopg://claude:pw@localhost:5432/continuous_claude",
         None,
@@ -49,6 +52,7 @@ def test_guard_rejects_continuous_claude_db():
 
 def test_guard_rejects_test_url_equal_to_prod_url():
     from _db_guard import test_db_isolation_error as _test_db_isolation_error
+
     url = "postgresql+psycopg://binbrain:pw@localhost:5432/binbrain"
     msg = _test_db_isolation_error(url, url)
     assert msg is not None
@@ -57,6 +61,7 @@ def test_guard_rejects_test_url_equal_to_prod_url():
 
 def test_guard_rejects_db_name_without_test_marker():
     from _db_guard import test_db_isolation_error as _test_db_isolation_error
+
     msg = _test_db_isolation_error(
         "postgresql+psycopg://binbrain:pw@localhost:5432/binbrain",
         None,
@@ -67,6 +72,7 @@ def test_guard_rejects_db_name_without_test_marker():
 
 def test_guard_accepts_well_formed_test_url():
     from _db_guard import test_db_isolation_error as _test_db_isolation_error
+
     msg = _test_db_isolation_error(
         "postgresql+psycopg://binbrain:pw@localhost:5432/binbrain_test",
         "postgresql+psycopg://binbrain:pw@localhost:5432/binbrain",
@@ -76,6 +82,5 @@ def test_guard_accepts_well_formed_test_url():
 
 def test_guard_accepts_any_test_marker_case():
     from _db_guard import test_db_isolation_error as _test_db_isolation_error
-    assert _test_db_isolation_error(
-        "postgresql+psycopg://u:p@h:1/myTESTdb", None
-    ) is None
+
+    assert _test_db_isolation_error("postgresql+psycopg://u:p@h:1/myTESTdb", None) is None

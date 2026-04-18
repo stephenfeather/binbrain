@@ -30,13 +30,11 @@ from sqlalchemy import text
 def _seed_bin(client, app_module):
     """Create a bin the photos rows can attach to."""
     from app.deps import SessionLocal
+
     db = SessionLocal()
     try:
         db.execute(
-            text(
-                "INSERT INTO bins (bin_id) VALUES (:bin_id) "
-                "ON CONFLICT (bin_id) DO NOTHING"
-            ),
+            text("INSERT INTO bins (bin_id) VALUES (:bin_id) " "ON CONFLICT (bin_id) DO NOTHING"),
             {"bin_id": "FF03BIN01"},
         )
         db.commit()
@@ -56,13 +54,11 @@ def _seed_bin(client, app_module):
 
 def _insert_photo_row(bin_id: str, path: str) -> int:
     from app.deps import SessionLocal
+
     db = SessionLocal()
     try:
         photo_id = db.execute(
-            text(
-                "INSERT INTO photos (bin_id, path) "
-                "VALUES (:bin_id, :path) RETURNING photo_id"
-            ),
+            text("INSERT INTO photos (bin_id, path) " "VALUES (:bin_id, :path) RETURNING photo_id"),
             {"bin_id": bin_id, "path": path},
         ).scalar()
         db.commit()
@@ -73,13 +69,14 @@ def _insert_photo_row(bin_id: str, path: str) -> int:
 
 # ── /photos/{id}/file ─────────────────────────────────────────────────────────
 
+
 def test_file_rejects_path_outside_photo_root(client, _seed_bin):
     """Row whose path is outside PHOTO_DIR must return 404 from /file."""
     photo_id = _insert_photo_row(_seed_bin, "/etc/passwd")
     resp = client.get(f"/photos/{photo_id}/file")
-    assert resp.status_code == 404, (
-        f"Expected 404 for out-of-root path, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 404
+    ), f"Expected 404 for out-of-root path, got {resp.status_code}: {resp.text}"
     # No contents of /etc/passwd should leak regardless of body shape.
     assert b"root:" not in resp.content
 
@@ -88,9 +85,9 @@ def test_file_rejects_nonexistent_out_of_root_path(client, _seed_bin):
     """Nonexistent out-of-root path still returns 404 (not 500)."""
     photo_id = _insert_photo_row(_seed_bin, "/tmp/ff03_does_not_exist_xyz.jpg")
     resp = client.get(f"/photos/{photo_id}/file")
-    assert resp.status_code == 404, (
-        f"Expected 404 for missing path, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 404
+    ), f"Expected 404 for missing path, got {resp.status_code}: {resp.text}"
 
 
 def test_file_rejects_symlink_escape(client, _seed_bin, tmp_path, valid_jpeg_bytes):
@@ -114,9 +111,9 @@ def test_file_rejects_symlink_escape(client, _seed_bin, tmp_path, valid_jpeg_byt
     photo_id = _insert_photo_row(_seed_bin, str(link))
     try:
         resp = client.get(f"/photos/{photo_id}/file")
-        assert resp.status_code == 404, (
-            f"Expected 404 for symlink-escape, got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"Expected 404 for symlink-escape, got {resp.status_code}: {resp.text}"
     finally:
         if link.exists() or link.is_symlink():
             link.unlink()
@@ -133,9 +130,9 @@ def test_file_serves_in_root_photo(client, _seed_bin, valid_jpeg_bytes):
     photo_id = _insert_photo_row(_seed_bin, str(photo_file))
     try:
         resp = client.get(f"/photos/{photo_id}/file")
-        assert resp.status_code == 200, (
-            f"Expected 200 for in-root photo, got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 200
+        ), f"Expected 200 for in-root photo, got {resp.status_code}: {resp.text}"
         assert resp.content == valid_jpeg_bytes
     finally:
         if photo_file.exists():
@@ -144,9 +141,8 @@ def test_file_serves_in_root_photo(client, _seed_bin, valid_jpeg_bytes):
 
 # ── /photos/{id}/detect ───────────────────────────────────────────────────────
 
-def test_detect_rejects_path_outside_photo_root_and_skips_detector(
-    client, _seed_bin, app_module
-):
+
+def test_detect_rejects_path_outside_photo_root_and_skips_detector(client, _seed_bin, app_module):
     """Out-of-root path returns 404 AND does NOT invoke the detector."""
     import app.routes.photos as photos_route
 
@@ -156,12 +152,10 @@ def test_detect_rejects_path_outside_photo_root_and_skips_detector(
     try:
         photo_id = _insert_photo_row(_seed_bin, "/etc/passwd")
         resp = client.post(f"/photos/{photo_id}/detect")
-        assert resp.status_code == 404, (
-            f"Expected 404 for out-of-root path, got {resp.status_code}: {resp.text}"
-        )
-        assert calls == [], (
-            f"Detector must not be invoked on out-of-root path; got calls={calls}"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"Expected 404 for out-of-root path, got {resp.status_code}: {resp.text}"
+        assert calls == [], f"Detector must not be invoked on out-of-root path; got calls={calls}"
     finally:
         photos_route.detect = original
 
@@ -177,9 +171,9 @@ def test_detect_accepts_in_root_photo(client, _seed_bin, valid_jpeg_bytes):
     photo_id = _insert_photo_row(_seed_bin, str(photo_file))
     try:
         resp = client.post(f"/photos/{photo_id}/detect")
-        assert resp.status_code == 200, (
-            f"Expected 200 for in-root photo, got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 200
+        ), f"Expected 200 for in-root photo, got {resp.status_code}: {resp.text}"
         body = resp.json()
         assert body["photo_id"] == photo_id
     finally:
@@ -189,14 +183,11 @@ def test_detect_accepts_in_root_photo(client, _seed_bin, valid_jpeg_bytes):
 
 # ── Audit script (FF-03 §3) ──────────────────────────────────────────────────
 
+
 def _load_audit_module():
     """Load api/scripts/audit_photo_paths.py by file path (not a package)."""
-    script_path = (
-        Path(__file__).resolve().parent.parent / "scripts" / "audit_photo_paths.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "audit_photo_paths_ff03", script_path
-    )
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "audit_photo_paths.py"
+    spec = importlib.util.spec_from_file_location("audit_photo_paths_ff03", script_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["audit_photo_paths_ff03"] = module

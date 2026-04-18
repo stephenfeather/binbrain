@@ -6,6 +6,7 @@ Fallback: go-upc.com (stub — requires API key, not yet integrated)
 All public functions return rather than raise. Callers receive a UPCResult
 with source="unknown" when all services fail or the UPC is not found.
 """
+
 from __future__ import annotations
 
 import json
@@ -69,21 +70,26 @@ def _lookup_upcitemdb(upc: str) -> UPCResult | None:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         logger.warning(
             "event=upc_lookup_external source=upcitemdb upc=%s elapsed_ms=%s status=http_error code=%s",
-            upc, elapsed_ms, exc.code,
+            upc,
+            elapsed_ms,
+            exc.code,
         )
         return None
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         logger.warning(
             "event=upc_lookup_external source=upcitemdb upc=%s elapsed_ms=%s status=error error=%s",
-            upc, elapsed_ms, str(exc)[:200],
+            upc,
+            elapsed_ms,
+            str(exc)[:200],
         )
         return None
 
     if body.get("code") != "OK" or not body.get("items"):
         logger.info(
             "event=upc_lookup_external source=upcitemdb upc=%s elapsed_ms=%s status=not_found",
-            upc, elapsed_ms,
+            upc,
+            elapsed_ms,
         )
         return None
 
@@ -96,7 +102,9 @@ def _lookup_upcitemdb(upc: str) -> UPCResult | None:
     )
     logger.info(
         "event=upc_lookup_external source=upcitemdb upc=%s elapsed_ms=%s status=ok name=%s",
-        upc, elapsed_ms, result.name,
+        upc,
+        elapsed_ms,
+        result.name,
     )
     return result
 

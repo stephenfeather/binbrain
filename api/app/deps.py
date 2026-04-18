@@ -3,16 +3,18 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from app.config import (
+    DEFAULT_DETECTION_MODEL_ID,
+    DETECTION_MODEL_ALLOWLIST,
+    MAX_FILE_BYTES,
+    MAX_FILES_PER_REQUEST,
+    MAX_REQUEST_BODY_BYTES,
+    MODELS_DIR,
+)
 from fastapi import Request
+from fastembed import TextEmbedding
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
-from fastembed import TextEmbedding
-
-from app.config import (
-    MAX_REQUEST_BODY_BYTES, MAX_FILE_BYTES, MAX_FILES_PER_REQUEST,
-    MODELS_DIR, DETECTION_MODEL_ALLOWLIST, DEFAULT_DETECTION_MODEL_ID,
-)
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 PHOTO_DIR = os.environ.get("PHOTO_DIR", "/data/photos")
@@ -109,6 +111,7 @@ def set_max_image_px(value: int):
 
 
 # ── Detection model accessors (F-02) ─────────────────────────────────────────
+
 
 def get_detection_model() -> str:
     """Return the resolved filesystem path of the active detection model.

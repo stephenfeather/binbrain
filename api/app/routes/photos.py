@@ -1,25 +1,32 @@
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
-from fastapi.responses import Response
-from pydantic import BaseModel, model_validator
-from pydantic_core import PydanticCustomError
-from sqlalchemy.orm import Session
-
 from app.db import repository
 from app.deps import (
-    get_db, embed_text, canonical_item_text, fingerprint_for,
-    vec_to_pgvector, SessionLocal, photo_root,
-    get_active_vision_model, get_max_image_px,
-    VISION_BASE_URL, VISION_API_KEY, logger,
+    VISION_API_KEY,
+    VISION_BASE_URL,
+    SessionLocal,
+    canonical_item_text,
+    embed_text,
+    fingerprint_for,
+    get_active_vision_model,
+    get_db,
+    get_max_image_px,
+    logger,
+    photo_root,
+    vec_to_pgvector,
 )
 from app.services.detection import detect, get_model_name
 from app.services.rate_limiter import require_vision_rate_limit
 from app.services.suggest_tracker import get_tracker
 from app.services.vision import PROMPT_VERSION, describe_photo
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
+from pydantic import BaseModel, model_validator
+from pydantic_core import PydanticCustomError
+from sqlalchemy.orm import Session
 
 router = APIRouter()
 
@@ -58,16 +65,18 @@ def _resolve_photo_path_under_root(photo_path: str | None) -> Path:
     try:
         resolved = fpath.resolve(strict=True)
     except (FileNotFoundError, OSError, RuntimeError):
-        raise HTTPException(status_code=404, detail="photo not found")
+        raise HTTPException(status_code=404, detail="photo not found") from None
     if not _is_path_under_photo_root(resolved):
         logger.warning(
             "event=photo_path_escape path=%s resolved=%s",
-            photo_path, resolved,
+            photo_path,
+            resolved,
         )
         raise HTTPException(status_code=404, detail="photo not found")
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="photo not found")
     return resolved
+
 
 _MIME_TYPES = {
     ".jpg": "image/jpeg",
@@ -112,7 +121,9 @@ def _detection_row_to_hit(row: dict) -> dict:
 def suggest_for_photo(
     photo_id: int,
     model: Optional[str] = Query(None, description="Override vision model for this request"),
-    refresh: bool = Query(False, description="Bypass the photo_detections cache and force a fresh vision call."),
+    refresh: bool = Query(
+        False, description="Bypass the photo_detections cache and force a fresh vision call."
+    ),
     request: Request = None,
 ):
     request_id = getattr(request.state, "request_id", None) if request else None
@@ -151,20 +162,37 @@ def suggest_for_photo(
             cached_flag = True
             logger.info(
                 "event=photo_suggest_cache_hit request_id=%s photo_id=%s model=%s hits=%s",
-                request_id, photo_id, vision_model, len(vision_hits),
+                request_id,
+                photo_id,
+                vision_model,
+                len(vision_hits),
             )
 
     if not cached_flag:
         try:
-            logger.info("event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id)
-            vision_hits, vision_elapsed_ms = describe_photo(
-                str(resolved_path), VISION_BASE_URL, VISION_API_KEY,
-                vision_model, get_max_image_px(), photo_id=photo_id,
+            logger.info(
+                "event=photo_suggest_vision_start request_id=%s photo_id=%s", request_id, photo_id
             )
-            logger.info("event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s", request_id, photo_id, vision_elapsed_ms, len(vision_hits))
+            vision_hits, vision_elapsed_ms = describe_photo(
+                str(resolved_path),
+                VISION_BASE_URL,
+                VISION_API_KEY,
+                vision_model,
+                get_max_image_px(),
+                photo_id=photo_id,
+            )
+            logger.info(
+                "event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s",
+                request_id,
+                photo_id,
+                vision_elapsed_ms,
+                len(vision_hits),
+            )
         except Exception as exc:
             tracker.mark_failed(photo_id, type(exc).__name__.lower())
-            logger.exception("event=photo_suggest_crash request_id=%s photo_id=%s", request_id, photo_id)
+            logger.exception(
+                "event=photo_suggest_crash request_id=%s photo_id=%s", request_id, photo_id
+            )
             raise
 
         # Persist for future cache hits. Clear first so re-runs replace rather
@@ -262,14 +290,14 @@ def suggest_for_photo(
 def suggest_status(photo_id: int):
     """Finding #18: lightweight liveness probe for an in-flight or recently-completed
     /suggest job. Safe to poll at ~5s intervals. 404 when no recent job exists."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     tracker = get_tracker()
     entry = tracker.get(photo_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="no suggest job for this photo")
     started_at = (
-        datetime.fromtimestamp(entry.started_at, tz=timezone.utc)
+        datetime.fromtimestamp(entry.started_at, tz=UTC)
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z")
     )
@@ -287,7 +315,12 @@ def suggest_status(photo_id: int):
 @router.get("/photos/{photo_id}/file")
 def get_photo_file(
     photo_id: int,
-    w: Optional[int] = Query(None, ge=16, le=4096, description="Resize to this width (aspect ratio preserved). Omit for original."),
+    w: Optional[int] = Query(
+        None,
+        ge=16,
+        le=4096,
+        description="Resize to this width (aspect ratio preserved). Omit for original.",
+    ),
     db: Session = Depends(get_db),
 ):
     if not repository.photo_exists(db, photo_id):
@@ -304,8 +337,10 @@ def get_photo_file(
     if w is None:
         return Response(content=fpath.read_bytes(), media_type=content_type)
 
-    from PIL import Image
     import io
+
+    from PIL import Image
+
     with Image.open(fpath) as img:
         img = img.convert("RGB")
         ratio = w / img.width
@@ -333,7 +368,8 @@ def delete_photo(
     if not _is_path_under_photo_root(fpath):
         logger.error(
             "event=photo_delete_path_escape photo_id=%s path=%s",
-            photo_id, deleted_path,
+            photo_id,
+            deleted_path,
         )
         raise HTTPException(status_code=400, detail="photo path outside photo root")
     if fpath.is_file():
@@ -432,7 +468,7 @@ def confirm_photo_groups(
     try:
         repository.ensure_bin_active_or_create(db, bin_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="bin not found")
+        raise HTTPException(status_code=404, detail="bin not found") from None
 
     model = get_model_name()
     results = []
@@ -479,7 +515,9 @@ def confirm_photo_groups(
         raise
     except Exception:
         db.rollback()
-        logger.exception("event=confirm_failed request_id=%s photo_id=%s", db.info.get("request_id"), photo_id)
+        logger.exception(
+            "event=confirm_failed request_id=%s photo_id=%s", db.info.get("request_id"), photo_id
+        )
         raise HTTPException(status_code=500, detail="internal error") from None
 
     return {"version": "1", "photo_id": photo_id, "bin_id": bin_id, "results": results}

@@ -1,5 +1,3 @@
-import pytest
-
 from app.services.upc_lookup import _simplify_category, validate_upc
 
 

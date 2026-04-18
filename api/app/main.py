@@ -5,19 +5,24 @@ import urllib.request
 import uuid
 from contextlib import asynccontextmanager
 
+from app.body_size_middleware import BodySizeLimitMiddleware
+from app.db import repository
+from app.deps import (
+    MAX_REQUEST_BODY_BYTES,
+    MODELS_DIR,
+    OLLAMA_URL,
+    VISION_BASE_URL,
+    SessionLocal,
+    get_active_vision_model,
+    load_settings_from_db,
+    logger,
+    photo_root,
+)
+from app.routes import admin, bins, classes, health, items, locations, photos, upc
+from app.services.rate_limiter import _ADMIN_MULTIPLIER, global_limiter
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-
-from app.db import repository
-from app.body_size_middleware import BodySizeLimitMiddleware
-from app.deps import (
-    SessionLocal, OLLAMA_URL, VISION_BASE_URL, logger,
-    get_active_vision_model, load_settings_from_db,
-    MAX_REQUEST_BODY_BYTES, MODELS_DIR, photo_root,
-)
-from app.routes import health, items, bins, photos, upc, admin, classes, locations
-from app.services.rate_limiter import global_limiter, _ADMIN_MULTIPLIER
 
 
 @asynccontextmanager
@@ -36,6 +41,7 @@ async def lifespan(app: FastAPI):
 
     # Load confirmed classes; defer YOLO-World init to first detection request
     from app.services import class_registry, detection
+
     db = SessionLocal()
     try:
         class_registry.load_from_db(db)
@@ -45,15 +51,21 @@ async def lifespan(app: FastAPI):
         db.close()
 
     model = get_active_vision_model()
-    is_local = "localhost" in VISION_BASE_URL or "host.docker.internal" in VISION_BASE_URL or "127.0.0.1" in VISION_BASE_URL
+    is_local = (
+        "localhost" in VISION_BASE_URL
+        or "host.docker.internal" in VISION_BASE_URL
+        or "127.0.0.1" in VISION_BASE_URL
+    )
     if is_local:
         logger.info("event=warmup_start model=%s ollama_url=%s", model, OLLAMA_URL)
         try:
-            payload = json.dumps({
-                "model": model,
-                "prompt": "",
-                "keep_alive": -1,
-            }).encode()
+            payload = json.dumps(
+                {
+                    "model": model,
+                    "prompt": "",
+                    "keep_alive": -1,
+                }
+            ).encode()
             req = urllib.request.Request(
                 f"{OLLAMA_URL}/api/generate",
                 data=payload,
@@ -65,7 +77,11 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("event=warmup_failed model=%s error=%s", model, str(e)[:200])
     else:
-        logger.info("event=warmup_skipped reason=hosted_provider model=%s base_url=%s", model, VISION_BASE_URL)
+        logger.info(
+            "event=warmup_skipped reason=hosted_provider model=%s base_url=%s",
+            model,
+            VISION_BASE_URL,
+        )
 
     yield
 
@@ -220,6 +236,7 @@ async def api_key_auth_middleware(request: Request, call_next):
             s.commit()
         finally:
             s.close()
+
     threading.Thread(target=_touch, daemon=True).start()
 
     return await call_next(request)
@@ -240,7 +257,9 @@ async def http_exception_handler(request: Request, exc):
         502: "service_unavailable",
         503: "service_unavailable",
     }
-    error_code = code_map.get(status_code, "bad_request" if status_code == 422 else "internal_error")
+    error_code = code_map.get(
+        status_code, "bad_request" if status_code == 422 else "internal_error"
+    )
     message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
     details = exc.detail if status_code == 400 else None
     return JSONResponse(
@@ -252,7 +271,7 @@ async def http_exception_handler(request: Request, exc):
                 "message": message,
                 **({"details": details} if details is not None else {}),
                 "request_id": getattr(request.state, "request_id", None),
-            }
+            },
         },
         headers={"x-request-id": getattr(request.state, "request_id", "")},
     )
@@ -269,7 +288,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
                 "message": "validation error",
                 "details": exc.errors(),
                 "request_id": getattr(request.state, "request_id", None),
-            }
+            },
         },
         headers={"x-request-id": getattr(request.state, "request_id", "")},
     )
@@ -277,7 +296,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.exception("event=unhandled_error request_id=%s", getattr(request.state, "request_id", None))
+    logger.exception(
+        "event=unhandled_error request_id=%s", getattr(request.state, "request_id", None)
+    )
     return JSONResponse(
         status_code=500,
         content={
@@ -286,7 +307,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
                 "code": "internal_error",
                 "message": "internal server error",
                 "request_id": getattr(request.state, "request_id", None),
-            }
+            },
         },
         headers={"x-request-id": getattr(request.state, "request_id", "")},
     )
@@ -302,13 +323,16 @@ app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
 
 # ── Middleware ordering assertion ───────────────────────────────────────────────
 # Fail fast at import time if the LIFO ordering invariant is broken.
-_assert_auth_runs_before_rate_limit([
-    getattr(
-        getattr(mw, "kwargs", {}).get("dispatch") or getattr(mw, "cls", None),
-        "__name__", "",
-    )
-    for mw in app.user_middleware
-])
+_assert_auth_runs_before_rate_limit(
+    [
+        getattr(
+            getattr(mw, "kwargs", {}).get("dispatch") or getattr(mw, "cls", None),
+            "__name__",
+            "",
+        )
+        for mw in app.user_middleware
+    ]
+)
 
 
 # ── Register route modules ──────────────────────────────────────────────────────

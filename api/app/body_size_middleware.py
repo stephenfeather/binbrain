@@ -21,11 +21,11 @@ the F-05 temp-file flow is not reached.
 
 The env var ``MAX_REQUEST_BODY_BYTES`` is documented in ``app.config``.
 """
+
 from __future__ import annotations
 
 import json
-from typing import Awaitable, Callable
-
+from collections.abc import Awaitable, Callable
 
 _Send = Callable[[dict], Awaitable[None]]
 _Receive = Callable[[], Awaitable[dict]]
@@ -109,28 +109,32 @@ class BodySizeLimitMiddleware:
         await self.app(scope, replay_receive, send)
 
     async def _send_413(self, send: _Send) -> None:
-        body = json.dumps({
-            "version": "1",
-            "error": {
-                "code": "payload_too_large",
-                "message": (
-                    f"Request body exceeds the {self.max_bytes}-byte limit"
-                ),
-            },
-        }).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 413,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-            "more_body": False,
-        })
+        body = json.dumps(
+            {
+                "version": "1",
+                "error": {
+                    "code": "payload_too_large",
+                    "message": (f"Request body exceeds the {self.max_bytes}-byte limit"),
+                },
+            }
+        ).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": body,
+                "more_body": False,
+            }
+        )
 
 
 async def _drain(receive: _Receive) -> None:

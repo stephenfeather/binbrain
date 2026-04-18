@@ -3,6 +3,7 @@
 Validates uploaded files by magic bytes and PIL decode.
 No extension-based trust — content is the authority.
 """
+
 from pathlib import Path
 
 # PIL format names that we accept.
@@ -11,6 +12,7 @@ ALLOWED_FORMATS: frozenset[str] = frozenset({"JPEG", "PNG", "WEBP"})
 # Try to enable HEIC/HEIF support if pillow-heif is installed.
 try:
     import pillow_heif  # type: ignore[import-untyped]
+
     pillow_heif.register_heif_opener()
     ALLOWED_FORMATS = ALLOWED_FORMATS | {"HEIF"}
 except ImportError:
@@ -39,8 +41,14 @@ def _magic_byte_format(path: Path) -> str | None:
         return "WEBP"
     # HEIC/HEIF: ftyp box at offset 4
     if header[4:8] == b"ftyp" and header[8:12] in (
-        b"heic", b"HEIC", b"heis", b"heix",
-        b"hevc", b"hevx", b"mif1", b"msf1",
+        b"heic",
+        b"HEIC",
+        b"heis",
+        b"heix",
+        b"hevc",
+        b"hevx",
+        b"mif1",
+        b"msf1",
     ):
         return "HEIF"
     return None
