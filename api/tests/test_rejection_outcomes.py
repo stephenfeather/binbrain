@@ -322,3 +322,83 @@ def test_post_outcomes_survives_all_decision_kinds(client, db, valid_jpeg_bytes)
         {"pid": photo_id},
     ).scalars().all()
     assert decisions == ["accepted", "edited", "ignored", "rejected"]
+
+
+# ---------------------------------------------------------------------------
+# 10-12. Review-feedback tightenings (Copilot): trimming + tz-awareness
+# ---------------------------------------------------------------------------
+
+
+def test_post_outcomes_rejects_empty_label(client, db, valid_jpeg_bytes):
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-OUTCOMES-0010")
+    payload = _payload(
+        [{"label": "   ", "shown_at": "2026-04-17T19:00:00Z", "decision": "accepted"}]
+    )
+    r = client.post(f"/photos/{photo_id}/outcomes", json=payload)
+    assert r.status_code in (400, 422), r.text
+    count = db.execute(
+        text("SELECT COUNT(*) FROM photo_suggestion_outcomes WHERE photo_id = :pid"),
+        {"pid": photo_id},
+    ).scalar()
+    assert count == 0
+
+
+def test_post_outcomes_trims_label_and_category(client, db, valid_jpeg_bytes):
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-OUTCOMES-0011")
+    payload = _payload(
+        [
+            {
+                "label": "  hex bolt  ",
+                "category": "  fastener  ",
+                "shown_at": "2026-04-17T19:00:00Z",
+                "decision": "accepted",
+            }
+        ]
+    )
+    r = client.post(f"/photos/{photo_id}/outcomes", json=payload)
+    assert r.status_code == 200, r.text
+
+    row = db.execute(
+        text(
+            "SELECT label, category FROM photo_suggestion_outcomes "
+            "WHERE photo_id = :pid"
+        ),
+        {"pid": photo_id},
+    ).mappings().one()
+    assert row["label"] == "hex bolt"
+    assert row["category"] == "fastener"
+
+
+def test_post_outcomes_rejects_naive_shown_at(client, db, valid_jpeg_bytes):
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-OUTCOMES-0012")
+    payload = _payload(
+        [{"label": "bolt", "shown_at": "2026-04-17T19:00:00", "decision": "accepted"}]
+    )
+    r = client.post(f"/photos/{photo_id}/outcomes", json=payload)
+    assert r.status_code in (400, 422), r.text
+    count = db.execute(
+        text("SELECT COUNT(*) FROM photo_suggestion_outcomes WHERE photo_id = :pid"),
+        {"pid": photo_id},
+    ).scalar()
+    assert count == 0
+
+
+def test_post_outcomes_rejects_whitespace_edited_to_label(client, db, valid_jpeg_bytes):
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-OUTCOMES-0013")
+    payload = _payload(
+        [
+            {
+                "label": "plastic gear",
+                "shown_at": "2026-04-17T19:00:00Z",
+                "decision": "edited",
+                "edited_to_label": "   ",
+            }
+        ]
+    )
+    r = client.post(f"/photos/{photo_id}/outcomes", json=payload)
+    assert r.status_code in (400, 422), r.text
+    count = db.execute(
+        text("SELECT COUNT(*) FROM photo_suggestion_outcomes WHERE photo_id = :pid"),
+        {"pid": photo_id},
+    ).scalar()
+    assert count == 0
