@@ -105,12 +105,22 @@ jobs:
 
       - name: Export requirements from uv.lock
         working-directory: api
-        # --no-hashes: pip-audit only needs name==version for CVE lookup.
-        # With hashes, pip enforces hashed-mode across the whole file; the
-        # `clip @ git+https://github.com/ultralytics/CLIP.git` VCS dep has no
-        # hash, so any hashed-mode install fails with
-        # "Can't verify hashes for ... version control repositories".
-        run: uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt -o /tmp/requirements.txt
+        # pip-audit resolves each installed distribution back to PyPI to look
+        # up CVEs. VCS installs (e.g. `clip @ git+https://github.com/...`) have
+        # no PyPI record, so pip-audit with --strict exits 1 with
+        #   "Dependency not found on PyPI and could not be audited: clip (1.0)".
+        #
+        # Two-step workaround:
+        #   1. --no-hashes so pip does not enforce hashed-mode install of the
+        #      requirements file (hashed-mode fails on VCS deps that legitimately
+        #      cannot be hashed).
+        #   2. Strip `@ git+` lines after export so pip-audit only sees PyPI
+        #      packages — the only ones it can meaningfully audit. uv.lock
+        #      remains the authoritative source of truth for reproducible
+        #      installs (including hashes); this file is audit-only.
+        run: |
+          uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt -o /tmp/requirements.txt
+          sed -i -e '/ @ git+/d' /tmp/requirements.txt
 
       - name: Run pip-audit
         run: uvx pip-audit --requirement /tmp/requirements.txt --strict
