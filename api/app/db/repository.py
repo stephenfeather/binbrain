@@ -350,7 +350,7 @@ def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
         db.execute(
             text(
                 """
-            SELECT label, category, confidence, x1, y1, x2, y2
+            SELECT label, category, confidence, x1, y1, x2, y2, prompt_version
             FROM photo_detections
             WHERE photo_id = :photo_id AND model = :model
             ORDER BY id
@@ -367,6 +367,7 @@ def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
             "category": row["category"],
             "confidence": float(row["confidence"]),
             "bbox": [float(row["x1"]), float(row["y1"]), float(row["x2"]), float(row["y2"])],
+            "prompt_version": row["prompt_version"],
         }
         for row in rows
     ]
