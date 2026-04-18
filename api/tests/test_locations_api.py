@@ -104,7 +104,9 @@ class TestBinLocationAPI:
         db.execute(text("UPDATE bins SET location_id = NULL"))
         db.execute(text("DELETE FROM locations"))
         db.execute(text("DELETE FROM bin_items"))
-        db.execute(text("DELETE FROM bins"))
+        # FEAT-3: skip the UNASSIGNED sentinel — the protect_unassigned_bin
+        # trigger would reject an unscoped DELETE otherwise.
+        db.execute(text("DELETE FROM bins WHERE bin_id <> 'UNASSIGNED'"))
         db.commit()
 
     def test_assign_location_to_bin(self, client, db):

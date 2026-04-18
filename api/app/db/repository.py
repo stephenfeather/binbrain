@@ -13,6 +13,17 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger("binbrain")
 
 
+# FEAT-3 sentinel bin. Items whose parent bin is soft-deleted are
+# reattributed here so they remain reachable through
+# ``GET /bins/UNASSIGNED`` instead of vanishing into the hidden bin.
+# Created in ``migrations/2026-04-18_add_unassigned_bin_sentinel.sql``;
+# mirrored in ``api/tests/conftest.py`` ``_init_schema`` and re-seeded
+# after every truncate. A DB trigger refuses DELETE, soft-delete via
+# ``UPDATE … SET deleted_at``, and rename via ``UPDATE … SET bin_id`` on
+# this row.
+UNASSIGNED_BIN_ID: str = "UNASSIGNED"
+
+
 def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
     row = db.execute(
         text("SELECT deleted_at FROM bins WHERE bin_id = :bin_id"),
@@ -26,6 +37,57 @@ def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
         return
     if row[0] is not None:
         raise ValueError("bin is deleted")
+
+
+def reattribute_bin_items_to_unassigned(db: Session, source_bin_id: str) -> int:
+    """Move every ``bin_items`` row from ``source_bin_id`` to ``UNASSIGNED``.
+
+    FEAT-3 — used by the bin soft-delete handler so items don't vanish when
+    their parent bin is hidden. Atomic single-statement CTE that respects the
+    existing ``bin_items_unique (bin_id, item_id)`` constraint without a
+    DELETE-then-UPDATE race: another transaction inserting a conflicting
+    ``(UNASSIGNED, item_id)`` between the two steps would have caused the
+    UPDATE to fail with a unique-violation. The CTE pattern (reviewed by
+    Gemini on PR #28) is race-free in a single statement:
+
+    1. ``DELETE FROM bin_items WHERE bin_id = source RETURNING …`` removes
+       every source-bin row in one shot.
+    2. ``INSERT … SELECT FROM deleted ON CONFLICT (bin_id, item_id) DO
+       NOTHING`` re-inserts each into ``UNASSIGNED``. Conflicts (item already
+       in UNASSIGNED) silently no-op — we don't merge quantities.
+
+    Note: rows are physically replaced (new ``id``, ``created_at`` is
+    preserved by carrying it through). If preserving the row identity ever
+    matters, a SERIALIZABLE transaction or table lock would be the next step.
+
+    Idempotent. Returns the number of source rows the CTE consumed (moved +
+    dropped via conflict). Raises ``ValueError`` if the caller tries to
+    reattribute the sentinel itself.
+    """
+    if source_bin_id == UNASSIGNED_BIN_ID:
+        raise ValueError("cannot reattribute the UNASSIGNED sentinel bin to itself")
+
+    res = db.execute(
+        text(
+            """
+            WITH deleted AS (
+                DELETE FROM bin_items
+                WHERE bin_id = :source
+                RETURNING item_id, quantity, confidence, created_at
+            ),
+            inserted AS (
+                INSERT INTO bin_items (bin_id, item_id, quantity, confidence, created_at)
+                SELECT :unassigned, item_id, quantity, confidence, created_at
+                FROM deleted
+                ON CONFLICT (bin_id, item_id) DO NOTHING
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM deleted
+            """
+        ),
+        {"source": source_bin_id, "unassigned": UNASSIGNED_BIN_ID},
+    )
+    return int(res.scalar() or 0)
 
 
 def find_item_by_upc(db: Session, upc: str) -> dict | None:

@@ -11,7 +11,9 @@ class TestBinsWithLocation:
     def _cleanup(self, db):
         db.execute(text("DELETE FROM bin_items"))
         db.execute(text("DELETE FROM photos"))
-        db.execute(text("DELETE FROM bins"))
+        # FEAT-3: skip the UNASSIGNED sentinel — the protect_unassigned_bin
+        # trigger would reject an unscoped DELETE otherwise.
+        db.execute(text("DELETE FROM bins WHERE bin_id <> 'UNASSIGNED'"))
         db.execute(text("DELETE FROM locations"))
         db.commit()
 
