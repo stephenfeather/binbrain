@@ -62,12 +62,17 @@ def test_suggest_response_prompt_version_is_null_when_cached_rows_have_null(
     hits = [{"name": "Thing", "category": "tool", "confidence": 0.8, "bbox": [0.1, 0.1, 0.2, 0.2]}]
     monkeypatch.setattr("app.routes.photos.describe_photo", _fake_describe(hits))
 
-    # Prime the cache, then simulate a pre-instrumentation row by nulling the stamp.
+    # Prime the cache, then simulate a pre-instrumentation row by nulling the
+    # stamp. Scope the UPDATE to (photo_id, model) so this test stays targeted
+    # even if a photo ever accumulates detections under multiple vision models.
     first = client.get(f"/photos/{photo_id}/suggest").json()
     assert first["cached"] is False
     db.execute(
-        text("UPDATE photo_detections SET prompt_version = NULL WHERE photo_id = :pid"),
-        {"pid": photo_id},
+        text(
+            "UPDATE photo_detections SET prompt_version = NULL "
+            "WHERE photo_id = :pid AND model = :model"
+        ),
+        {"pid": photo_id, "model": first["model"]},
     )
     db.commit()
 
@@ -84,15 +89,21 @@ def test_suggest_response_prompt_version_reflects_db_not_constant_on_cache_hit(
     hits = [{"name": "Thing", "category": "tool", "confidence": 0.8, "bbox": [0.1, 0.1, 0.2, 0.2]}]
     monkeypatch.setattr("app.routes.photos.describe_photo", _fake_describe(hits))
 
-    # Prime the cache, then overwrite the stamp with a historical prompt version.
-    client.get(f"/photos/{photo_id}/suggest")
+    # Prime the cache, then overwrite the stamp with a historical prompt version
+    # that is guaranteed to differ from the live constant (so the test survives
+    # any future bump of PROMPT_VERSION, including a hypothetical rollback).
+    historical_version = "v1" if PROMPT_VERSION != "v1" else "v0"
+    first = client.get(f"/photos/{photo_id}/suggest").json()
     db.execute(
-        text("UPDATE photo_detections SET prompt_version = 'v1' WHERE photo_id = :pid"),
-        {"pid": photo_id},
+        text(
+            "UPDATE photo_detections SET prompt_version = :pv "
+            "WHERE photo_id = :pid AND model = :model"
+        ),
+        {"pv": historical_version, "pid": photo_id, "model": first["model"]},
     )
     db.commit()
-    assert PROMPT_VERSION != "v1", "test presumes current constant is not 'v1'"
 
     cached = client.get(f"/photos/{photo_id}/suggest").json()
     assert cached["cached"] is True
-    assert cached["prompt_version"] == "v1"
+    assert cached["prompt_version"] == historical_version
+    assert cached["prompt_version"] != PROMPT_VERSION
