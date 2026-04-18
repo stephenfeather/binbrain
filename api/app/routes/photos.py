@@ -163,7 +163,7 @@ def suggest_for_photo(
             vision_hits = [_detection_row_to_hit(r) for r in cached_rows]
             vision_elapsed_ms = 0
             cached_flag = True
-            response_prompt_version = cached_rows[0].get("prompt_version")
+            response_prompt_version = cached_rows[0]["prompt_version"]
             logger.info(
                 "event=photo_suggest_cache_hit request_id=%s photo_id=%s model=%s hits=%s",
                 request_id,
