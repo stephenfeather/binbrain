@@ -224,3 +224,73 @@ def test_upc_endpoint_returns_429_on_rate_limit(user_client, app_module, monkeyp
         ), f"Expected 429 on 2nd request, got {resp2.status_code}: {resp2.text}"
     finally:
         rate_limiter.upc_limiter = original
+
+
+# ── RATE_LIMIT_DISABLED kill-switch (dev-only bypass) ────────────────────────
+
+
+def test_disabled_flag_short_circuits_check(monkeypatch):
+    """When ``_DISABLED`` is True, ``check`` returns True past the configured
+    budget and does NOT record a call (no deque growth)."""
+    from app.services import rate_limiter as rl_mod
+    from app.services.rate_limiter import SlidingWindowRateLimiter
+
+    monkeypatch.setattr(rl_mod, "_DISABLED", True)
+
+    rl = SlidingWindowRateLimiter(max_calls=1, period=60.0)
+    for _ in range(50):
+        assert rl.check("any-key") is True
+
+    # Internal deque was never written — proves the bypass short-circuits
+    # before the lock/deque path, so re-enabling won't surface stale state.
+    assert "any-key" not in rl._calls
+
+
+def test_disabled_flag_default_false_preserves_blocking():
+    """Sanity: with the default (unset) env var, the limiter still blocks."""
+    from app.services import rate_limiter as rl_mod
+    from app.services.rate_limiter import SlidingWindowRateLimiter
+
+    assert rl_mod._DISABLED is False
+    rl = SlidingWindowRateLimiter(max_calls=1, period=60.0)
+    assert rl.check("k") is True
+    assert rl.check("k") is False
+
+
+def test_disabled_flag_env_var_truthy_values(monkeypatch):
+    """Accept the same truthy spellings the docstring promises."""
+    import importlib
+
+    from app.services import rate_limiter as rl_mod
+
+    for value in ("1", "true", "yes", "on", "TRUE", "Yes"):
+        monkeypatch.setenv("RATE_LIMIT_DISABLED", value)
+        importlib.reload(rl_mod)
+        assert rl_mod._DISABLED is True, f"Expected True for {value!r}"
+
+    for value in ("0", "false", "no", "off", "", "  "):
+        monkeypatch.setenv("RATE_LIMIT_DISABLED", value)
+        importlib.reload(rl_mod)
+        assert rl_mod._DISABLED is False, f"Expected False for {value!r}"
+
+    monkeypatch.delenv("RATE_LIMIT_DISABLED", raising=False)
+    importlib.reload(rl_mod)
+    assert rl_mod._DISABLED is False
+
+
+def test_disabled_flag_bypasses_global_middleware(user_client, app_module, monkeypatch):
+    """End-to-end: with ``_DISABLED`` True, the global middleware lets calls
+    through past the configured budget."""
+    from app.services import rate_limiter
+
+    monkeypatch.setattr(rate_limiter, "_DISABLED", True)
+    original, _ = _swap_limiter(rate_limiter, "global_limiter", max_calls=1)
+    try:
+        # Three requests against a budget of 1 — all should pass with bypass on.
+        for i in range(3):
+            resp = user_client.get("/health")
+            assert (
+                resp.status_code != 429
+            ), f"Request {i + 1} unexpectedly limited despite _DISABLED=True: {resp.text}"
+    finally:
+        rate_limiter.global_limiter = original
