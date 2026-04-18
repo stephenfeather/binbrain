@@ -225,6 +225,25 @@ components:
         upc:        { type: ["string", "null"], description: "UPC barcode (12 or 13 digits) if known." }
         quantity:   { type: ["number", "null"], minimum: 0 }
         confidence: { type: ["number", "null"], minimum: 0, maximum: 1 }
+        source_photo_id:
+          type: ["integer", "null"]
+          minimum: 1
+          description: |
+            Photo this item was originally created from, derived from the
+            most recent `decision='accepted'` row in
+            `photo_suggestion_outcomes` for this item. Null for items
+            that predate outcome capture or whose provenance could not
+            be resolved.
+        source_bbox:
+          type: ["array", "null"]
+          minItems: 4
+          maxItems: 4
+          items: { type: number, minimum: 0, maximum: 1 }
+          description: |
+            Normalized bounding box on `source_photo_id` in
+            `[x1, y1, x2, y2]` corner format, values in `[0, 1]`. Null
+            when `source_photo_id` is null or the source outcome row
+            had no bbox (e.g. whole-image fallbacks).
       additionalProperties: false
 
     GetBinResponse:
@@ -1116,12 +1135,29 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
     patch:
-      summary: Update an item's quantity or confidence in a bin
+      summary: Update an item's quantity or confidence in a bin, or move it to a different bin
       operationId: updateItemInBin
       tags: [Bins]
       description: |
-        Updates the `quantity` and/or `confidence` of an item within a bin.
-        At least one field must be provided.
+        Updates an item's association within a bin. At least one of
+        `quantity`, `confidence`, or `bin_id` must be provided.
+
+        When `bin_id` is provided in the body and differs from the path
+        `bin_id`, the item is moved to the target bin. On a move, any
+        fields omitted from the request body carry over from the source
+        association — `quantity` and `confidence` in the target bin
+        default to their values in the source bin unless explicitly
+        overridden in this request. Supplied `quantity` / `confidence`
+        are applied to the resulting association in the target bin.
+
+        If the item already exists in the target bin, the move
+        conflicts with that existing association and the server returns
+        `409 Conflict`; callers should resolve by deleting or updating
+        the existing target association first.
+
+        The response's `bin_id` reflects the effective bin where the
+        item now lives (the target bin on a successful move, otherwise
+        the path bin).
       parameters:
         - { $ref: "#/components/parameters/BinIdPath" }
         - name: item_id
@@ -1134,22 +1170,43 @@ paths:
           application/json:
             schema:
               type: object
+              minProperties: 1
               properties:
                 quantity:
                   type: number
                   minimum: 0
-                  description: "Updated quantity in the bin."
+                  description: "Updated quantity in the (possibly new) bin."
                 confidence:
                   type: number
                   minimum: 0
                   maximum: 1
                   description: "Updated confidence score."
+                bin_id:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Target bin to move the item into. If omitted or equal
+                    to the path `bin_id`, the association stays in place
+                    and only `quantity` / `confidence` are updated. The
+                    referenced bin must exist.
               additionalProperties: false
-            example:
-              quantity: 25
+            examples:
+              updateQuantity:
+                summary: Update quantity in place
+                value:
+                  quantity: 25
+              moveToAnotherBin:
+                summary: Move item to a different bin
+                value:
+                  bin_id: "B-17"
+              moveWithQuantity:
+                summary: Move and set quantity atomically
+                value:
+                  bin_id: "B-17"
+                  quantity: 3
       responses:
         "200":
-          description: Item updated in bin.
+          description: Item updated in bin (or moved to a different bin).
           headers:
             x-request-id: { $ref: "#/components/headers/XRequestId" }
           content:
@@ -1159,19 +1216,32 @@ paths:
                 required: [version, bin_id, item_id]
                 properties:
                   version:    { type: string, enum: ["1"] }
-                  bin_id:     { type: string }
+                  bin_id:     { type: string, description: "Effective bin after the update (target bin on a move)." }
                   item_id:    { type: integer, minimum: 1 }
                   quantity:   { type: ["number", "null"] }
                   confidence: { type: ["number", "null"] }
+                  moved:      { type: boolean, description: "True when the item was moved to a different bin." }
                 additionalProperties: false
               example:
                 version: "1"
-                bin_id: "B-42"
+                bin_id: "B-17"
                 item_id: 12
-                quantity: 25
+                quantity: 3
                 confidence: null
+                moved: true
         "400": { $ref: "#/components/responses/BadRequest" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        "404":
+          description: Item not found in source bin, or target `bin_id` does not exist.
+        "409":
+          description: |
+            The item already exists in the target bin. Resolve by updating
+            or deleting the existing association in the target bin before
+            retrying the move.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   # ── Bin Location Assignment ──────────────────────────────────────────────────
   /bins/{bin_id}/location:
