@@ -1148,6 +1148,48 @@ def insert_photo_suggestion_matches(
     )
 
 
+def insert_search_query(
+    db: Session,
+    *,
+    request_id: str | None,
+    q: str,
+    qvec_dims: int,
+    min_score_effective: float,
+    result_count: int,
+) -> int:
+    """Append one ``search_queries`` row and return its id.
+
+    Dev2_019. One row per ``/search`` invocation, written on every call
+    (not only zero-result) so the relevance floor can be calibrated after
+    the fact. ``min_score_effective`` is whatever value actually filtered
+    the query, regardless of source (explicit param vs. env default).
+    Append-only — callers never delete or replace.
+    """
+    row = (
+        db.execute(
+            text(
+                """
+            INSERT INTO search_queries
+              (request_id, q, qvec_dims, min_score_effective, result_count)
+            VALUES
+              (:request_id, :q, :qvec_dims, :min_score_effective, :result_count)
+            RETURNING id
+            """
+            ),
+            {
+                "request_id": request_id,
+                "q": q,
+                "qvec_dims": qvec_dims,
+                "min_score_effective": min_score_effective,
+                "result_count": result_count,
+            },
+        )
+        .mappings()
+        .one()
+    )
+    return int(row["id"])
+
+
 def update_bin_location(db: Session, bin_id: str, location_id: Optional[int]) -> bool:
     res = db.execute(
         text(
