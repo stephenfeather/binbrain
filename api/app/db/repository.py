@@ -280,9 +280,19 @@ def fetch_bin_items(db: Session, bin_id: str) -> list[dict]:
               i.category,
               i.upc,
               bi.quantity,
-              bi.confidence
+              bi.confidence,
+              pso.photo_id AS source_photo_id,
+              pso.bbox     AS source_bbox
             FROM bin_items bi
             JOIN items i ON i.item_id = bi.item_id
+            LEFT JOIN LATERAL (
+                SELECT photo_id, bbox
+                FROM photo_suggestion_outcomes
+                WHERE item_id = i.item_id
+                  AND decision = 'accepted'
+                ORDER BY decided_at DESC
+                LIMIT 1
+            ) pso ON TRUE
             WHERE bi.bin_id = :bin_id
               AND i.deleted_at IS NULL
             ORDER BY i.item_id

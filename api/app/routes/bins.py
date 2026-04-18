@@ -56,6 +56,8 @@ class BinItemRecord(BaseModel):
     upc: Optional[str] = None
     quantity: Optional[float] = None
     confidence: Optional[float] = None
+    source_photo_id: Optional[int] = None
+    source_bbox: Optional[list[float]] = None
 
 
 class GetBinResponse(BaseModel):
