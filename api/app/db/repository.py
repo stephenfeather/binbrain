@@ -327,6 +327,18 @@ def photo_exists(db: Session, photo_id: int) -> bool:
     )
 
 
+def find_photo_by_uuid(db: Session, photo_uuid: str) -> int | None:
+    """Resolve a ``photo_uuid`` to its internal ``photo_id``.
+
+    FEAT-6: export paths accept the stable cross-environment uuid handle;
+    internal joins continue to use the bigint PK. Returns None if no match.
+    """
+    return db.execute(
+        text("SELECT photo_id FROM photos WHERE photo_uuid = :photo_uuid"),
+        {"photo_uuid": photo_uuid},
+    ).scalar()
+
+
 def delete_photo(db: Session, photo_id: int) -> str | None:
     """Delete a photo row and return its path, or None if not found."""
     return db.execute(

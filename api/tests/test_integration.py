@@ -927,3 +927,86 @@ def test_search_results_include_upc_null_for_items_without(client):
     assert match is not None
     assert "upc" in match
     assert match["upc"] is None
+
+
+# ---------------------------------------------------------------------------
+# FEAT-6: photo_uuid — stable cross-environment identifier for export paths.
+# photo_id (bigint) remains the internal PK; photo_uuid is the external handle.
+# ---------------------------------------------------------------------------
+
+
+def test_photo_uuid_auto_assigned_on_ingest(client, db, valid_jpeg_bytes):
+    r = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-UUID-001"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    assert r.status_code == 200
+    photo_id = r.json()["photos"][0]["photo_id"]
+
+    row = (
+        db.execute(
+            text("SELECT photo_uuid FROM photos WHERE photo_id = :id"),
+            {"id": photo_id},
+        )
+        .mappings()
+        .first()
+    )
+    assert row is not None
+    assert row["photo_uuid"] is not None
+    # uuid round-trips as a UUID object via psycopg; stringify to assert shape.
+    assert len(str(row["photo_uuid"])) == 36
+
+
+def test_photo_uuid_unique_across_ingests(client, db, valid_jpeg_bytes):
+    r1 = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-UUID-002"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    r2 = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-UUID-002"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    pid1 = r1.json()["photos"][0]["photo_id"]
+    pid2 = r2.json()["photos"][0]["photo_id"]
+    assert pid1 != pid2
+
+    rows = (
+        db.execute(
+            text("SELECT photo_uuid FROM photos WHERE photo_id IN (:a, :b)"),
+            {"a": pid1, "b": pid2},
+        )
+        .mappings()
+        .all()
+    )
+    uuids = {str(r["photo_uuid"]) for r in rows}
+    assert len(uuids) == 2
+
+
+def test_find_photo_by_uuid_round_trip(client, db, valid_jpeg_bytes):
+    from app.db.repository import find_photo_by_uuid
+
+    r = client.post(
+        "/ingest",
+        data={"bin_id": "BIN-UUID-003"},
+        files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
+    )
+    photo_id = r.json()["photos"][0]["photo_id"]
+    photo_uuid = str(
+        db.execute(
+            text("SELECT photo_uuid FROM photos WHERE photo_id = :id"),
+            {"id": photo_id},
+        ).scalar()
+    )
+
+    resolved = find_photo_by_uuid(db, photo_uuid)
+    assert resolved == photo_id
+
+
+def test_find_photo_by_uuid_returns_none_for_unknown(db):
+    from app.db.repository import find_photo_by_uuid
+
+    # A well-formed but not-in-DB uuid; repository returns None on no match.
+    assert find_photo_by_uuid(db, "00000000-0000-0000-0000-000000000000") is None
