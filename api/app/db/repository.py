@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import text
@@ -308,34 +309,58 @@ def insert_photo_detections(
     detections: list[dict],
     *,
     prompt_version: str | None = None,
-) -> None:
+) -> list[int]:
+    """Insert detection rows for ``(photo_id, model)`` and return their ids.
+
+    Returns the list of newly inserted ``photo_detections.id`` values in the
+    same order as ``detections``. Callers that need to wire a downstream FK
+    (e.g. ``photo_suggestion_matches.photo_detection_id``) can zip this list
+    against the inputs. Callers that don't care about ids (YOLO /detect) can
+    ignore the return value.
+    """
     if not detections:
-        return
-    db.execute(
-        text(
-            """
+        return []
+    # PR#21 review follow-up (Gemini #4): one roundtrip, not N. Build a
+    # single multi-row INSERT with per-row placeholders so Postgres returns
+    # every inserted id in VALUES order in one network trip. The previous
+    # per-row RETURNING loop was correct but regressed YOLO /detect
+    # throughput (which ignores the ids) for no benefit.
+    placeholders: list[str] = []
+    params: dict = {}
+    for i, d in enumerate(detections):
+        placeholders.append(
+            f"(:photo_id_{i}, :model_{i}, :label_{i}, :category_{i}, "
+            f":confidence_{i}, :x1_{i}, :y1_{i}, :x2_{i}, :y2_{i}, "
+            f":prompt_version_{i})"
+        )
+        params[f"photo_id_{i}"] = photo_id
+        params[f"model_{i}"] = model
+        params[f"label_{i}"] = d["label"]
+        params[f"category_{i}"] = d.get("category")
+        params[f"confidence_{i}"] = d["confidence"]
+        params[f"x1_{i}"] = d["bbox"][0]
+        params[f"y1_{i}"] = d["bbox"][1]
+        params[f"x2_{i}"] = d["bbox"][2]
+        params[f"y2_{i}"] = d["bbox"][3]
+        params[f"prompt_version_{i}"] = prompt_version
+    rows = (
+        db.execute(
+            text(
+                f"""
             INSERT INTO photo_detections
-              (photo_id, model, label, category, confidence, x1, y1, x2, y2, prompt_version)
+              (photo_id, model, label, category, confidence,
+               x1, y1, x2, y2, prompt_version)
             VALUES
-              (:photo_id, :model, :label, :category, :confidence, :x1, :y1, :x2, :y2, :prompt_version)
+              {", ".join(placeholders)}
+            RETURNING id
             """
-        ),
-        [
-            {
-                "photo_id": photo_id,
-                "model": model,
-                "label": d["label"],
-                "category": d.get("category"),
-                "confidence": d["confidence"],
-                "x1": d["bbox"][0],
-                "y1": d["bbox"][1],
-                "x2": d["bbox"][2],
-                "y2": d["bbox"][3],
-                "prompt_version": prompt_version,
-            }
-            for d in detections
-        ],
+            ),
+            params,
+        )
+        .mappings()
+        .all()
     )
+    return [int(r["id"]) for r in rows]
 
 
 def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
@@ -343,16 +368,18 @@ def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
 
     Keys match the ``insert_photo_detections`` write shape so callers can
     round-trip a detection set through the DB without format translation:
-    ``{"label", "category", "confidence", "bbox", "prompt_version"}`` where
-    ``bbox`` is a 4-element ``[x1, y1, x2, y2]`` list and ``prompt_version``
-    is the VLM prompt revision stamped at write time (``None`` for rows
-    written before Dev2_016 prompt-version instrumentation).
+    ``{"id", "label", "category", "confidence", "bbox", "prompt_version"}``
+    where ``bbox`` is a 4-element ``[x1, y1, x2, y2]`` list and
+    ``prompt_version`` is the VLM prompt revision stamped at write time
+    (``None`` for rows written before Dev2_016 prompt-version
+    instrumentation). ``id`` is the primary key and is load-bearing for
+    downstream match-telemetry writes (``photo_suggestion_matches``).
     """
     rows = (
         db.execute(
             text(
                 """
-            SELECT label, category, confidence, x1, y1, x2, y2, prompt_version
+            SELECT id, label, category, confidence, x1, y1, x2, y2, prompt_version
             FROM photo_detections
             WHERE photo_id = :photo_id AND model = :model
             ORDER BY id
@@ -365,6 +392,7 @@ def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
     )
     return [
         {
+            "id": int(row["id"]),
             "label": row["label"],
             "category": row["category"],
             "confidence": float(row["confidence"]),
@@ -1016,6 +1044,106 @@ def replace_photo_suggestion_outcomes(
                 **d,
             }
             for d in decisions
+        ],
+    )
+
+
+def insert_vision_call(
+    db: Session,
+    *,
+    photo_id: int | None,
+    model: str,
+    prompt_version: str | None,
+    base_url: str | None,
+    started_at: datetime,
+    elapsed_ms: int | None,
+    hits_count: int | None,
+    cached: bool,
+    outcome: str,
+    error_code: str | None,
+    flags: dict | None,
+) -> int:
+    """Append one ``vision_calls`` row and return its id.
+
+    Dev2_018 Phase 3. One row per ``/suggest`` invocation (success, cache
+    hit, or error). Append-only: callers never replace or delete existing
+    rows. ``flags`` is a bag — known keys today: ``whole_image_bbox_warn``,
+    ``bbox_normalized``, ``stages``. Additive-only over time; never rename.
+
+    ``model`` is NOT NULL per schema. Pre-vision-resolution failures (404 on
+    photo lookup) are therefore NOT written here — they have no model to
+    attribute the call to.
+    """
+    flags_json = json.dumps(flags or {})
+    row = (
+        db.execute(
+            text(
+                """
+            INSERT INTO vision_calls
+              (photo_id, model, prompt_version, base_url, started_at,
+               elapsed_ms, hits_count, cached, outcome, error_code, flags)
+            VALUES
+              (:photo_id, :model, :prompt_version, :base_url, :started_at,
+               :elapsed_ms, :hits_count, :cached, :outcome, :error_code,
+               CAST(:flags AS jsonb))
+            RETURNING id
+            """
+            ),
+            {
+                "photo_id": photo_id,
+                "model": model,
+                "prompt_version": prompt_version,
+                "base_url": base_url,
+                "started_at": started_at,
+                "elapsed_ms": elapsed_ms,
+                "hits_count": hits_count,
+                "cached": cached,
+                "outcome": outcome,
+                "error_code": error_code,
+                "flags": flags_json,
+            },
+        )
+        .mappings()
+        .one()
+    )
+    return int(row["id"])
+
+
+def insert_photo_suggestion_matches(
+    db: Session,
+    *,
+    rows: list[dict],
+) -> None:
+    """Batched append of ``photo_suggestion_matches`` rows.
+
+    Each row shape: ``{photo_detection_id, matched_item_id, score,
+    threshold_at_compute}``. ``matched_item_id`` may be ``None`` — a row
+    with a NULL item is the "we saw this hit but rejected it because score
+    < threshold" signal and is the whole point of the table. No-op if
+    ``rows`` is empty.
+
+    Append-only: callers never delete or replace. A fresh /suggest of the
+    same photo writes new rows; history is retained.
+    """
+    if not rows:
+        return
+    db.execute(
+        text(
+            """
+            INSERT INTO photo_suggestion_matches
+              (photo_detection_id, matched_item_id, score, threshold_at_compute)
+            VALUES
+              (:photo_detection_id, :matched_item_id, :score, :threshold_at_compute)
+            """
+        ),
+        [
+            {
+                "photo_detection_id": r["photo_detection_id"],
+                "matched_item_id": r.get("matched_item_id"),
+                "score": r["score"],
+                "threshold_at_compute": r["threshold_at_compute"],
+            }
+            for r in rows
         ],
     )
 
