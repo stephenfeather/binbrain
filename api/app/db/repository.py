@@ -280,9 +280,19 @@ def fetch_bin_items(db: Session, bin_id: str) -> list[dict]:
               i.category,
               i.upc,
               bi.quantity,
-              bi.confidence
+              bi.confidence,
+              pso.photo_id AS source_photo_id,
+              pso.bbox     AS source_bbox
             FROM bin_items bi
             JOIN items i ON i.item_id = bi.item_id
+            LEFT JOIN LATERAL (
+                SELECT photo_id, bbox
+                FROM photo_suggestion_outcomes
+                WHERE item_id = i.item_id
+                  AND decision = 'accepted'
+                ORDER BY decided_at DESC
+                LIMIT 1
+            ) pso ON TRUE
             WHERE bi.bin_id = :bin_id
               AND i.deleted_at IS NULL
             ORDER BY i.item_id
@@ -1077,6 +1087,52 @@ def soft_delete_location(db: Session, location_id: int) -> bool:
             {"location_id": location_id},
         )
     return deleted
+
+
+def link_suggestion_outcomes_to_item(
+    db: Session,
+    *,
+    photo_id: int,
+    label: str,
+    category: str | None,
+    item_id: int,
+) -> int:
+    """Attach ``item_id`` to any outcome rows on ``photo_id`` that produced it.
+
+    FEAT-5 provenance wiring. Called from ``/photos/{id}/confirm`` right after
+    an item is materialized from a suggestion. Matches any still-unlinked
+    outcome on the same photo whose decision produced this label:
+
+      * ``decision='accepted'`` and the original ``label`` matches.
+      * ``decision='edited'``   and the user-chosen ``edited_to_label``
+        matches (the bbox / source photo are still the right provenance —
+        only the label was rewritten).
+
+    Returns the number of outcome rows linked. Safe to call repeatedly:
+    ``item_id IS NULL`` on the WHERE clause makes it idempotent.
+    """
+    result = db.execute(
+        text(
+            """
+            UPDATE photo_suggestion_outcomes
+            SET item_id = :item_id
+            WHERE photo_id = :photo_id
+              AND item_id IS NULL
+              AND category IS NOT DISTINCT FROM :category
+              AND (
+                  (decision = 'accepted' AND label = :label)
+                  OR (decision = 'edited' AND edited_to_label = :label)
+              )
+            """
+        ),
+        {
+            "item_id": item_id,
+            "photo_id": photo_id,
+            "label": label,
+            "category": category,
+        },
+    )
+    return int(result.rowcount or 0)
 
 
 def replace_photo_suggestion_outcomes(

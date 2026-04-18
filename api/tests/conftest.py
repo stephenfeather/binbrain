@@ -218,7 +218,8 @@ def _init_schema(engine) -> None:
       decision         text   NOT NULL
                        CHECK (decision IN ('accepted', 'rejected', 'edited', 'ignored')),
       edited_to_label  text,
-      decided_at       timestamptz NOT NULL DEFAULT now()
+      decided_at       timestamptz NOT NULL DEFAULT now(),
+      item_id          bigint REFERENCES items(item_id) ON DELETE SET NULL
     );
     CREATE INDEX photo_suggestion_outcomes_photo_idx
         ON photo_suggestion_outcomes (photo_id);
@@ -226,6 +227,9 @@ def _init_schema(engine) -> None:
         ON photo_suggestion_outcomes (decision);
     CREATE INDEX photo_suggestion_outcomes_photo_model_idx
         ON photo_suggestion_outcomes (photo_id, vision_model);
+    CREATE INDEX photo_suggestion_outcomes_item_idx
+        ON photo_suggestion_outcomes (item_id)
+        WHERE item_id IS NOT NULL;
 
     CREATE TABLE vision_calls (
       id             bigserial PRIMARY KEY,
