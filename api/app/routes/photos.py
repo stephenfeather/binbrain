@@ -150,6 +150,9 @@ def suggest_for_photo(
     # refresh. Per design decision 1, cache-miss writes do a clear-then-insert
     # so the DB always reflects the latest vision answer.
     cached_flag = False
+    # Dev2_016b: on a cache hit we echo the prompt_version stamped at write time
+    # (historical lineage), not the live PROMPT_VERSION constant.
+    response_prompt_version: str | None = PROMPT_VERSION
     if not refresh:
         db_read = SessionLocal()
         try:
@@ -160,6 +163,7 @@ def suggest_for_photo(
             vision_hits = [_detection_row_to_hit(r) for r in cached_rows]
             vision_elapsed_ms = 0
             cached_flag = True
+            response_prompt_version = cached_rows[0]["prompt_version"]
             logger.info(
                 "event=photo_suggest_cache_hit request_id=%s photo_id=%s model=%s hits=%s",
                 request_id,
@@ -282,6 +286,7 @@ def suggest_for_photo(
         "model": vision_model,
         "vision_elapsed_ms": vision_elapsed_ms,
         "cached": cached_flag,
+        "prompt_version": response_prompt_version,
         "suggestions": suggestions,
     }
 

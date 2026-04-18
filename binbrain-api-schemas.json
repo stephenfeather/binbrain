@@ -41,13 +41,14 @@
   "$id": "https://binbrain.local/schemas/photo.suggest.response.json",
   "title": "PhotoSuggestResponse",
   "type": "object",
-  "required": ["version", "photo_id", "suggestions"],
+  "required": ["version", "photo_id", "prompt_version", "suggestions"],
   "properties": {
     "version": { "type": "string", "enum": ["1"] },
     "photo_id": { "type": "integer", "minimum": 1 },
     "model": { "type": "string" },
     "vision_elapsed_ms": { "type": "integer", "minimum": 0 },
     "cached": { "type": "boolean" },
+    "prompt_version": { "type": ["string", "null"], "description": "VLM prompt revision that produced the suggestions. Fresh calls echo the live server constant; cache hits echo the stamp stored on photo_detections (null for pre-instrumentation rows)." },
     "suggestions": {
       "type": "array",
       "items": { "$ref": "https://binbrain.local/schemas/suggestion.item.json" }

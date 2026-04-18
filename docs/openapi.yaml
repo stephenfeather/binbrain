@@ -335,7 +335,7 @@ components:
 
     PhotoSuggestResponse:
       type: object
-      required: [version, photo_id, model, vision_elapsed_ms, suggestions]
+      required: [version, photo_id, model, vision_elapsed_ms, prompt_version, suggestions]
       properties:
         version:           { type: string, enum: ["1"] }
         photo_id:          { type: integer, minimum: 1 }
@@ -344,6 +344,9 @@ components:
         cached:
           type: boolean
           description: "True when suggestions were served from the photo_detections cache (populated by a prior /suggest call for the same photo + model). False when this call triggered a fresh vision request. Clients may ignore this; future UI may surface a 'Re-analyze' action to force ?refresh=true."
+        prompt_version:
+          type: ["string", "null"]
+          description: "Dev2_016b: VLM prompt revision that produced these suggestions. Always present. Fresh calls echo the live server constant (e.g. \"v2\"); cache hits echo the stamp recorded on the `photo_detections` rows at write time, preserving historical lineage. `null` when cached rows predate prompt-version instrumentation. Clients round-trip this on `/outcomes` so rejection analytics can be attributed to the specific prompt revision."
         suggestions:
           type: array
           items: { $ref: "#/components/schemas/SuggestionItem" }
