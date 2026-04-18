@@ -320,39 +320,47 @@ def insert_photo_detections(
     """
     if not detections:
         return []
-    ids: list[int] = []
-    for d in detections:
-        row = (
-            db.execute(
-                text(
-                    """
-                INSERT INTO photo_detections
-                  (photo_id, model, label, category, confidence,
-                   x1, y1, x2, y2, prompt_version)
-                VALUES
-                  (:photo_id, :model, :label, :category, :confidence,
-                   :x1, :y1, :x2, :y2, :prompt_version)
-                RETURNING id
-                """
-                ),
-                {
-                    "photo_id": photo_id,
-                    "model": model,
-                    "label": d["label"],
-                    "category": d.get("category"),
-                    "confidence": d["confidence"],
-                    "x1": d["bbox"][0],
-                    "y1": d["bbox"][1],
-                    "x2": d["bbox"][2],
-                    "y2": d["bbox"][3],
-                    "prompt_version": prompt_version,
-                },
-            )
-            .mappings()
-            .one()
+    # PR#21 review follow-up (Gemini #4): one roundtrip, not N. Build a
+    # single multi-row INSERT with per-row placeholders so Postgres returns
+    # every inserted id in VALUES order in one network trip. The previous
+    # per-row RETURNING loop was correct but regressed YOLO /detect
+    # throughput (which ignores the ids) for no benefit.
+    placeholders: list[str] = []
+    params: dict = {}
+    for i, d in enumerate(detections):
+        placeholders.append(
+            f"(:photo_id_{i}, :model_{i}, :label_{i}, :category_{i}, "
+            f":confidence_{i}, :x1_{i}, :y1_{i}, :x2_{i}, :y2_{i}, "
+            f":prompt_version_{i})"
         )
-        ids.append(int(row["id"]))
-    return ids
+        params[f"photo_id_{i}"] = photo_id
+        params[f"model_{i}"] = model
+        params[f"label_{i}"] = d["label"]
+        params[f"category_{i}"] = d.get("category")
+        params[f"confidence_{i}"] = d["confidence"]
+        params[f"x1_{i}"] = d["bbox"][0]
+        params[f"y1_{i}"] = d["bbox"][1]
+        params[f"x2_{i}"] = d["bbox"][2]
+        params[f"y2_{i}"] = d["bbox"][3]
+        params[f"prompt_version_{i}"] = prompt_version
+    rows = (
+        db.execute(
+            text(
+                f"""
+            INSERT INTO photo_detections
+              (photo_id, model, label, category, confidence,
+               x1, y1, x2, y2, prompt_version)
+            VALUES
+              {", ".join(placeholders)}
+            RETURNING id
+            """
+            ),
+            params,
+        )
+        .mappings()
+        .all()
+    )
+    return [int(r["id"]) for r in rows]
 
 
 def get_photo_detections(db: Session, photo_id: int, model: str) -> list[dict]:
