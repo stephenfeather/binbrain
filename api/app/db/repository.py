@@ -936,13 +936,7 @@ def replace_photo_suggestion_outcomes(
                 "photo_id": photo_id,
                 "vision_model": vision_model,
                 "prompt_version": prompt_version,
-                "label": d["label"],
-                "category": d.get("category"),
-                "confidence": d.get("confidence"),
-                "bbox": d.get("bbox"),
-                "shown_at": d["shown_at"],
-                "decision": d["decision"],
-                "edited_to_label": d.get("edited_to_label"),
+                **d,
             }
             for d in decisions
         ],
