@@ -76,7 +76,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B", "SIM", "RUF"]
-"app/services/vision.py" = ["E501"]  # long prompt strings
 
 [tool.ruff.format]
 quote-style = "double"
