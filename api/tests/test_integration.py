@@ -810,24 +810,30 @@ def test_item_upc_lookups_metadata_view_projects_non_sensitive_columns(client, d
     assert resp.status_code == 200
 
     base_count = db.execute(text("SELECT COUNT(*) FROM item_upc_lookups")).scalar_one()
-    view_count = db.execute(
-        text("SELECT COUNT(*) FROM item_upc_lookups_metadata")
-    ).scalar_one()
+    view_count = db.execute(text("SELECT COUNT(*) FROM item_upc_lookups_metadata")).scalar_one()
     assert base_count == view_count
     assert base_count >= 1
 
-    base_rows = db.execute(
-        text(
-            "SELECT id, item_id, upc, source, elapsed_ms, created_at "
-            "FROM item_upc_lookups ORDER BY id"
+    base_rows = (
+        db.execute(
+            text(
+                "SELECT id, item_id, upc, source, elapsed_ms, created_at "
+                "FROM item_upc_lookups ORDER BY id"
+            )
         )
-    ).mappings().all()
-    view_rows = db.execute(
-        text(
-            "SELECT id, item_id, upc, source, elapsed_ms, created_at "
-            "FROM item_upc_lookups_metadata ORDER BY id"
+        .mappings()
+        .all()
+    )
+    view_rows = (
+        db.execute(
+            text(
+                "SELECT id, item_id, upc, source, elapsed_ms, created_at "
+                "FROM item_upc_lookups_metadata ORDER BY id"
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     assert [dict(r) for r in base_rows] == [dict(r) for r in view_rows]
 
     # The view must not expose raw_response at all.
