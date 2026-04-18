@@ -107,3 +107,19 @@ def test_suggest_response_prompt_version_reflects_db_not_constant_on_cache_hit(
     assert cached["cached"] is True
     assert cached["prompt_version"] == historical_version
     assert cached["prompt_version"] != PROMPT_VERSION
+
+
+def test_suggest_response_echoes_prompt_version_when_vision_returns_no_hits(
+    client, monkeypatch, valid_jpeg_bytes
+):
+    # ApiDev2_001 (Gap #3 closeout): the echo is the SERVER's current prompt,
+    # not "what the VLM said". When the VLM produces zero detections nothing
+    # gets persisted, but iOS still needs the live PROMPT_VERSION to round-trip
+    # on /outcomes instead of sending the null-hack from Swift2_014 Phase 2a.
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-PV-0005")
+    monkeypatch.setattr("app.routes.photos.describe_photo", _fake_describe([]))
+
+    body = client.get(f"/photos/{photo_id}/suggest").json()
+    assert body["cached"] is False
+    assert body["suggestions"] == []
+    assert body["prompt_version"] == PROMPT_VERSION

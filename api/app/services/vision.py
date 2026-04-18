@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 # by the /suggest path so "did prompt v2 beat v1?" is answerable from data.
 # Explicit > hashing: keeps the provenance readable in the DB.
 # Public (no leading underscore) because it's imported by app.routes.photos.
+#
+# ApiDev2_001 (Gap #3 closeout): this constant is the SINGLE SOURCE OF TRUTH
+# for the server's current VLM prompt revision. The /suggest response echoes
+# it at the response root (fresh path) and iOS round-trips it on /outcomes
+# so rejection analytics are attributed to the exact prompt that produced
+# the suggestion. Do not introduce a second version identifier elsewhere;
+# bump this when _PROMPT changes materially.
 PROMPT_VERSION = "v2"
 
 # Dev2_015 iter 2: prior iter 1 prompt was not followed by Fireworks — logs
