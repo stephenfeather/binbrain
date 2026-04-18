@@ -491,7 +491,9 @@ class SuggestionOutcome(BaseModel):
     Dev2_017 (Phase 2 data capture). ``bbox`` is optional — some presented
     suggestions legitimately have no bbox (e.g. whole-image fallbacks); when
     present it MUST have exactly 4 elements. ``edited_to_label`` is required
-    iff ``decision == 'edited'``.
+    iff ``decision == 'edited'``. ``shown_at`` MUST be tz-aware — naive
+    datetimes would be interpreted in the Postgres server timezone for the
+    ``timestamptz`` column and skew analytics.
     """
 
     label: str
@@ -507,6 +509,15 @@ class SuggestionOutcome(BaseModel):
         # PydanticCustomError serializes cleanly in RequestValidationError.errors();
         # a raw ValueError embeds the exception instance in ctx and breaks
         # the app's JSON error handler.
+        self.label = self.label.strip() if self.label else ""
+        if not self.label:
+            raise PydanticCustomError("label_empty", "label must be non-empty")
+        if self.category is not None:
+            trimmed = self.category.strip()
+            self.category = trimmed or None
+        if self.edited_to_label is not None:
+            trimmed = self.edited_to_label.strip()
+            self.edited_to_label = trimmed or None
         if self.bbox is not None and len(self.bbox) != 4:
             raise PydanticCustomError(
                 "bbox_length",
@@ -515,7 +526,12 @@ class SuggestionOutcome(BaseModel):
         if self.decision == "edited" and not self.edited_to_label:
             raise PydanticCustomError(
                 "edited_requires_label",
-                "edited_to_label is required when decision is 'edited'",
+                "edited_to_label is required and non-empty when decision is 'edited'",
+            )
+        if self.shown_at.tzinfo is None or self.shown_at.tzinfo.utcoffset(self.shown_at) is None:
+            raise PydanticCustomError(
+                "shown_at_naive",
+                "shown_at must be timezone-aware (e.g. ISO-8601 with 'Z' or offset)",
             )
         return self
 
@@ -544,11 +560,7 @@ def post_photo_suggestion_outcomes(
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
-    decisions = [d.model_dump(mode="python") for d in body.decisions]
-    for d in decisions:
-        # Pydantic parsed shown_at to a tz-aware datetime; psycopg adapts it.
-        if isinstance(d.get("shown_at"), datetime):
-            pass
+    decisions = [d.model_dump() for d in body.decisions]
     try:
         repository.replace_photo_suggestion_outcomes(
             db,
