@@ -623,6 +623,132 @@ def test_upc_lookup_second_call_is_local(client, monkeypatch):
     assert len(calls) == 1  # still 1 — external not called again
 
 
+# ApiDev2_002 (Gap #7): /upc/{upc} writes an append-only provenance row to
+# item_upc_lookups on every return path (local hit, external hit, unknown
+# fallback). The insert is best-effort — a provenance write failure must
+# not break the 200 response contract.
+def test_upc_lookup_records_provenance_on_local_hit(client, db):
+    client.post("/items", json={"name": "Prov Local", "category": "test", "upc": "770000000001"})
+    resp = client.get("/upc/770000000001")
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "local"
+    row = (
+        db.execute(
+            text(
+                "SELECT upc, item_id, source, raw_response, elapsed_ms "
+                "FROM item_upc_lookups "
+                "WHERE upc = :upc "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"upc": "770000000001"},
+        )
+        .mappings()
+        .first()
+    )
+    assert row is not None
+    assert row["source"] == "local"
+    assert row["item_id"] == resp.json()["item_id"]
+    assert row["raw_response"] is None
+    assert row["elapsed_ms"] is None
+
+
+def test_upc_lookup_records_provenance_on_external_success(client, db, monkeypatch):
+    import app.services.upc_lookup as upc_mod
+    from app.services.upc_lookup import UPCResult
+
+    raw_body = {
+        "code": "OK",
+        "total": 1,
+        "items": [{"title": "External Prov", "category": "Tools", "brand": "Acme"}],
+    }
+
+    def fake_lookup(upc):
+        return UPCResult(
+            name="External Prov",
+            category="Tools",
+            brand="Acme",
+            source="upcitemdb",
+            raw_response=raw_body,
+            elapsed_ms=123,
+        )
+
+    monkeypatch.setattr(upc_mod, "_lookup_upcitemdb", fake_lookup)
+
+    resp = client.get("/upc/770000000002")
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "upcitemdb"
+    row = (
+        db.execute(
+            text(
+                "SELECT upc, item_id, source, raw_response, elapsed_ms "
+                "FROM item_upc_lookups "
+                "WHERE upc = :upc "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"upc": "770000000002"},
+        )
+        .mappings()
+        .first()
+    )
+    assert row is not None
+    assert row["source"] == "upcitemdb"
+    assert row["item_id"] == resp.json()["item_id"]
+    assert row["item_id"] is not None
+    # psycopg returns jsonb as a parsed Python object already — compare dicts.
+    assert row["raw_response"] == raw_body
+    assert row["elapsed_ms"] == 123
+
+
+def test_upc_lookup_records_provenance_on_unknown(client, db, monkeypatch):
+    import app.services.upc_lookup as upc_mod
+
+    monkeypatch.setattr(upc_mod, "_lookup_upcitemdb", lambda upc: None)
+    monkeypatch.setattr(upc_mod, "_lookup_goupc", lambda upc: None)
+
+    resp = client.get("/upc/770000000003")
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "unknown"
+    assert resp.json()["item_id"] is None
+    row = (
+        db.execute(
+            text(
+                "SELECT upc, item_id, source, raw_response, elapsed_ms "
+                "FROM item_upc_lookups "
+                "WHERE upc = :upc "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"upc": "770000000003"},
+        )
+        .mappings()
+        .first()
+    )
+    assert row is not None
+    assert row["source"] == "unknown"
+    assert row["item_id"] is None
+    assert row["raw_response"] is None
+
+
+def test_upc_lookup_provenance_insert_failure_does_not_break_route(client, monkeypatch):
+    # Provenance is telemetry — a DB failure there must not break the
+    # /upc response. Patch the helper on the route module (it's re-exported
+    # via `repository` there) so the raising helper is the one invoked.
+    import app.db.repository as repo_mod
+
+    def boom(*a, **kw):
+        raise RuntimeError("simulated provenance failure")
+
+    monkeypatch.setattr(repo_mod, "insert_upc_lookup", boom)
+
+    # Seed a local-hit path so the route doesn't need the external call.
+    client.post("/items", json={"name": "Prov Boom", "category": "test", "upc": "770000000004"})
+    resp = client.get("/upc/770000000004")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "local"
+    assert body["upc"] == "770000000004"
+    assert body["item_id"] is not None
+
+
 def test_add_to_bin_with_upc(client, db):
     bin_id = "BIN-UPC-ADD-001"
     resp = client.post(

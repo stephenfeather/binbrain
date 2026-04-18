@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("binbrain")
 
 
 def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
@@ -41,6 +44,68 @@ def find_item_by_upc(db: Session, upc: str) -> dict | None:
         .first()
     )
     return dict(row) if row else None
+
+
+def insert_upc_lookup(
+    db: Session,
+    *,
+    upc: str,
+    item_id: Optional[int],
+    source: str,
+    raw_response: Optional[dict],
+    elapsed_ms: Optional[int],
+) -> int:
+    """Append one ``item_upc_lookups`` provenance row and return its id.
+
+    ApiDev2_002 (Gap #7). Every ``/upc/{upc}`` invocation writes exactly one
+    row covering one of four outcomes — ``local`` cache hit, ``upcitemdb``
+    external hit, ``go-upc`` external hit, or ``unknown`` fallback. The table
+    is append-only: callers never UPDATE or DELETE rows so the full audit
+    trail is preserved across re-lookups.
+
+    ``raw_response`` is serialized with ``json.dumps`` and CAST to ``jsonb``
+    to match the existing patterns in ``insert_photo`` and
+    ``insert_vision_call``. If serialization fails (non-JSON-serializable
+    values reaching this layer from a misbehaving upstream), the helper
+    drops the raw body to NULL rather than raising — provenance is
+    best-effort telemetry and must never break the route. DB errors are
+    NOT swallowed: a failing INSERT surfaces so the caller's try/except
+    can decide whether to log-and-continue.
+
+    Does NOT commit. Caller controls transaction boundaries so this write
+    can participate in the same transaction as the item insert or, more
+    commonly, run in its own isolated transaction after the item commit
+    has succeeded.
+    """
+    try:
+        raw_json: str | None = json.dumps(raw_response) if raw_response is not None else None
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "event=upc_lookup_raw_response_unserializable upc=%s source=%s err=%s",
+            upc,
+            source,
+            exc,
+        )
+        raw_json = None
+    res = db.execute(
+        text(
+            """
+            INSERT INTO item_upc_lookups
+              (upc, item_id, source, raw_response, elapsed_ms)
+            VALUES
+              (:upc, :item_id, :source, CAST(:raw_response AS jsonb), :elapsed_ms)
+            RETURNING id
+            """
+        ),
+        {
+            "upc": upc,
+            "item_id": item_id,
+            "source": source,
+            "raw_response": raw_json,
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+    return int(res.scalar_one())
 
 
 def insert_item(

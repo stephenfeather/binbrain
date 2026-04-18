@@ -37,6 +37,7 @@ _TRUNCATE_BETWEEN_TESTS_SQL = (
     "TRUNCATE search_queries, photo_suggestion_matches, vision_calls, "
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
+    "item_upc_lookups, "
     "item_embeddings, bin_items, photos, items, bins, "
     "locations RESTART IDENTITY CASCADE"
 )
@@ -48,6 +49,7 @@ _TRUNCATE_ALL_SQL = (
     "TRUNCATE search_queries, photo_suggestion_matches, vision_calls, "
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
+    "item_upc_lookups, "
     "item_embeddings, bin_items, photos, items, bins, "
     "locations, settings, confirmed_classes, api_keys RESTART IDENTITY CASCADE"
 )
@@ -57,6 +59,7 @@ def _init_schema(engine) -> None:
     ddl = """
     CREATE EXTENSION IF NOT EXISTS vector;
 
+    DROP TABLE IF EXISTS item_upc_lookups CASCADE;
     DROP TABLE IF EXISTS search_queries CASCADE;
     DROP TABLE IF EXISTS photo_suggestion_matches CASCADE;
     DROP TABLE IF EXISTS vision_calls CASCADE;
@@ -268,6 +271,24 @@ def _init_schema(engine) -> None:
         ON search_queries (created_at);
     CREATE INDEX search_queries_result_created_idx
         ON search_queries (result_count, created_at DESC);
+
+    CREATE TABLE item_upc_lookups (
+      id            bigserial PRIMARY KEY,
+      upc           text NOT NULL,
+      item_id       bigint REFERENCES items(item_id) ON DELETE SET NULL,
+      source        text NOT NULL
+                    CHECK (source IN ('local', 'upcitemdb', 'go-upc', 'unknown')),
+      raw_response  jsonb,
+      elapsed_ms    integer,
+      created_at    timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX item_upc_lookups_upc_idx
+        ON item_upc_lookups (upc, created_at DESC);
+    CREATE INDEX item_upc_lookups_item_id_idx
+        ON item_upc_lookups (item_id)
+        WHERE item_id IS NOT NULL;
+    CREATE INDEX item_upc_lookups_source_created_idx
+        ON item_upc_lookups (source, created_at DESC);
 
     DROP TABLE IF EXISTS api_keys CASCADE;
     CREATE TABLE api_keys (
