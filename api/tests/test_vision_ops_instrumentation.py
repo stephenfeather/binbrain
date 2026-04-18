@@ -170,9 +170,18 @@ def test_suggest_writes_vision_call_on_cache_hit(
 
 
 def test_suggest_writes_vision_call_on_vlm_error(
-    client, db, monkeypatch, valid_jpeg_bytes
+    app_module, test_api_key, db, monkeypatch, valid_jpeg_bytes
 ):
-    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-VC-0003")
+    # TestClient re-raises server exceptions by default; use a dedicated
+    # non-raising client so we observe the 500 response path that real ASGI
+    # middleware produces in production — and so the finally-block telemetry
+    # write completes without the test runner intercepting.
+    from fastapi.testclient import TestClient
+
+    c = TestClient(app_module.app, raise_server_exceptions=False)
+    c.headers["X-API-Key"] = test_api_key
+
+    photo_id = _seed_photo(c, valid_jpeg_bytes, "BIN-VC-0003")
 
     class BoomError(RuntimeError):
         pass
@@ -182,14 +191,14 @@ def test_suggest_writes_vision_call_on_vlm_error(
 
     monkeypatch.setattr("app.routes.photos.describe_photo", fn)
 
-    r = client.get(f"/photos/{photo_id}/suggest")
+    r = c.get(f"/photos/{photo_id}/suggest")
     assert r.status_code >= 500  # existing behavior: exception propagates
 
     rows = _vision_call_rows(db, photo_id)
     assert len(rows) == 1
     row = rows[0]
     assert row["outcome"] == "error"
-    assert row["error_code"] is not None and row["error_code"] != ""
+    assert row["error_code"] == "BoomError"
     assert row["cached"] is False
 
 
