@@ -1,8 +1,10 @@
+import os
 from typing import Optional
 
 from app.db import repository
 from app.deps import (
     EMBED_MODEL_NAME,
+    SessionLocal,
     canonical_item_text,
     embed_text,
     fingerprint_for,
@@ -154,21 +156,57 @@ def search(
 
     qvec_str = vec_to_pgvector(qvec)
 
-    rows = repository.search_items(db, qvec_str, limit, offset, min_score)
+    # Dev2_019: apply the server-side default floor when the client omits
+    # ``min_score``. Read env per-invocation so tests can monkeypatch and so
+    # ops can change the default without restarting the API. Explicit client
+    # values (including 0.0) still win over the default.
+    if min_score is None:
+        effective_min_score = float(os.environ.get("SEARCH_DEFAULT_MIN_SCORE", "0.35"))
+    else:
+        effective_min_score = min_score
 
+    rows = repository.search_items(db, qvec_str, limit, offset, effective_min_score)
+
+    request_id = db.info.get("request_id")
     logger.info(
         "event=search request_id=%s limit=%s offset=%s min_score=%s results=%s",
-        db.info.get("request_id"),
+        request_id,
         limit,
         offset,
-        min_score,
+        effective_min_score,
         len(rows),
     )
+
+    # Dev2_019: telemetry write is best-effort. A failure here must never
+    # regress the /search response contract. Uses a fresh session so a
+    # rolled-back main session (future exception paths) would still persist
+    # the row.
+    try:
+        db_tel = SessionLocal()
+        try:
+            repository.insert_search_query(
+                db_tel,
+                request_id=request_id,
+                q=q,
+                qvec_dims=len(qvec),
+                min_score_effective=effective_min_score,
+                result_count=len(rows),
+            )
+            db_tel.commit()
+        finally:
+            db_tel.close()
+    except Exception as tel_exc:
+        logger.warning(
+            "event=search_telemetry_write_failed request_id=%s err=%s",
+            request_id,
+            tel_exc,
+        )
+
     return {
         "version": "1",
         "q": q,
         "limit": limit,
         "offset": offset,
-        "min_score": min_score,
+        "min_score": effective_min_score,
         "results": rows,
     }
