@@ -95,6 +95,7 @@ def _normalize_bboxes(
     suggestions: list[dict],
     image_dims: tuple[int, int] | None,
     photo_id: int | None,
+    flags_out: dict | None = None,
 ) -> None:
     """Convert pixel-space bboxes to normalized 0-1 floats in place.
 
@@ -130,6 +131,8 @@ def _normalize_bboxes(
         nx2 = min(1.0, max(0.0, x2 / width))
         ny2 = min(1.0, max(0.0, y2 / height))
         s["bbox"] = [nx1, ny1, nx2, ny2]
+        if flags_out is not None:
+            flags_out["bbox_normalized"] = True
 
         logger.info(
             "event=vision.bbox.normalized photo_id=%s name=%s from_pixel=%s "
@@ -146,14 +149,21 @@ def _normalize_bboxes(
         )
 
 
-def _log_suspicious_bboxes(suggestions: list[dict], photo_id: int | None) -> None:
+def _log_suspicious_bboxes(
+    suggestions: list[dict],
+    photo_id: int | None,
+    flags_out: dict | None = None,
+) -> None:
     """Emit a WARN line for each suggestion whose (normalized) bbox covers
     ≥70% of the image. Expects bboxes to already be in [0, 1] — call
     :func:`_normalize_bboxes` first.
 
     Does NOT mutate the list — the row is kept so downstream clients see
     exactly what the model returned, but the telemetry is loud enough that
-    prompt-regression pagers fire before any user complaint does.
+    prompt-regression pagers fire before any user complaint does. When
+    ``flags_out`` is supplied, ``flags_out["whole_image_bbox_warn"] = True``
+    is set whenever at least one suspicious bbox fires — making the signal
+    queryable via ``vision_calls.flags`` instead of log grep.
     """
     for s in suggestions:
         bbox = s.get("bbox")
@@ -165,6 +175,8 @@ def _log_suspicious_bboxes(suggestions: list[dict], photo_id: int | None) -> Non
             continue
         coverage = max(0.0, (x2 - x1)) * max(0.0, (y2 - y1))
         if coverage >= _WHOLE_IMAGE_BBOX_COVERAGE_THRESHOLD:
+            if flags_out is not None:
+                flags_out["whole_image_bbox_warn"] = True
             logger.warning(
                 "event=vision.suggest.whole_image_bbox photo_id=%s name=%s coverage=%.3f bbox=%s",
                 photo_id,
@@ -256,6 +268,7 @@ def describe_photo(
     model: str,
     max_px: int = 1280,
     photo_id: int | None = None,
+    flags_out: dict | None = None,
 ) -> tuple[list[dict], int]:
     """Use a vision-language model to identify items in a photo.
 
@@ -265,6 +278,12 @@ def describe_photo(
 
     Returns (suggestions, elapsed_ms). On any failure returns ([], elapsed_ms).
     Image is downscaled to max_px on the longest side before sending.
+
+    Optional ``flags_out`` is a mutable dict bag into which anomaly markers
+    are recorded for downstream ops-instrumentation (Dev2_018). Known keys
+    written here: ``bbox_normalized`` (pixel-space bbox was rescaled to 0-1)
+    and ``whole_image_bbox_warn`` (at least one suggestion covered ≥70% of
+    the image). The route layer mirrors this dict into ``vision_calls.flags``.
     """
     try:
         image_bytes, image_dims = _load_and_resize(photo_path, max_px)
@@ -330,6 +349,6 @@ def describe_photo(
     # Dev2_015 iter 2: normalize pixel coords BEFORE the whole-image check.
     # Fireworks ignores the prompt's 0-1 instruction and emits raw pixels;
     # iOS clamps to [0,1] so pixel values render as invisible overlays.
-    _normalize_bboxes(suggestions, image_dims, photo_id)
-    _log_suspicious_bboxes(suggestions, photo_id)
+    _normalize_bboxes(suggestions, image_dims, photo_id, flags_out=flags_out)
+    _log_suspicious_bboxes(suggestions, photo_id, flags_out=flags_out)
     return suggestions, elapsed_ms
