@@ -124,7 +124,7 @@ def render_pdf(
         if usable_w <= 2 * qr_pad or usable_h <= 2 * qr_pad:
             raise ValueError(
                 f"single-per-page usable area after margins "
-                f"({usable_w / inch:.3f}in \u00d7 {usable_h / inch:.3f}in) "
+                f"({usable_w / inch:.3f}in x {usable_h / inch:.3f}in) "
                 f"is too small for qr-padding ({qr_padding_in}in each side); "
                 f"need at least {qr_padding_in * 2}in in each dimension"
             )
