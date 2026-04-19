@@ -1437,3 +1437,145 @@ def update_bin_location(db: Session, bin_id: str, location_id: Optional[int]) ->
         {"bin_id": bin_id, "location_id": location_id},
     )
     return res.scalar() is not None
+
+
+# ---------------------------------------------------------------------------
+# Sessions (ApiDev_008 — Q-session-id explicit boundary)
+#
+# Server-assigned session lifecycle. All rows are scoped to a single
+# api_key_id; cross-owner lookups must return None so the route layer can
+# map to 404 without leaking existence (enumeration-safe).
+# ---------------------------------------------------------------------------
+
+
+def _session_row_to_dict(row) -> dict:
+    return {
+        "session_id": str(row.session_id),
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+        "label": row.label,
+        "photo_count": int(row.photo_count),
+    }
+
+
+def count_open_sessions(db: Session, api_key_id: int) -> int:
+    return int(
+        db.execute(
+            text(
+                "SELECT COUNT(*) FROM sessions "
+                "WHERE api_key_id = :k AND ended_at IS NULL"
+            ),
+            {"k": api_key_id},
+        ).scalar_one()
+    )
+
+
+def create_session(db: Session, api_key_id: int, label: str | None) -> dict:
+    row = db.execute(
+        text(
+            "INSERT INTO sessions (api_key_id, label) "
+            "VALUES (:k, :label) "
+            "RETURNING session_id, started_at, ended_at, label, photo_count"
+        ),
+        {"k": api_key_id, "label": label},
+    ).one()
+    return _session_row_to_dict(row)
+
+
+def find_session(db: Session, session_id: str, api_key_id: int) -> dict | None:
+    """Ownership-scoped lookup. Returns None if not found OR not caller's."""
+    row = db.execute(
+        text(
+            "SELECT session_id, started_at, ended_at, label, photo_count "
+            "FROM sessions "
+            "WHERE session_id = CAST(:s AS uuid) AND api_key_id = :k"
+        ),
+        {"s": session_id, "k": api_key_id},
+    ).one_or_none()
+    return _session_row_to_dict(row) if row is not None else None
+
+
+def end_session(db: Session, session_id: str, api_key_id: int) -> dict | str | None:
+    """Close a session.
+
+    Returns:
+        dict                 on success (row with ended_at populated)
+        "already_closed"     if the row exists but ended_at is non-null
+        None                 if the row does not exist OR is not caller's
+    """
+    existing = db.execute(
+        text(
+            "SELECT ended_at FROM sessions "
+            "WHERE session_id = CAST(:s AS uuid) AND api_key_id = :k"
+        ),
+        {"s": session_id, "k": api_key_id},
+    ).one_or_none()
+    if existing is None:
+        return None
+    if existing.ended_at is not None:
+        return "already_closed"
+
+    row = db.execute(
+        text(
+            "UPDATE sessions SET ended_at = now() "
+            "WHERE session_id = CAST(:s AS uuid) AND api_key_id = :k "
+            "RETURNING session_id, started_at, ended_at, label, photo_count"
+        ),
+        {"s": session_id, "k": api_key_id},
+    ).one()
+    return _session_row_to_dict(row)
+
+
+def list_sessions(
+    db: Session,
+    api_key_id: int,
+    state: str,
+    limit: int,
+    offset: int,
+) -> list[dict]:
+    filter_sql = ""
+    if state == "open":
+        filter_sql = " AND ended_at IS NULL"
+    elif state == "closed":
+        filter_sql = " AND ended_at IS NOT NULL"
+    # state == "all" falls through with no extra filter.
+
+    rows = db.execute(
+        text(
+            "SELECT session_id, started_at, ended_at, label, photo_count "
+            "FROM sessions "
+            "WHERE api_key_id = :k"
+            + filter_sql
+            + " ORDER BY started_at DESC "
+            "LIMIT :limit OFFSET :offset"
+        ),
+        {"k": api_key_id, "limit": limit, "offset": offset},
+    ).all()
+    return [_session_row_to_dict(r) for r in rows]
+
+
+def validate_session_for_ingest(
+    db: Session, session_id: str, api_key_id: int
+) -> bool:
+    """True iff the session exists, belongs to caller, and is open.
+
+    Returns False (rather than raising) on malformed UUID strings so the route
+    layer can map every failure mode to the same `invalid_session` error code
+    without leaking a distinction between "not yours", "not found", "closed",
+    or "not a UUID".
+    """
+    try:
+        row = db.execute(
+            text(
+                "SELECT 1 FROM sessions "
+                "WHERE session_id = CAST(:s AS uuid) "
+                "AND api_key_id = :k "
+                "AND ended_at IS NULL"
+            ),
+            {"s": session_id, "k": api_key_id},
+        ).scalar()
+    except Exception:
+        # Malformed UUID trips DataError from Postgres; collapse to False.
+        db.rollback()
+        return False
+    return bool(row)

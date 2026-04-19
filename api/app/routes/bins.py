@@ -23,7 +23,7 @@ from app.security import validate_bin_id
 from app.services.image_validation import validate_image_file
 from app.services.metadata_schema import validate_device_metadata
 from app.services.upc_lookup import validate_upc
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
@@ -168,6 +168,7 @@ def _validate_and_place(tmp: Path, final: Path) -> None:
 
 @router.post("/ingest")
 async def ingest(
+    request: Request,
     bin_id: str = Form(...),
     photos: list[UploadFile] = File(...),
     device_metadata: Optional[str] = Form(None),
@@ -208,6 +209,23 @@ async def ingest(
             raise HTTPException(
                 status_code=400,
                 detail="session_id must be printable ASCII",
+            )
+
+        # ApiDev_008: validate that the session exists, is owned by this api
+        # key, and is still open. Every failure mode collapses to the same
+        # `invalid_session` error code so callers cannot enumerate sessions.
+        api_key_id = getattr(request.state, "api_key_id", None)
+        if api_key_id is None or not repository.validate_session_for_ingest(
+            db, session_id, int(api_key_id)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_session",
+                    "message": (
+                        "Session not found, not yours, or already closed"
+                    ),
+                },
             )
     else:
         session_id = None
