@@ -374,9 +374,13 @@ def _init_schema(engine) -> None:
         IF TG_OP = 'INSERT' AND NEW.session_id IS NOT NULL AND NEW.session_id <> '' THEN
             BEGIN
                 sid := NEW.session_id::uuid;
+                -- ApiDev_008b (F-5): skip bump if the session was closed
+                -- between /ingest's validate and the photo insert. Photo
+                -- row still lands; only the count is race-safe.
                 UPDATE sessions
                 SET photo_count = photo_count + 1
-                WHERE session_id = sid;
+                WHERE session_id = sid
+                  AND ended_at IS NULL;
             EXCEPTION WHEN invalid_text_representation THEN
                 NULL;
             END;

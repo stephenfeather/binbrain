@@ -1479,6 +1479,51 @@ def create_session(db: Session, api_key_id: int, label: str | None) -> dict:
     return _session_row_to_dict(row)
 
 
+def create_session_if_under_cap(
+    db: Session, api_key_id: int, label: str | None, cap: int
+) -> dict | None:
+    """Atomic open-session cap enforcement (ApiDev_008b F-1 / SEC-35-1).
+
+    Collapses the prior ``count_open_sessions`` + ``create_session`` pair into
+    a single transactional block so two concurrent ``POST /sessions`` from
+    the same api_key cannot both pass the pre-check and both land rows.
+
+    Returns None if the cap is already at or above ``cap``; the caller
+    raises 429.
+
+    Serialization: under READ COMMITTED, a plain guarded
+    ``INSERT ... SELECT WHERE (SELECT COUNT(*)) < cap`` still leaks under
+    concurrent bursts because both statements see the same pre-commit
+    snapshot (empirically, 30 concurrent POSTs landed 22 rows). To make
+    the cap strict we take a transaction-scoped advisory lock keyed on
+    a stable hash of ``('session_create', api_key_id)``. Other txns
+    holding the same lock block until this txn commits, which serializes
+    the count+insert pair per api_key. The lock is released automatically
+    at commit/rollback. Cross-api-key POSTs are NOT serialized (different
+    lock keys) so throughput is preserved.
+    """
+    # A single bigint key is required; combine a namespace constant with
+    # the api_key_id to avoid collisions with any other advisory locks
+    # future code might take.
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext('session_create'), :k)"),
+        {"k": api_key_id},
+    )
+    row = db.execute(
+        text(
+            "INSERT INTO sessions (api_key_id, label) "
+            "SELECT :k, :label "
+            "WHERE ( "
+            "    SELECT COUNT(*) FROM sessions "
+            "    WHERE api_key_id = :k AND ended_at IS NULL "
+            ") < :cap "
+            "RETURNING session_id, started_at, ended_at, label, photo_count"
+        ),
+        {"k": api_key_id, "label": label, "cap": cap},
+    ).one_or_none()
+    return _session_row_to_dict(row) if row is not None else None
+
+
 def find_session(db: Session, session_id: str, api_key_id: int) -> dict | None:
     """Ownership-scoped lookup. Returns None if not found OR not caller's."""
     row = db.execute(
