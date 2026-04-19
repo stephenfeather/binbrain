@@ -1033,6 +1033,86 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+    delete:
+      summary: Soft-delete a bin and reattribute its items to UNASSIGNED
+      operationId: deleteBin
+      tags: [Bins]
+      description: |
+        Soft-deletes the bin (stamps `deleted_at = now()`) and moves
+        every `bin_items` row from this bin into the reserved
+        `UNASSIGNED` bin in the same transaction. Items themselves are
+        not deleted from the catalogue — only their parent bin is
+        archived. The reattribution is atomic: a row whose `item_id` is
+        already present in `UNASSIGNED` is dropped from the source bin
+        rather than merged (no quantity arithmetic).
+
+        The reserved `UNASSIGNED` bin cannot itself be deleted; the
+        request is rejected with `400 cannot_delete_sentinel` before
+        the protective DB trigger fires.
+
+        Idempotency: a follow-up DELETE on the same `bin_id` returns
+        `404` because the bin is no longer active.
+      parameters:
+        - { $ref: "#/components/parameters/BinIdPath" }
+      responses:
+        "200":
+          description: Bin soft-deleted; items reattributed to `UNASSIGNED`.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, bin_id, moved_item_count, deleted_at]
+                properties:
+                  status:
+                    type: string
+                    enum: ["deleted"]
+                  bin_id:
+                    type: string
+                  moved_item_count:
+                    type: integer
+                    minimum: 0
+                    description: |
+                      Number of `bin_items` rows the soft-delete consumed
+                      from the source bin (sum of moved + dropped-via-conflict).
+                  deleted_at:
+                    type: string
+                    format: date-time
+                additionalProperties: false
+              example:
+                status: "deleted"
+                bin_id: "B-42"
+                moved_item_count: 3
+                deleted_at: "2026-04-18T22:30:00Z"
+        "400":
+          description: |
+            Either the path `bin_id` is empty, or the request targets the
+            reserved `UNASSIGNED` sentinel. The sentinel-rejection case
+            uses `error.code = "cannot_delete_sentinel"`.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              examples:
+                sentinelRejected:
+                  summary: Cannot delete the reserved UNASSIGNED bin
+                  value:
+                    version: "1"
+                    error:
+                      code: "cannot_delete_sentinel"
+                      message: "The UNASSIGNED bin cannot be deleted."
+                      request_id: "req-abc-123"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Bin not found, or already soft-deleted.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   /bins/{bin_id}/add:
     post:
       summary: Add an item and/or photos to a bin in one request

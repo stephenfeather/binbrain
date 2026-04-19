@@ -331,6 +331,35 @@ def bin_exists(db: Session, bin_id: str) -> bool:
     )
 
 
+def soft_delete_bin(db: Session, bin_id: str) -> datetime | None:
+    """Soft-delete an active bin by stamping ``deleted_at = now()``.
+
+    FEAT-4-route helper. Returns the new ``deleted_at`` timestamp on
+    success, or ``None`` when the bin doesn't exist or is already
+    soft-deleted (the WHERE clause is the row-level guard, so concurrent
+    deletes resolve to one winner and one None). The
+    ``protect_unassigned_bin`` trigger blocks soft-delete on the sentinel
+    even if a caller bypasses route-level validation, so that case
+    surfaces as ``IntegrityError`` from the underlying execute.
+
+    Does NOT commit — caller controls transaction boundaries so this can
+    participate in the same transaction as ``reattribute_bin_items_to_unassigned``.
+    """
+    row = db.execute(
+        text(
+            """
+            UPDATE bins
+            SET deleted_at = now()
+            WHERE bin_id = :bin_id
+              AND deleted_at IS NULL
+            RETURNING deleted_at
+            """
+        ),
+        {"bin_id": bin_id},
+    ).first()
+    return row[0] if row else None
+
+
 def fetch_bin_items(db: Session, bin_id: str) -> list[dict]:
     rows = (
         db.execute(
