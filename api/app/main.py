@@ -286,7 +286,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     # itself never crashes and masks a 400 as a 500.
     details = jsonable_encoder(
         exc.errors(),
-        custom_encoder={bytes: lambda b: b[:256].decode("utf-8", "replace")},
+        custom_encoder={bytes: lambda b: b[:256].decode("utf-8", "backslashreplace")},
     )
     return JSONResponse(
         status_code=400,

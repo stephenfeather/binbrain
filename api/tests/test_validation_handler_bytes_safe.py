@@ -65,7 +65,10 @@ def test_validation_handler_keeps_error_payload_serializable(client: TestClient,
             "X-API-Key": test_api_key,
         },
     )
-    # Must be 400 or 415, never 500. Key invariant: no handler crash.
-    assert resp.status_code != 500, f"Handler crashed on bytes input: {resp.text}"
+    # Must be 400 (validation) or 415 (unsupported media type), never 500.
+    assert resp.status_code in (
+        400,
+        415,
+    ), f"Handler should return 400/415 for bytes input, got {resp.status_code}: {resp.text}"
     payload = resp.json()
     assert payload["error"]["code"] != "internal_error"
