@@ -592,3 +592,52 @@ def test_replace_outcomes_repository_accepts_client_retry_count(client, db, vali
         {"pid": photo_id},
     ).scalar()
     assert val is None
+
+
+# ---------------------------------------------------------------------------
+# ApiDev_010 — decision='ignored' accepted E2E (Swift2b-beta three-state toggle)
+# ---------------------------------------------------------------------------
+
+
+def test_post_outcomes_accepts_decision_ignored(client, db, valid_jpeg_bytes):
+    """ApiDev_010 (2b-β cleanup). iOS Swift2_020 emits `'ignored'` as a
+    real per-item decision on the three-state toggle. Guard against silent
+    regressions: confirm route + DB + CHECK constraint accept the value
+    and persist it faithfully. Pure E2E smoke; no production code changes.
+    """
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-IGNORED-0001")
+
+    payload = _payload(
+        [
+            {
+                "label": "plastic spacer",
+                "category": "misc",
+                "confidence": 0.42,
+                "shown_at": "2026-04-19T10:00:00Z",
+                "decision": "ignored",
+            }
+        ]
+    )
+    r = client.post(f"/photos/{photo_id}/outcomes", json=payload)
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "version": "1",
+        "photo_id": photo_id,
+        "outcomes_recorded": 1,
+    }
+
+    row = (
+        db.execute(
+            text(
+                "SELECT label, decision, edited_to_label, confidence "
+                "FROM photo_suggestion_outcomes WHERE photo_id = :pid"
+            ),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
+    assert row["decision"] == "ignored"
+    assert row["label"] == "plastic spacer"
+    assert row["edited_to_label"] is None
+    assert row["confidence"] == 0.42
