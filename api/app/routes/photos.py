@@ -703,13 +703,21 @@ class SuggestionOutcomesRequest(BaseModel):
     decisions: list[SuggestionOutcome]
 
 
+# Postgres ``int`` (int4) upper bound. Values above this would raise
+# ``numeric_value_out_of_range`` at INSERT time and the blanket
+# exception handler would turn that into a 500. Telemetry must never
+# 5xx on input — clamp at the parser (SEC-33-1).
+_INT32_MAX = 2_147_483_647
+
+
 def _parse_client_retry_count(raw: str | None) -> int:
     """Parse the ``X-Client-Retry-Count`` header.
 
     ApiDev2_005 (Swift2b-gamma). This is telemetry, not validation — a missing
-    or malformed value MUST NOT 400. Missing → 0 (first-attempt success).
+    or malformed value MUST NOT 400/500. Missing → 0 (first-attempt success).
     Malformed → 0 (absorb client bugs rather than rejecting real outcomes).
-    Negative values clamped to 0.
+    Negative values clamped to 0. Values above ``_INT32_MAX`` clamped to
+    ``_INT32_MAX`` so the int4 column never rejects the INSERT (SEC-33-1).
     """
     if raw is None:
         return 0
@@ -717,7 +725,11 @@ def _parse_client_retry_count(raw: str | None) -> int:
         value = int(raw)
     except (TypeError, ValueError):
         return 0
-    return value if value >= 0 else 0
+    if value < 0:
+        return 0
+    if value > _INT32_MAX:
+        return _INT32_MAX
+    return value
 
 
 @router.post("/photos/{photo_id}/outcomes")

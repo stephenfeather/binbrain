@@ -484,6 +484,50 @@ def test_post_outcomes_malformed_header_defaults_to_zero(client, db, valid_jpeg_
     assert row["client_retry_count"] == 0
 
 
+def test_post_outcomes_negative_header_clamps_to_zero(client, db, valid_jpeg_bytes):
+    """SEC-33-3: negative values must clamp to 0, not persist as negative."""
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-RETRY-0005")
+    r = client.post(
+        f"/photos/{photo_id}/outcomes",
+        json=_single_decision_payload(),
+        headers={"X-Client-Retry-Count": "-5"},
+    )
+    assert r.status_code == 200, r.text
+    row = (
+        db.execute(
+            text("SELECT client_retry_count FROM photo_suggestion_outcomes WHERE photo_id = :pid"),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
+    assert row["client_retry_count"] == 0
+
+
+def test_post_outcomes_overflow_header_clamps_to_int32_max(client, db, valid_jpeg_bytes):
+    """SEC-33-1: values above int4 range must clamp at parser so the INSERT
+    never raises numeric_value_out_of_range and the blanket 500 handler
+    never fires. Telemetry must never 5xx on input.
+    """
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-RETRY-0006")
+    huge = str(2**63)  # well beyond int4 max (2_147_483_647)
+    r = client.post(
+        f"/photos/{photo_id}/outcomes",
+        json=_single_decision_payload(),
+        headers={"X-Client-Retry-Count": huge},
+    )
+    assert r.status_code == 200, r.text
+    row = (
+        db.execute(
+            text("SELECT client_retry_count FROM photo_suggestion_outcomes WHERE photo_id = :pid"),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
+    assert row["client_retry_count"] == 2_147_483_647
+
+
 def test_replace_outcomes_repository_accepts_client_retry_count(client, db, valid_jpeg_bytes):
     """Unit-style: call the repository helper directly with the new kwarg
     and confirm each row picks up the value. Legacy calls (no kwarg) keep
