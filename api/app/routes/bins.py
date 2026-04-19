@@ -104,7 +104,14 @@ def _assert_within_photo_root(path: Path) -> None:
 
 
 def _check_bin_id(raw: str) -> str:
-    """Validate bin_id; raise HTTPException(400) on failure."""
+    """Validate bin_id format; raise HTTPException(400) on failure.
+
+    Format check only — does NOT reject reserved names. Addressing paths
+    (DELETE ``/bins/{bin_id}``, PATCH item-move source/target, etc.) must
+    be able to reference the existing ``UNASSIGNED`` sentinel; rejecting
+    it here would break the reattribute-to-UNASSIGNED flow. Create-intent
+    sites layer ``_reject_reserved_bin_name`` on top.
+    """
     try:
         return validate_bin_id(raw.strip() if raw else "")
     except ValueError:
@@ -115,6 +122,34 @@ def _check_bin_id(raw: str) -> str:
                 "(no path separators, dots, or special characters)"
             ),
         ) from None
+
+
+def _reject_reserved_bin_name(bin_id: str) -> None:
+    """Raise 400 ``reserved_bin_name`` if ``bin_id`` is in the reserved registry.
+
+    ApiDev_011. Call this *after* ``_check_bin_id`` at create-intent sites
+    (POST /ingest, POST /add_to_bin, and any future explicit create/rename
+    endpoint) so users cannot create or rename bins into reserved names
+    (``UNASSIGNED``, ``Binless``; case-insensitive, whitespace-trimmed —
+    see ``repository._RESERVED_BIN_NAME_STEMS``). The echoed message uses
+    the *normalized* form so we never reflect raw attacker-supplied bytes
+    back at the client.
+
+    Do NOT call this on addressing paths (DELETE, PATCH source/target,
+    GET /bins/{id}); those legitimately need to reference the existing
+    ``UNASSIGNED`` sentinel.
+    """
+    if repository.is_reserved_bin_name(bin_id):
+        normalized = repository._normalize_bin_name(bin_id)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "reserved_bin_name",
+                "message": (
+                    f"The name '{normalized}' is reserved and cannot be " "used as a bin name."
+                ),
+            },
+        )
 
 
 async def _stream_upload(up: UploadFile, dest: Path) -> None:
@@ -176,6 +211,7 @@ async def ingest(
     db: Session = Depends(get_db),
 ):
     bin_id = _check_bin_id(bin_id)
+    _reject_reserved_bin_name(bin_id)
 
     # F-04: enforce file count before touching any file data.
     if len(photos) > MAX_FILES_PER_REQUEST:
@@ -328,6 +364,7 @@ async def add_to_bin(
     db: Session = Depends(get_db),
 ):
     bin_id = _check_bin_id(bin_id)
+    _reject_reserved_bin_name(bin_id)
 
     # F-04: enforce file count before touching any file data.
     if photos and len(photos) > MAX_FILES_PER_REQUEST:
