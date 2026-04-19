@@ -68,3 +68,7 @@
 ## 2026-02-21
 - Photo confirm endpoint + audit table: added photo_group_items.
   - Migration: `migrations/2026-02-21_add_photo_group_items.sql`
+
+## 2026-04-19
+- ApiDev_008 Q-session-id explicit boundary: new `sessions` table (uuid PK `gen_random_uuid()`, `api_key_id bigint` FK → `api_keys(id)` ON DELETE CASCADE, `started_at`, `ended_at`, `label`, denormalized `photo_count`) + two indexes (`(api_key_id, started_at DESC)`, partial `(api_key_id) WHERE ended_at IS NULL`). Adds `AFTER INSERT OR DELETE` trigger on `photos` — `sessions_update_photo_count()` — maintaining `photo_count` with `RETURN COALESCE(NEW, OLD)` so DELETE firings don't short-circuit the underlying row operation. Trigger silently ignores legacy non-UUID `photos.session_id` values via `EXCEPTION WHEN invalid_text_representation`. `photos.session_id` stays `text` (Phase 1 compat); type migration to `uuid` is deferred. Idempotent (IF NOT EXISTS, CREATE OR REPLACE, DROP TRIGGER IF EXISTS).
+  - Migration: `migrations/2026-04-19_add_sessions_table.sql`

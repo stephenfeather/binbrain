@@ -38,7 +38,7 @@ _TRUNCATE_BETWEEN_TESTS_SQL = (
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
     "item_upc_lookups, "
-    "item_embeddings, bin_items, photos, items, bins, "
+    "item_embeddings, bin_items, photos, sessions, items, bins, "
     "locations RESTART IDENTITY CASCADE"
 )
 
@@ -50,7 +50,7 @@ _TRUNCATE_ALL_SQL = (
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
     "item_upc_lookups, "
-    "item_embeddings, bin_items, photos, items, bins, "
+    "item_embeddings, bin_items, photos, sessions, items, bins, "
     "locations, settings, confirmed_classes, api_keys RESTART IDENTITY CASCADE"
 )
 
@@ -70,6 +70,7 @@ def _init_schema(engine) -> None:
     DROP TABLE IF EXISTS photo_group_items CASCADE;
     DROP TABLE IF EXISTS item_embeddings CASCADE;
     DROP TABLE IF EXISTS bin_items CASCADE;
+    DROP TABLE IF EXISTS sessions CASCADE;
     DROP TABLE IF EXISTS photos CASCADE;
     DROP TABLE IF EXISTS items CASCADE;
     DROP TABLE IF EXISTS bins CASCADE;
@@ -347,6 +348,57 @@ def _init_schema(engine) -> None:
         last_used   timestamptz
     );
     CREATE INDEX idx_api_keys_hash ON api_keys(key_hash);
+
+    -- ApiDev_008 (Q-session-id): mirror migrations/2026-04-19_add_sessions_table.sql
+    -- Must follow api_keys (FK target) and photos (trigger attaches here).
+    CREATE TABLE sessions (
+        session_id  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        api_key_id  bigint NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+        started_at  timestamptz NOT NULL DEFAULT now(),
+        ended_at    timestamptz,
+        label       text,
+        photo_count int NOT NULL DEFAULT 0
+    );
+    CREATE INDEX sessions_api_key_idx
+        ON sessions (api_key_id, started_at DESC);
+    CREATE INDEX sessions_open_idx
+        ON sessions (api_key_id) WHERE ended_at IS NULL;
+
+    CREATE OR REPLACE FUNCTION sessions_update_photo_count()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE
+        sid uuid;
+    BEGIN
+        IF TG_OP = 'INSERT' AND NEW.session_id IS NOT NULL AND NEW.session_id <> '' THEN
+            BEGIN
+                sid := NEW.session_id::uuid;
+                UPDATE sessions
+                SET photo_count = photo_count + 1
+                WHERE session_id = sid;
+            EXCEPTION WHEN invalid_text_representation THEN
+                NULL;
+            END;
+        ELSIF TG_OP = 'DELETE' AND OLD.session_id IS NOT NULL AND OLD.session_id <> '' THEN
+            BEGIN
+                sid := OLD.session_id::uuid;
+                UPDATE sessions
+                SET photo_count = GREATEST(photo_count - 1, 0)
+                WHERE session_id = sid;
+            EXCEPTION WHEN invalid_text_representation THEN
+                NULL;
+            END;
+        END IF;
+        RETURN COALESCE(NEW, OLD);
+    END;
+    $$;
+
+    DROP TRIGGER IF EXISTS photos_update_session_photo_count ON photos;
+    CREATE TRIGGER photos_update_session_photo_count
+        AFTER INSERT OR DELETE ON photos
+        FOR EACH ROW
+        EXECUTE FUNCTION sessions_update_photo_count();
 
     DROP TABLE IF EXISTS settings CASCADE;
     CREATE TABLE settings (

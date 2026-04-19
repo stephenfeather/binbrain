@@ -18,7 +18,17 @@ from app.deps import (
     logger,
     photo_root,
 )
-from app.routes import admin, bins, classes, health, items, locations, photos, upc
+from app.routes import (
+    admin,
+    bins,
+    classes,
+    health,
+    items,
+    locations,
+    photos,
+    sessions,
+    upc,
+)
 from app.services.rate_limiter import _ADMIN_MULTIPLIER, global_limiter
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -251,6 +261,11 @@ async def http_exception_handler(request: Request, exc):
         403: "forbidden",
         404: "not_found",
         409: "conflict",
+        # QA F-3 fix: give 410 its own stable code so idempotent clients
+        # (e.g. iOS SessionManager closing an already-closed session via the
+        # offline queue) don't see misleading ``internal_error`` and alert
+        # on what is, by contract, a benign no-op.
+        410: "session_closed",
         413: "payload_too_large",
         415: "unsupported_media_type",
         429: "rate_limited",
@@ -261,8 +276,17 @@ async def http_exception_handler(request: Request, exc):
     error_code = code_map.get(
         status_code, "bad_request" if status_code == 422 else "internal_error"
     )
-    message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-    details = exc.detail if status_code == 400 else None
+    # ApiDev_008: routes may supply a richer detail — a dict with an explicit
+    # ``code`` + ``message`` — so the caller sees a domain-specific code
+    # (e.g. ``invalid_session``) instead of the generic status-mapped one.
+    # Backwards-compatible: string details behave exactly as before.
+    if isinstance(exc.detail, dict) and isinstance(exc.detail.get("code"), str):
+        error_code = exc.detail["code"]
+        message = str(exc.detail.get("message", ""))
+        details = None
+    else:
+        message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        details = exc.detail if status_code == 400 else None
     return JSONResponse(
         status_code=status_code,
         content={
@@ -354,3 +378,4 @@ app.include_router(upc.router)
 app.include_router(admin.router)
 app.include_router(classes.router)
 app.include_router(locations.router)
+app.include_router(sessions.router)
