@@ -563,9 +563,10 @@ def delete_bin(
     transaction. The sentinel ``UNASSIGNED`` is preempted with a clean
     400 + custom error code so the protective trigger never fires.
     """
-    bin_id = (bin_id or "").strip()
-    if not bin_id:
-        raise HTTPException(status_code=400, detail="bin_id is required")
+    # SEC-31-1: defer to the shared validator so DELETE matches the same
+    # path-safety regex as POST/PATCH on bins (rejects path separators,
+    # dots, anything outside ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$).
+    bin_id = _check_bin_id(bin_id)
 
     if bin_id == repository.UNASSIGNED_BIN_ID:
         # Preempt the protect_unassigned_bin trigger with a stable,
