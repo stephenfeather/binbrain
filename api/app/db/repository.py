@@ -13,6 +13,30 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger("binbrain")
 
 
+# ---------------------------------------------------------------------------
+# Reserved advisory-lock namespaces (SEC-36-1)
+#
+# ``pg_advisory_xact_lock(int, int)`` and its bigint sibling are partitioned
+# by whatever key the caller picks. Collisions across unrelated call sites
+# cause silent serialization or — worse — silent under-protection. Every
+# ``pg_advisory_*`` call in this codebase MUST add its namespace string here
+# before landing. New sites should pick a unique, descriptive first argument
+# (usually via ``hashtext('<namespace>')``) and document the combined key
+# shape (first-arg + second-arg contract) on this list.
+#
+# Current namespaces:
+#   ('session_create', api_key_id)
+#     — ``create_session_if_under_cap`` — serializes concurrent
+#       ``POST /sessions`` per api_key so the 20-open-session cap
+#       cannot be breached under concurrent bursts. Scoped per-owner
+#       so cross-owner session creation is NOT serialized.
+#
+# Optional future guard: a CI grep test that walks ``*.py`` looking for
+# ``pg_advisory_`` calls and asserts every first argument appears in this
+# comment block. Not implemented today; namespace list above is authoritative.
+# ---------------------------------------------------------------------------
+
+
 # FEAT-3 sentinel bin. Items whose parent bin is soft-deleted are
 # reattributed here so they remain reachable through
 # ``GET /bins/UNASSIGNED`` instead of vanishing into the hidden bin.
@@ -1459,6 +1483,14 @@ def _session_row_to_dict(row) -> dict:
 
 
 def count_open_sessions(db: Session, api_key_id: int) -> int:
+    """Return the open-session count for ``api_key_id``.
+
+    Kept as a generic read helper (GET /sessions, Settings UI). Do NOT use
+    as the pre-check on the ``POST /sessions`` create path — that invites
+    the TOCTOU race closed by ``create_session_if_under_cap`` (SEC-35-1 /
+    ApiDev_008b). The count+insert MUST be serialized via the advisory lock
+    inside ``create_session_if_under_cap``.
+    """
     return int(
         db.execute(
             text("SELECT COUNT(*) FROM sessions " "WHERE api_key_id = :k AND ended_at IS NULL"),
@@ -1468,6 +1500,16 @@ def count_open_sessions(db: Session, api_key_id: int) -> int:
 
 
 def create_session(db: Session, api_key_id: int, label: str | None) -> dict:
+    """Unconditionally insert a session row.
+
+    **Prefer ``create_session_if_under_cap`` for any caller subject to the
+    20-open-session cap.** This bare helper does NOT check the cap and does
+    NOT hold the advisory lock — a caller pairing it with a separate
+    ``count_open_sessions`` read re-introduces the SEC-35-1 TOCTOU that
+    ApiDev_008b closed. Retained here for tests and seed fixtures that
+    want deterministic inserts without the lock dance (no current
+    production callers).
+    """
     row = db.execute(
         text(
             "INSERT INTO sessions (api_key_id, label) "
