@@ -37,7 +37,7 @@ _TRUNCATE_BETWEEN_TESTS_SQL = (
     "TRUNCATE search_queries, photo_suggestion_matches, vision_calls, "
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
-    "item_upc_lookups, "
+    "item_upc_lookups, idempotency_records, "
     "item_embeddings, bin_items, photos, sessions, items, bins, "
     "locations RESTART IDENTITY CASCADE"
 )
@@ -49,7 +49,7 @@ _TRUNCATE_ALL_SQL = (
     "TRUNCATE search_queries, photo_suggestion_matches, vision_calls, "
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
-    "item_upc_lookups, "
+    "item_upc_lookups, idempotency_records, "
     "item_embeddings, bin_items, photos, sessions, items, bins, "
     "locations, settings, confirmed_classes, api_keys RESTART IDENTITY CASCADE"
 )
@@ -59,6 +59,7 @@ def _init_schema(engine) -> None:
     ddl = """
     CREATE EXTENSION IF NOT EXISTS vector;
 
+    DROP TABLE IF EXISTS idempotency_records CASCADE;
     DROP TABLE IF EXISTS item_upc_lookups CASCADE;
     DROP TABLE IF EXISTS search_queries CASCADE;
     DROP TABLE IF EXISTS photo_suggestion_matches CASCADE;
@@ -348,6 +349,23 @@ def _init_schema(engine) -> None:
         last_used   timestamptz
     );
     CREATE INDEX idx_api_keys_hash ON api_keys(key_hash);
+
+    -- ApiDev_idempotency_outcomes: mirror migrations/2026-04-19d_idempotency_records.sql.
+    -- Must follow api_keys (FK target). Composite PK (api_key_id, key) gives
+    -- per-tenant isolation; SHA-256(raw body) stored so replays with a
+    -- mutated body return 409 instead of silently overwriting (SEC-26-3).
+    DROP TABLE IF EXISTS idempotency_records CASCADE;
+    CREATE TABLE idempotency_records (
+        api_key_id      bigint      NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+        key             text        NOT NULL,
+        body_sha256     bytea       NOT NULL,
+        response_status int         NOT NULL,
+        response_body   jsonb       NOT NULL,
+        created_at      timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (api_key_id, key)
+    );
+    CREATE INDEX idempotency_records_created_at_idx
+        ON idempotency_records (created_at);
 
     -- ApiDev_008 (Q-session-id): mirror migrations/2026-04-19_add_sessions_table.sql
     -- Must follow api_keys (FK target) and photos (trigger attaches here).
