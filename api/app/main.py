@@ -21,6 +21,7 @@ from app.deps import (
 from app.routes import admin, bins, classes, health, items, locations, photos, upc
 from app.services.rate_limiter import _ADMIN_MULTIPLIER, global_limiter
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -279,6 +280,14 @@ async def http_exception_handler(request: Request, exc):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Pydantic error dicts can contain non-JSON-serializable values in `input`
+    # (e.g. raw `bytes` when a client posts multipart to a JSON endpoint).
+    # Route through jsonable_encoder with a bytes fallback so the handler
+    # itself never crashes and masks a 400 as a 500.
+    details = jsonable_encoder(
+        exc.errors(),
+        custom_encoder={bytes: lambda b: b[:256].decode("utf-8", "backslashreplace")},
+    )
     return JSONResponse(
         status_code=400,
         content={
@@ -286,7 +295,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "error": {
                 "code": "bad_request",
                 "message": "validation error",
-                "details": exc.errors(),
+                "details": details,
                 "request_id": getattr(request.state, "request_id", None),
             },
         },
