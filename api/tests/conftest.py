@@ -404,6 +404,16 @@ def _init_schema(engine) -> None:
         FOR EACH ROW
         EXECUTE FUNCTION sessions_update_photo_count();
 
+    -- ApiDev_008c SEC-36-4: mirror the prod COMMENT ON FUNCTION so tests
+    -- that introspect pg_description see the same documentation as prod.
+    COMMENT ON FUNCTION sessions_update_photo_count() IS
+        'AFTER INSERT OR DELETE trigger on photos. Maintains denormalized '
+        'sessions.photo_count. INSERT branch skips closed sessions '
+        '(AND ended_at IS NULL) so late writes from the /ingest validate-then-'
+        'insert race still land but do not gain photo_count. See '
+        'migrations/2026-04-19c_document_photo_count_trigger.sql for the '
+        'full design rationale and the two valid race interleavings.';
+
     DROP TABLE IF EXISTS settings CASCADE;
     CREATE TABLE settings (
         key   text PRIMARY KEY,

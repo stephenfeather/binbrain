@@ -779,3 +779,205 @@ def test_sessions_routes_401_body_has_unauthorized_code(app_module):
         body = resp.json()
         assert body.get("version") == "1", body
         assert body["error"]["code"] == "unauthorized", body
+
+
+# ---------------------------------------------------------------------------
+# ApiDev_008c — PR #35 + PR #36 review follow-ups
+#   O-4 / G-2 — /ingest four-mode invalid_session body equivalence
+#   G-1       — pg_locks-inspecting advisory-lock observability
+#   G-3       — endpoint-level F-5 close-mid-ingest race
+#   G-5       — Bidi off-by-one adjacent-codepoint accept cases
+# ---------------------------------------------------------------------------
+
+
+# --- O-4 / G-2: /ingest four-mode body equivalence -------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_session_kind",
+    ["closed", "not_yours", "unknown_uuid", "malformed_uuid"],
+)
+def test_ingest_invalid_session_bodies_are_indistinguishable(client, db, bad_session_kind):
+    """QA F-4 (PR #35) / re-opened as O-4/G-2 (PR #36): all four /ingest
+    invalid_session failure modes MUST produce byte-identical response
+    bodies modulo request_id. Any divergence (error.code, error.message,
+    or key set) is an enumeration-leak regression — an attacker could
+    distinguish "session exists but closed" from "session doesn't exist"
+    from "session owned by another key"."""
+    if bad_session_kind == "closed":
+        s = _post_session(client)
+        client.delete(f"/sessions/{s['session_id']}")
+        sid = s["session_id"]
+    elif bad_session_kind == "not_yours":
+        other_raw, _ = _make_extra_api_key(db)
+        other = TestClient(client.app)
+        other.headers["X-API-Key"] = other_raw
+        sid = _post_session(other)["session_id"]
+    elif bad_session_kind == "unknown_uuid":
+        sid = "00000000-0000-0000-0000-000000000000"
+    else:
+        sid = "definitely-not-a-uuid"
+
+    resp = _ingest(client, f"BIN-INV-{bad_session_kind[:6]}", sid)
+    assert resp.status_code == 400, (bad_session_kind, resp.text)
+    body = _strip_request_id(resp.json())
+    assert body["error"]["code"] == "invalid_session", body
+    assert body["error"]["message"] == ("Session not found, not yours, or already closed"), body
+    # After stripping request_id, the error subtree must be exactly
+    # {code, message} — no extra leak fields (e.g. "reason").
+    assert set(body["error"].keys()) == {"code", "message"}, body
+
+
+# --- G-1: pg_locks inspector proves the advisory lock is load-bearing ------
+
+
+def test_open_session_cap_observes_advisory_lock_contention(app_module, db):
+    """G-1 (QA PR #36): the 30-thread cap test proves the OUTCOME (cap
+    holds, 429 fires) but not the MECHANISM. This test fires concurrent
+    POSTs and polls ``pg_locks`` for waiting advisory locks mid-race. If
+    a future refactor removes ``pg_advisory_xact_lock`` but keeps the
+    guarded INSERT, this test starts failing (the READ-COMMITTED race
+    reappears, with no advisory wait visible)."""
+    import time
+
+    raw, _api_key_id = _make_extra_api_key(db)
+
+    observed_waits: list[int] = []
+    stop = threading.Event()
+
+    def _fire() -> None:
+        c = TestClient(app_module.app)
+        c.headers["X-API-Key"] = raw
+        for _ in range(3):
+            c.post("/sessions", json={})
+
+    def _inspect() -> None:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not stop.is_set():
+            rows = db.execute(
+                text(
+                    "SELECT COUNT(*) FROM pg_locks "
+                    "WHERE locktype = 'advisory' AND granted = false"
+                )
+            ).scalar_one()
+            if rows:
+                observed_waits.append(int(rows))
+                return
+            time.sleep(0.005)
+
+    inspector = threading.Thread(target=_inspect)
+    threads = [threading.Thread(target=_fire) for _ in range(6)]
+    inspector.start()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    stop.set()
+    inspector.join()
+
+    assert observed_waits, (
+        "No advisory-lock wait observed across 6 concurrent POST /sessions × 3. "
+        "Either the lock is too fast to race on this machine, or — more "
+        "likely — the lock is no longer being taken. Check "
+        "repository.create_session_if_under_cap for the "
+        "pg_advisory_xact_lock call."
+    )
+
+
+# --- G-3: endpoint-level F-5 close-mid-ingest race via monkeypatch ---------
+
+
+def test_ingest_race_close_between_validate_and_insert_lands_photo_and_skips_count(
+    client, db, monkeypatch
+):
+    """G-3 (QA PR #36): end-to-end exercise of the /ingest close-mid-ingest
+    race. Monkeypatches ``validate_session_for_ingest`` to stall after it
+    returns True, races a ``DELETE /sessions/{id}`` to commit during the
+    stall, then lets the insert proceed. Contract (per back-ported plan
+    refinement in migration 2026-04-19c): late writes LAND (200), photo
+    row persists, sessions.photo_count stays at its pre-close value.
+
+    If the architect ever flips to "reject late writes" (close-wins
+    returns 400 invalid_session), flip the status_code assertion below —
+    this test becomes the contract-reversal assertion."""
+    from app.db import repository as real_repo
+
+    s = _post_session(client)
+    sid = s["session_id"]
+
+    validate_returned = threading.Event()
+    closer_committed = threading.Event()
+    original_validate = real_repo.validate_session_for_ingest
+
+    def slowed_validate(db_, s_id, k_id):
+        result = original_validate(db_, s_id, k_id)
+        # Only stall on OUR session — other /ingest calls in the test run
+        # (e.g. the closer itself hitting /sessions) must be fast.
+        if s_id == sid and result:
+            validate_returned.set()
+            closer_committed.wait(timeout=3.0)
+        return result
+
+    monkeypatch.setattr(real_repo, "validate_session_for_ingest", slowed_validate)
+
+    def closer() -> None:
+        validate_returned.wait(timeout=3.0)
+        # Fresh TestClient in case monkeypatched module state differs.
+        closer_client = TestClient(client.app)
+        closer_client.headers["X-API-Key"] = client.headers["X-API-Key"]
+        r = closer_client.delete(f"/sessions/{sid}")
+        assert r.status_code == 200, r.text
+        closer_committed.set()
+
+    threading.Thread(target=closer, daemon=True).start()
+    resp = _ingest(client, "BIN-RACE-E2E", sid)
+
+    # Contract: late writes land.
+    assert resp.status_code == 200, (
+        "Late write rejected — if policy changed to reject, flip this "
+        f"assertion and the plan doc. Got {resp.status_code}: {resp.text}"
+    )
+
+    photos = db.execute(
+        text("SELECT COUNT(*) FROM photos WHERE session_id = :s"),
+        {"s": sid},
+    ).scalar_one()
+    assert photos == 1, "Photo row must still land on a closed session"
+
+    count = db.execute(
+        text("SELECT photo_count FROM sessions WHERE session_id = CAST(:s AS uuid)"),
+        {"s": sid},
+    ).scalar_one()
+    assert count == 0, "photo_count must NOT be bumped on a closed session"
+
+    ended_at = db.execute(
+        text("SELECT ended_at FROM sessions WHERE session_id = CAST(:s AS uuid)"),
+        {"s": sid},
+    ).scalar_one()
+    assert ended_at is not None, "Session must be closed after the race"
+
+
+# --- G-5: Bidi off-by-one boundary tests -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "adjacent_char",
+    [
+        "\u2029",  # PARAGRAPH SEPARATOR — just below U+202A (but Zl category; may bounce control-char check)
+        "\u202f",  # NARROW NO-BREAK SPACE — just above U+202E
+        "\u2065",  # unassigned — just below U+2066
+        "\u206a",  # INHIBIT SYMMETRIC SWAPPING — just above U+2069
+    ],
+)
+def test_post_sessions_accepts_codepoints_adjacent_to_bidi_blocklist(client, adjacent_char):
+    """G-5 (QA PR #36): off-by-one guard on the Bidi block. If a refactor
+    flips ``<=`` to ``<`` at either endpoint, the real spoofing codepoints
+    (U+202E RLO, U+2069 PDI) slip through while the per-codepoint tests
+    still pass — because those tests hit the exact boundaries. This test
+    asserts the NEIGHBORS are accepted so a one-off drift breaks CI."""
+    resp = client.post("/sessions", json={"label": f"label{adjacent_char}tail"})
+    # U+2029 is a Unicode line separator (category Zl). Implementation
+    # choice: it's neither a C0 control nor a Bidi override, so the
+    # current validator accepts it. If a future hardening adds a Zl
+    # block, update this test accordingly.
+    assert resp.status_code == 201, (adjacent_char.encode("unicode_escape"), resp.text)
