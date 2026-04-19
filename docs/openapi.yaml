@@ -1796,6 +1796,20 @@ paths:
         case — clients log and drop.
       parameters:
         - { $ref: "#/components/parameters/PhotoIdPath" }
+        - name: X-Client-Retry-Count
+          in: header
+          required: false
+          description: |
+            Client-reported retry attempt count when this outcome was
+            finally delivered (Swift2b-γ offline outcomes queue).
+            `0` = first-attempt success. Higher values indicate
+            offline-queue pressure on the client. Telemetry only —
+            missing or malformed values are coerced to `0` server-side
+            and never produce a 4xx response.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
       requestBody:
         required: true
         content:

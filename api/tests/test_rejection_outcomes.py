@@ -406,3 +406,145 @@ def test_post_outcomes_rejects_whitespace_edited_to_label(client, db, valid_jpeg
         {"pid": photo_id},
     ).scalar()
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# ApiDev2_005 — X-Client-Retry-Count header → client_retry_count column
+# ---------------------------------------------------------------------------
+
+
+def _single_decision_payload() -> dict:
+    return _payload(
+        [
+            {
+                "label": "hex bolt",
+                "shown_at": "2026-04-19T10:00:00Z",
+                "decision": "accepted",
+            }
+        ]
+    )
+
+
+def test_post_outcomes_persists_client_retry_count_header(client, db, valid_jpeg_bytes):
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-RETRY-0001")
+    r = client.post(
+        f"/photos/{photo_id}/outcomes",
+        json=_single_decision_payload(),
+        headers={"X-Client-Retry-Count": "3"},
+    )
+    assert r.status_code == 200, r.text
+    row = (
+        db.execute(
+            text(
+                "SELECT client_retry_count FROM photo_suggestion_outcomes " "WHERE photo_id = :pid"
+            ),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
+    assert row["client_retry_count"] == 3
+
+
+def test_post_outcomes_missing_header_defaults_to_zero(client, db, valid_jpeg_bytes):
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-RETRY-0002")
+    r = client.post(f"/photos/{photo_id}/outcomes", json=_single_decision_payload())
+    assert r.status_code == 200, r.text
+    row = (
+        db.execute(
+            text(
+                "SELECT client_retry_count FROM photo_suggestion_outcomes " "WHERE photo_id = :pid"
+            ),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
+    assert row["client_retry_count"] == 0
+
+
+def test_post_outcomes_malformed_header_defaults_to_zero(client, db, valid_jpeg_bytes):
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-RETRY-0003")
+    r = client.post(
+        f"/photos/{photo_id}/outcomes",
+        json=_single_decision_payload(),
+        headers={"X-Client-Retry-Count": "abc"},
+    )
+    assert r.status_code == 200, r.text  # telemetry, not validation — must not 400
+    row = (
+        db.execute(
+            text(
+                "SELECT client_retry_count FROM photo_suggestion_outcomes " "WHERE photo_id = :pid"
+            ),
+            {"pid": photo_id},
+        )
+        .mappings()
+        .one()
+    )
+    assert row["client_retry_count"] == 0
+
+
+def test_replace_outcomes_repository_accepts_client_retry_count(client, db, valid_jpeg_bytes):
+    """Unit-style: call the repository helper directly with the new kwarg
+    and confirm each row picks up the value. Legacy calls (no kwarg) keep
+    the column NULL for backward compat.
+    """
+    from app.db import repository
+
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-RETRY-0004")
+
+    repository.replace_photo_suggestion_outcomes(
+        db,
+        photo_id=photo_id,
+        vision_model="test/model",
+        prompt_version="v1",
+        decisions=[
+            {
+                "label": "bolt",
+                "category": None,
+                "confidence": None,
+                "bbox": None,
+                "shown_at": "2026-04-19T10:00:00+00:00",
+                "decision": "accepted",
+                "edited_to_label": None,
+            }
+        ],
+        client_retry_count=7,
+    )
+    db.commit()
+    val = db.execute(
+        text(
+            "SELECT client_retry_count FROM photo_suggestion_outcomes "
+            "WHERE photo_id = :pid AND vision_model = 'test/model'"
+        ),
+        {"pid": photo_id},
+    ).scalar()
+    assert val == 7
+
+    # Legacy call — no kwarg. Column stays NULL (backward compat).
+    repository.replace_photo_suggestion_outcomes(
+        db,
+        photo_id=photo_id,
+        vision_model="test/legacy",
+        prompt_version=None,
+        decisions=[
+            {
+                "label": "bolt",
+                "category": None,
+                "confidence": None,
+                "bbox": None,
+                "shown_at": "2026-04-19T10:00:00+00:00",
+                "decision": "accepted",
+                "edited_to_label": None,
+            }
+        ],
+    )
+    db.commit()
+    val = db.execute(
+        text(
+            "SELECT client_retry_count FROM photo_suggestion_outcomes "
+            "WHERE photo_id = :pid AND vision_model = 'test/legacy'"
+        ),
+        {"pid": photo_id},
+    ).scalar()
+    assert val is None

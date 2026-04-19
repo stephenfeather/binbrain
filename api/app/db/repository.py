@@ -1232,6 +1232,7 @@ def replace_photo_suggestion_outcomes(
     vision_model: str,
     prompt_version: str | None,
     decisions: list[dict],
+    client_retry_count: int | None = None,
 ) -> None:
     """Replace the outcome rows for ``(photo_id, vision_model)`` atomically.
 
@@ -1239,6 +1240,12 @@ def replace_photo_suggestion_outcomes(
     a DELETE on the scoping key runs unconditionally, followed by a
     batched INSERT of the current decisions. Outcomes for other
     ``vision_model`` values on the same photo are left alone.
+
+    ``client_retry_count`` (ApiDev2_005, Swift2b-gamma): per-request telemetry
+    from the ``X-Client-Retry-Count`` header. Applied uniformly to every
+    row in the batch, since the batch originates from a single HTTP
+    request. ``None`` (default) leaves the column NULL — preserves
+    backward compat for pre-Swift2_018 callers and historical rows.
     """
     db.execute(
         text(
@@ -1254,10 +1261,12 @@ def replace_photo_suggestion_outcomes(
             """
             INSERT INTO photo_suggestion_outcomes
               (photo_id, vision_model, prompt_version, label, category,
-               confidence, bbox, shown_at, decision, edited_to_label)
+               confidence, bbox, shown_at, decision, edited_to_label,
+               client_retry_count)
             VALUES
               (:photo_id, :vision_model, :prompt_version, :label, :category,
-               :confidence, :bbox, :shown_at, :decision, :edited_to_label)
+               :confidence, :bbox, :shown_at, :decision, :edited_to_label,
+               :client_retry_count)
             """
         ),
         [
@@ -1265,6 +1274,7 @@ def replace_photo_suggestion_outcomes(
                 "photo_id": photo_id,
                 "vision_model": vision_model,
                 "prompt_version": prompt_version,
+                "client_retry_count": client_retry_count,
                 **d,
             }
             for d in decisions

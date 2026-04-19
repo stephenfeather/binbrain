@@ -1,5 +1,12 @@
 # Schema Changes
 
+## 2026-04-19
+- ApiDev2_005 (Swift2b-γ offline outcomes): add `client_retry_count int` to
+  `photo_suggestion_outcomes`. Populated from `X-Client-Retry-Count` request
+  header on `POST /photos/{id}/outcomes`. NULL for historical rows;
+  `0` for first-attempt success.
+  - Migration: `migrations/2026-04-19_add_client_retry_count.sql`
+
 ## 2026-02-21
 - Task 1 (GET /bins/{bin_id}): no database schema changes.
 - Task 2 (GET /bins): no database schema changes.
