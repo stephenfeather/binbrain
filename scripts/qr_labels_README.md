@@ -4,7 +4,7 @@ This script generates a PDF of QR labels sized for 2" x 1" labels on letter pape
 
 ## Install (uv)
 
-```
+```bash
 cd api
 uv sync --extra scripts
 ```
@@ -16,7 +16,7 @@ Font:
 
 From a file of bin_ids:
 
-```
+```bash
 uv run python scripts/qr_labels.py \
   --input bins.txt \
   --out labels.pdf
@@ -24,7 +24,7 @@ uv run python scripts/qr_labels.py \
 
 From the database (uses `DATABASE_URL`):
 
-```
+```bash
 DATABASE_URL=postgresql+psycopg://binbrain:***@127.0.0.1:5432/binbrain \
 uv run python scripts/qr_labels.py \
   --from-db \
@@ -33,7 +33,7 @@ uv run python scripts/qr_labels.py \
 
 Sequential bin_ids:
 
-```
+```bash
 uv run python scripts/qr_labels.py \
   --sequential \
   --start 1 \
@@ -45,7 +45,7 @@ This generates `BIN-0001` through `BIN-0120` by default. Use `--prefix` and `--p
 
 Label printers (one label per page):
 
-```
+```bash
 uv run python scripts/qr_labels.py \
   --sequential \
   --start 1 \
@@ -57,7 +57,7 @@ uv run python scripts/qr_labels.py \
 Label printer preset (2" x 1" page, 0.15" margins all sides, one label per
 page — ready to feed directly to a thermal label printer):
 
-```
+```bash
 uv run python scripts/qr_labels.py \
   --sequential \
   --start 1 \
