@@ -117,6 +117,21 @@ def test_delete_nonexistent_bin_returns_404(client):
     assert body["error"]["code"] == "not_found"
 
 
+# SEC-31-1: ensure DELETE shares the same bin_id regex validation as POST/PATCH.
+# A bin_id containing path separators or characters outside
+# ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ must be rejected at the validator,
+# not silently treated as a missing bin (or worse, normalized through).
+def test_delete_invalid_bin_id_returns_400(client):
+    # Dots survive FastAPI's path routing (the {bin_id} param accepts them)
+    # but the regex ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ rejects them. Slashes
+    # would 404 at the routing layer before reaching the handler.
+    resp = client.delete("/bins/bin..with..dots")
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    assert body["error"]["code"] == "bad_request"
+    assert "invalid bin_id" in body["error"]["message"].lower()
+
+
 # ---------------------------------------------------------------------------
 # 5. Already-deleted idempotency
 # ---------------------------------------------------------------------------

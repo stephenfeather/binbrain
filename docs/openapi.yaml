@@ -125,6 +125,9 @@ components:
                 - rate_limited
                 - internal_error
                 - service_unavailable
+                # Endpoint-specific codes (handlers bypass the default
+                # status→code map for client-facing precision).
+                - cannot_delete_sentinel
             message:    { type: string }
             details:    { description: "Structured validation details (present on 400 only)." }
             request_id: { type: string }
