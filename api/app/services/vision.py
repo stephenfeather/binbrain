@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 # bump this when _PROMPT changes materially.
 PROMPT_VERSION = "v2"
 
+# ApiDev_009 (Q-prompt-version closeout): pinned SHA-256 prefix of the current
+# `_PROMPT` text below. The CI guard test
+# (`api/tests/test_prompt_version_guard.py`) enforces that this matches the
+# live prompt — if you edit `_PROMPT`, you MUST also update both this hash AND
+# `PROMPT_VERSION` (to the next human-readable version, e.g. "v2" -> "v3").
+# Whitespace-only / wording-polish changes that should NOT count as a new
+# version may update only the hash — but think twice, because analytics will
+# not be able to distinguish old-prompt rows from new-prompt rows.
+PROMPT_VERSION_HASH = "6d49b52f"
+
 # Dev2_015 iter 2: prior iter 1 prompt was not followed by Fireworks — logs
 # showed bbox=[86,138,991,997] (pixels, not 0-1) and one suggestion per photo.
 # This version states the bbox coordinate range TWICE (top and bottom), gives
