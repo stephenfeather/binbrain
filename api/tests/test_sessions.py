@@ -17,8 +17,10 @@ from __future__ import annotations
 import hashlib
 import io
 import secrets
+import threading
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import text
@@ -473,3 +475,307 @@ def test_delete_sessions_410_body_uses_session_closed_code(client):
     assert body["version"] == "1"
     assert body["error"]["code"] == "session_closed", body
     assert "already" in body["error"]["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# ApiDev_008b — SEC-35-1 / QA F-1..F-10 follow-ups
+# ---------------------------------------------------------------------------
+
+
+# --- F-1 / SEC-35-1: TOCTOU cap enforcement via single guarded INSERT -----
+
+
+def test_open_session_cap_holds_under_concurrent_post(app_module, db):
+    """Fire N > cap concurrent POST /sessions from the SAME api_key. The
+    guarded INSERT...SELECT WHERE should keep the open-session total at or
+    below the cap (20). Contract: count_open_sessions(api_key) <= 20 always.
+
+    Uses a dedicated api_key so the assertion isn't polluted by sessions
+    created elsewhere in the test run.
+    """
+    raw, api_key_id = _make_extra_api_key(db)
+
+    cap = 20
+    attempts = 30
+
+    def _fire(results: list[int], idx: int) -> None:
+        c = TestClient(app_module.app)
+        c.headers["X-API-Key"] = raw
+        resp = c.post("/sessions", json={})
+        results[idx] = resp.status_code
+
+    results = [0] * attempts
+    threads = [threading.Thread(target=_fire, args=(results, i)) for i in range(attempts)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Every request either succeeded with 201 or was refused with 429 — no
+    # 5xx surprises.
+    assert set(results) <= {201, 429}, results
+
+    open_count = db.execute(
+        text("SELECT COUNT(*) FROM sessions " "WHERE api_key_id = :k AND ended_at IS NULL"),
+        {"k": api_key_id},
+    ).scalar_one()
+    assert open_count <= cap, (
+        f"open-session cap breached: {open_count} open for api_key {api_key_id} "
+        f"across {attempts} concurrent POSTs (results: {results})"
+    )
+    # And the cap was actually exercised — at least one 429 means the guard
+    # fired, so this isn't a no-op test if the race were to somehow still
+    # let everything through.
+    assert 429 in results, results
+
+
+def test_post_session_at_cap_returns_429_with_rate_limited_code(client):
+    """Reinforces the existing 429 test with a body assertion — the
+    error.code must be 'rate_limited' not 'internal_error' (regression guard
+    for future code_map / detail changes)."""
+    for _ in range(20):
+        assert client.post("/sessions", json={}).status_code == 201
+    resp = client.post("/sessions", json={})
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["version"] == "1"
+    assert body["error"]["code"] == "rate_limited"
+
+
+# --- F-4: 404 body equivalence between "not found" and "not yours" --------
+
+
+def _strip_request_id(body: dict) -> dict:
+    """request_id is per-request; masks the enumeration-leak assertion."""
+    err = dict(body.get("error", {}))
+    err.pop("request_id", None)
+    return {**body, "error": err}
+
+
+def test_delete_sessions_404_body_identical_whether_not_found_or_not_yours(client, db):
+    """F-4: status-equality alone doesn't guard the plan's enumeration-leak
+    contract. Assert response BODIES match so a future refactor can't add
+    e.g. error.message='not yours' without breaking this test."""
+    other_raw, _ = _make_extra_api_key(db)
+    other = TestClient(client.app)
+    other.headers["X-API-Key"] = other_raw
+    s = _post_session(other)
+
+    not_yours = client.delete(f"/sessions/{s['session_id']}")
+    not_found = client.delete("/sessions/00000000-0000-0000-0000-000000000000")
+
+    assert not_yours.status_code == not_found.status_code == 404
+    assert _strip_request_id(not_yours.json()) == _strip_request_id(not_found.json())
+
+
+def test_get_sessions_404_body_identical_whether_not_found_or_not_yours(client, db):
+    other_raw, _ = _make_extra_api_key(db)
+    other = TestClient(client.app)
+    other.headers["X-API-Key"] = other_raw
+    s = _post_session(other)
+
+    not_yours = client.get(f"/sessions/{s['session_id']}")
+    not_found = client.get("/sessions/00000000-0000-0000-0000-000000000000")
+
+    assert not_yours.status_code == not_found.status_code == 404
+    assert _strip_request_id(not_yours.json()) == _strip_request_id(not_found.json())
+
+
+# --- F-5: /ingest close-mid-ingest trigger no-op on closed session --------
+
+
+def test_trigger_skips_photo_count_bump_when_session_closed_between_insert(client, db):
+    """QA F-5 / ApiDev_008b: simulate the rare race where /ingest validates
+    an open session, then the client (or a sibling tab) closes it, then
+    the photo row actually inserts. The AFTER INSERT trigger must NOT
+    increment photo_count on a closed session — the photo still lands."""
+    s = _post_session(client)
+    sid = s["session_id"]
+
+    # Close the session directly (simulating the race winner).
+    db.execute(
+        text("UPDATE sessions SET ended_at = now() WHERE session_id = CAST(:s AS uuid)"),
+        {"s": sid},
+    )
+    db.commit()
+
+    # Insert a photo that claims the now-closed session. In production this
+    # would only happen via a race; here we bypass /ingest validation to
+    # exercise the trigger directly.
+    db.execute(text("INSERT INTO bins (bin_id) VALUES ('BIN-F5-RACE')"))
+    db.execute(
+        text(
+            "INSERT INTO photos (bin_id, path, session_id) "
+            "VALUES ('BIN-F5-RACE', '/tmp/race.jpg', :s)"
+        ),
+        {"s": sid},
+    )
+    db.commit()
+
+    # Photo row should exist…
+    photo_present = db.execute(
+        text("SELECT COUNT(*) FROM photos WHERE bin_id = 'BIN-F5-RACE'")
+    ).scalar_one()
+    assert photo_present == 1
+
+    # …but photo_count on the closed session should still be 0.
+    count = db.execute(
+        text("SELECT photo_count FROM sessions WHERE session_id = CAST(:s AS uuid)"),
+        {"s": sid},
+    ).scalar_one()
+    assert count == 0
+
+
+# --- SEC-35-2: Bidi codepoints blocked in label ----------------------------
+
+
+@pytest.mark.parametrize(
+    "bidi_char",
+    [
+        "\u202a",  # LEFT-TO-RIGHT EMBEDDING
+        "\u202b",  # RIGHT-TO-LEFT EMBEDDING
+        "\u202c",  # POP DIRECTIONAL FORMATTING
+        "\u202d",  # LEFT-TO-RIGHT OVERRIDE
+        "\u202e",  # RIGHT-TO-LEFT OVERRIDE (the big spoofing one)
+        "\u2066",  # LEFT-TO-RIGHT ISOLATE
+        "\u2067",  # RIGHT-TO-LEFT ISOLATE
+        "\u2068",  # FIRST STRONG ISOLATE
+        "\u2069",  # POP DIRECTIONAL ISOLATE
+    ],
+)
+def test_post_sessions_rejects_bidi_codepoints_in_label(client, bidi_char):
+    """SEC-35-2: each Unicode Bidi override / isolate codepoint is rejected
+    with 400 so a malicious owner can't plant a label whose rendered glyphs
+    differ from the stored bytes."""
+    resp = client.post("/sessions", json={"label": f"harmless{bidi_char}text"})
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Garage bins 🔧",  # emoji (astral plane)
+        "Atelier café à Montréal",  # Latin + combining accents
+        "仓库 — 2026年4月",  # CJK + em-dash + ideographic digits
+        "Инвентарь: болты и гайки",  # Cyrillic
+        "مخزن القطع",  # Arabic (RTL script, no override controls)
+        "עברית לְלֹא בִּידי",  # Hebrew (RTL, no control codepoints)
+        "🔧⚙️🔩 toolbox",  # consecutive emoji + ASCII
+        "100% ✓",  # ASCII + checkmark
+    ],
+)
+def test_post_sessions_accepts_legitimate_unicode_labels(client, label):
+    """G-4 (post-review): SEC-35-2's Bidi block must NOT regress legitimate
+    multilingual labels. Emoji, accented Latin, CJK, Cyrillic, and bare
+    RTL scripts (Arabic / Hebrew) that don't rely on override/isolate
+    codepoints must all round-trip cleanly."""
+    resp = client.post("/sessions", json={"label": label})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["session"]["label"] == label
+
+
+# --- F-6: GET /sessions list excludes other owners' rows -------------------
+
+
+def test_get_sessions_list_excludes_other_owners_sessions(client, db):
+    mine = [_post_session(client)["session_id"] for _ in range(2)]
+
+    other_raw, _ = _make_extra_api_key(db)
+    other = TestClient(client.app)
+    other.headers["X-API-Key"] = other_raw
+    theirs = [_post_session(other)["session_id"] for _ in range(2)]
+
+    resp = client.get("/sessions", params={"limit": 100})
+    assert resp.status_code == 200
+    ids = {s["session_id"] for s in resp.json()["sessions"]}
+    assert set(mine) <= ids
+    assert ids.isdisjoint(set(theirs)), "list_sessions leaked another owner's rows"
+
+
+# --- F-7: GET /sessions/{id} with malformed UUID -> 404, no txn poisoning --
+
+
+def test_get_session_malformed_uuid_returns_404_and_does_not_poison_txn(client):
+    resp = client.get("/sessions/definitely-not-a-uuid")
+    assert resp.status_code == 404
+    # Follow-up request must still work — proves rollback happened.
+    resp2 = client.get("/sessions", params={"limit": 5})
+    assert resp2.status_code == 200
+
+
+def test_delete_session_malformed_uuid_returns_404_and_does_not_poison_txn(client):
+    resp = client.delete("/sessions/not-even-close-to-a-uuid")
+    assert resp.status_code == 404
+    resp2 = client.get("/sessions", params={"limit": 5})
+    assert resp2.status_code == 200
+
+
+# --- F-8: Trigger spec regression guard ------------------------------------
+
+
+def test_trigger_definition_documents_update_limitation(db):
+    """Regression guard: the AFTER INSERT OR DELETE trigger does NOT cover
+    UPDATE. If UPDATE is ever added to photos.session_id (e.g. a future
+    text->uuid migration or reassignment flow), this guard must fail so
+    the author remembers to extend sessions_update_photo_count() to
+    rebalance photo_count across old/new session_id values."""
+    spec = (
+        db.execute(
+            text(
+                "SELECT event_manipulation FROM information_schema.triggers "
+                "WHERE trigger_name = 'photos_update_session_photo_count' "
+                "ORDER BY event_manipulation"
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert spec == ["DELETE", "INSERT"], (
+        "Trigger spec changed — if UPDATE was added, also add a photo_count "
+        "rebalance branch to sessions_update_photo_count(). If UPDATE was "
+        "removed, this guard is obsolete."
+    )
+
+
+# --- F-9: _validate_label parametrized edges -------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected_status,expected_stored",
+    [
+        ("", 201, None),
+        ("   ", 201, None),
+        ("  trimmed  ", 201, "trimmed"),
+        ("hello\tworld", 400, None),
+        ("hello\nworld", 400, None),
+        ("hello\rworld", 400, None),
+        ("x" * 120, 201, "x" * 120),
+    ],
+)
+def test_validate_label_edges(client, raw, expected_status, expected_stored):
+    resp = client.post("/sessions", json={"label": raw})
+    assert resp.status_code == expected_status, resp.text
+    if expected_status == 201:
+        assert resp.json()["session"]["label"] == expected_stored
+
+
+# --- F-10: 401 response-body shape pinned ----------------------------------
+
+
+def test_sessions_routes_401_body_has_unauthorized_code(app_module):
+    """F-10: middleware handles 401 directly and MUST emit error.code =
+    'unauthorized'. 401 is not in the handler's code_map — if someone
+    moves this path through the default HTTPException flow, the body
+    would regress to 'internal_error' (see F-3 pattern on 410)."""
+    bare = TestClient(app_module.app)
+    for method, url in [
+        ("POST", "/sessions"),
+        ("GET", "/sessions"),
+        ("GET", "/sessions/00000000-0000-0000-0000-000000000000"),
+        ("DELETE", "/sessions/00000000-0000-0000-0000-000000000000"),
+    ]:
+        resp = bare.request(method, url)
+        assert resp.status_code == 401, f"{method} {url} -> {resp.status_code}"
+        body = resp.json()
+        assert body.get("version") == "1", body
+        assert body["error"]["code"] == "unauthorized", body

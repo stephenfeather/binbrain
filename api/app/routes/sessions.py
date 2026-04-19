@@ -31,10 +31,14 @@ def _validate_label(label: str | None) -> str | None:
     """Return the normalized label or raise HTTPException(400).
 
     Rules:
-    - None or empty string -> None (no label).
+    - None or empty / whitespace-only -> None (no label stored).
     - ≤ 120 chars after stripping leading/trailing whitespace.
-    - No control characters (<0x20, 0x7F). Tabs and newlines blocked so the
-      label stays safe for single-line Settings UI + log lines.
+    - No C0 controls (<0x20), DEL (0x7F), or Unicode Bidi override /
+      embedding / isolate codepoints (U+202A..U+202E, U+2066..U+2069).
+      ApiDev_008b SEC-35-2: Bidi controls enable display-layer spoofing
+      where a label rendered in the owner's Settings UI shows different
+      glyphs than the stored bytes. Low blast radius (labels render only
+      to the owner) but trivial to close.
     """
     if label is None:
         return None
@@ -46,11 +50,18 @@ def _validate_label(label: str | None) -> str | None:
             status_code=400,
             detail=f"label exceeds {MAX_LABEL_LEN}-char limit",
         )
-    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in label):
-        raise HTTPException(
-            status_code=400,
-            detail="label must not contain control characters",
-        )
+    for c in label:
+        cp = ord(c)
+        if cp < 0x20 or cp == 0x7F:
+            raise HTTPException(
+                status_code=400,
+                detail="label must not contain control characters",
+            )
+        if 0x202A <= cp <= 0x202E or 0x2066 <= cp <= 0x2069:
+            raise HTTPException(
+                status_code=400,
+                detail="label must not contain Unicode Bidi override codepoints",
+            )
     return label
 
 
@@ -72,8 +83,13 @@ def create_session(
     api_key_id = _require_api_key_id(request)
     label = _validate_label(body.label)
 
-    open_count = repository.count_open_sessions(db, api_key_id)
-    if open_count >= MAX_OPEN_SESSIONS_PER_KEY:
+    # ApiDev_008b F-1 / SEC-35-1: count+insert is a single guarded INSERT so
+    # concurrent POST /sessions from the same api_key cannot both land under
+    # the cap. Returns None when the cap is already full.
+    session = repository.create_session_if_under_cap(
+        db, api_key_id, label, MAX_OPEN_SESSIONS_PER_KEY
+    )
+    if session is None:
         raise HTTPException(
             status_code=429,
             detail=(
@@ -82,7 +98,6 @@ def create_session(
             ),
         )
 
-    session = repository.create_session(db, api_key_id, label)
     db.commit()
     logger.info(
         "event=session_create request_id=%s api_key_id=%s session_id=%s",
