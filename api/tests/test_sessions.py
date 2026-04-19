@@ -651,6 +651,29 @@ def test_post_sessions_rejects_bidi_codepoints_in_label(client, bidi_char):
     assert resp.status_code == 400, resp.text
 
 
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Garage bins 🔧",  # emoji (astral plane)
+        "Atelier café à Montréal",  # Latin + combining accents
+        "仓库 — 2026年4月",  # CJK + em-dash + ideographic digits
+        "Инвентарь: болты и гайки",  # Cyrillic
+        "مخزن القطع",  # Arabic (RTL script, no override controls)
+        "עברית לְלֹא בִּידי",  # Hebrew (RTL, no control codepoints)
+        "🔧⚙️🔩 toolbox",  # consecutive emoji + ASCII
+        "100% ✓",  # ASCII + checkmark
+    ],
+)
+def test_post_sessions_accepts_legitimate_unicode_labels(client, label):
+    """G-4 (post-review): SEC-35-2's Bidi block must NOT regress legitimate
+    multilingual labels. Emoji, accented Latin, CJK, Cyrillic, and bare
+    RTL scripts (Arabic / Hebrew) that don't rely on override/isolate
+    codepoints must all round-trip cleanly."""
+    resp = client.post("/sessions", json={"label": label})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["session"]["label"] == label
+
+
 # --- F-6: GET /sessions list excludes other owners' rows -------------------
 
 
