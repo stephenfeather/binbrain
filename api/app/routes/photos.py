@@ -703,10 +703,40 @@ class SuggestionOutcomesRequest(BaseModel):
     decisions: list[SuggestionOutcome]
 
 
+# Postgres ``int`` (int4) upper bound. Values above this would raise
+# ``numeric_value_out_of_range`` at INSERT time and the blanket
+# exception handler would turn that into a 500. Telemetry must never
+# 5xx on input — clamp at the parser (SEC-33-1).
+_INT32_MAX = 2_147_483_647
+
+
+def _parse_client_retry_count(raw: str | None) -> int:
+    """Parse the ``X-Client-Retry-Count`` header.
+
+    ApiDev2_005 (Swift2b-gamma). This is telemetry, not validation — a missing
+    or malformed value MUST NOT 400/500. Missing → 0 (first-attempt success).
+    Malformed → 0 (absorb client bugs rather than rejecting real outcomes).
+    Negative values clamped to 0. Values above ``_INT32_MAX`` clamped to
+    ``_INT32_MAX`` so the int4 column never rejects the INSERT (SEC-33-1).
+    """
+    if raw is None:
+        return 0
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    if value < 0:
+        return 0
+    if value > _INT32_MAX:
+        return _INT32_MAX
+    return value
+
+
 @router.post("/photos/{photo_id}/outcomes")
 def post_photo_suggestion_outcomes(
     photo_id: int,
     body: SuggestionOutcomesRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Fire-and-forget: record the full user-decision list for a photo's
@@ -717,10 +747,15 @@ def post_photo_suggestion_outcomes(
     the server DELETEs prior outcomes for that pair and INSERTs the new
     batch atomically. Other vision_model rows on the same photo are
     preserved.
+
+    ``X-Client-Retry-Count`` (ApiDev2_005, Swift2b-gamma): iOS offline-queue
+    telemetry. Persisted to every row in the batch. Missing or malformed
+    → 0 (never 400 — this is telemetry, not validation).
     """
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
+    client_retry_count = _parse_client_retry_count(request.headers.get("x-client-retry-count"))
     decisions = [d.model_dump() for d in body.decisions]
     try:
         repository.replace_photo_suggestion_outcomes(
@@ -729,6 +764,7 @@ def post_photo_suggestion_outcomes(
             vision_model=body.vision_model,
             prompt_version=body.prompt_version,
             decisions=decisions,
+            client_retry_count=client_retry_count,
         )
         db.commit()
     except Exception:
@@ -741,11 +777,12 @@ def post_photo_suggestion_outcomes(
         raise HTTPException(status_code=500, detail="internal error") from None
 
     logger.info(
-        "event=photo_outcomes request_id=%s photo_id=%s model=%s count=%s",
+        "event=photo_outcomes request_id=%s photo_id=%s model=%s count=%s " "client_retry_count=%s",
         db.info.get("request_id") if db.info else None,
         photo_id,
         body.vision_model,
         len(decisions),
+        client_retry_count,
     )
     return {
         "version": "1",

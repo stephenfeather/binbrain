@@ -254,7 +254,8 @@ def _init_schema(engine) -> None:
                        CHECK (decision IN ('accepted', 'rejected', 'edited', 'ignored')),
       edited_to_label  text,
       decided_at       timestamptz NOT NULL DEFAULT now(),
-      item_id          bigint REFERENCES items(item_id) ON DELETE SET NULL
+      item_id          bigint REFERENCES items(item_id) ON DELETE SET NULL,
+      client_retry_count int
     );
     CREATE INDEX photo_suggestion_outcomes_photo_idx
         ON photo_suggestion_outcomes (photo_id);
