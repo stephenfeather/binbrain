@@ -216,9 +216,9 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Preset for label printers: 2x1in page, 0.15in margins all sides, "
-            "one label per page. Implies --single-per-page. Overrides "
-            "--label-width, --label-height, --margin-x, --margin-y unless you "
-            "pass them AFTER --label-printer."
+            "one label per page. Implies --single-per-page. Uses preset values "
+            "for --label-width, --label-height, --margin-x, and --margin-y "
+            "unless you explicitly provide those options."
         ),
     )
 
