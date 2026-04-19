@@ -22,7 +22,7 @@ def _multipart_bytes() -> tuple[bytes, str]:
         'Content-Disposition: form-data; name="confidence"\r\n\r\n'
         "0.95\r\n"
         f"--{boundary}--\r\n"
-    ).encode("utf-8")
+    ).encode()
     return body, boundary
 
 
