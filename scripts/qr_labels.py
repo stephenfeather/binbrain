@@ -120,6 +120,14 @@ def render_pdf(
                 f"single-per-page margins ({layout.margin_x_in}in x, {layout.margin_y_in}in y) "
                 f"exceed label size ({layout.label_width_in}in x {layout.label_height_in}in)"
             )
+        qr_pad = qr_padding_in * inch
+        if usable_w <= 2 * qr_pad or usable_h <= 2 * qr_pad:
+            raise ValueError(
+                f"single-per-page usable area after margins "
+                f"({usable_w / inch:.3f}in \u00d7 {usable_h / inch:.3f}in) "
+                f"is too small for qr-padding ({qr_padding_in}in each side); "
+                f"need at least {qr_padding_in * 2}in in each dimension"
+            )
         positions = [(mx, my, usable_w, usable_h)]
         c = canvas.Canvas(str(out_path), pagesize=(page_w, page_h))
     else:
