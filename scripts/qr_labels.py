@@ -48,7 +48,11 @@ def load_bin_ids_from_file(path: Path) -> List[str]:
         with path.open(newline="", encoding="utf-8") as f:
             reader = csv.reader(f)
             return [row[0].strip() for row in reader if row and row[0].strip()]
-    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def load_bin_ids_from_db(database_url: str) -> List[str]:
@@ -56,7 +60,9 @@ def load_bin_ids_from_db(database_url: str) -> List[str]:
 
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT bin_id FROM bins WHERE deleted_at IS NULL ORDER BY bin_id")
+            cur.execute(
+                "SELECT bin_id FROM bins WHERE deleted_at IS NULL ORDER BY bin_id"
+            )
             return [row[0] for row in cur.fetchall()]
 
 
@@ -103,8 +109,27 @@ def render_pdf(
         raise ValueError("layout has no positions")
 
     if single_per_page:
-        positions = [(0.0, 0.0, layout.label_width_in * inch, layout.label_height_in * inch)]
-        c = canvas.Canvas(str(out_path), pagesize=(layout.label_width_in * inch, layout.label_height_in * inch))
+        page_w = layout.label_width_in * inch
+        page_h = layout.label_height_in * inch
+        mx = layout.margin_x_in * inch
+        my = layout.margin_y_in * inch
+        usable_w = page_w - 2 * mx
+        usable_h = page_h - 2 * my
+        if usable_w <= 0 or usable_h <= 0:
+            raise ValueError(
+                f"single-per-page margins ({layout.margin_x_in}in x, {layout.margin_y_in}in y) "
+                f"exceed label size ({layout.label_width_in}in x {layout.label_height_in}in)"
+            )
+        qr_pad = qr_padding_in * inch
+        if usable_w <= 2 * qr_pad or usable_h <= 2 * qr_pad:
+            raise ValueError(
+                f"single-per-page usable area after margins "
+                f"({usable_w / inch:.3f}in x {usable_h / inch:.3f}in) "
+                f"is too small for qr-padding ({qr_padding_in}in each side); "
+                f"need at least {qr_padding_in * 2}in in each dimension"
+            )
+        positions = [(mx, my, usable_w, usable_h)]
+        c = canvas.Canvas(str(out_path), pagesize=(page_w, page_h))
     else:
         c = canvas.Canvas(str(out_path), pagesize=letter)
 
@@ -127,7 +152,15 @@ def render_pdf(
 
         qr_x = qr_center_x - (qr_size / 2)
         qr_y = center_y - (qr_size / 2)
-        c.drawImage(img_reader, qr_x, qr_y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask='auto')
+        c.drawImage(
+            img_reader,
+            qr_x,
+            qr_y,
+            width=qr_size,
+            height=qr_size,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
         font_name = FONT_NAME if FONT_PATH.exists() else "Helvetica"
         font_size = max(8, int(h * 0.25))
         max_text_width = w * 0.5
@@ -151,8 +184,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Generate QR label PDFs for bins.")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--input", help="Text or CSV file with bin_ids, one per line/row")
-    src.add_argument("--from-db", action="store_true", help="Load bin_ids from DATABASE_URL")
-    src.add_argument("--sequential", action="store_true", help="Generate sequential bin_ids")
+    src.add_argument(
+        "--from-db", action="store_true", help="Load bin_ids from DATABASE_URL"
+    )
+    src.add_argument(
+        "--sequential", action="store_true", help="Generate sequential bin_ids"
+    )
 
     p.add_argument("--out", required=True, help="Output PDF path")
     p.add_argument("--csv", help="Optional CSV output path")
@@ -165,15 +202,47 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--margin-y", type=float, default=DEFAULT_LAYOUT.margin_y_in)
     p.add_argument("--gap-x", type=float, default=DEFAULT_LAYOUT.gap_x_in)
     p.add_argument("--gap-y", type=float, default=DEFAULT_LAYOUT.gap_y_in)
-    p.add_argument("--qr-padding", type=float, default=0.08, help="Padding inside label in inches")
-    p.add_argument("--start", type=int, default=1, help="Start number for sequential bin_ids")
+    p.add_argument(
+        "--qr-padding", type=float, default=0.08, help="Padding inside label in inches"
+    )
+    p.add_argument(
+        "--start", type=int, default=1, help="Start number for sequential bin_ids"
+    )
     p.add_argument("--count", type=int, help="How many sequential bin_ids to generate")
-    p.add_argument("--end", type=int, help="End number (inclusive) for sequential bin_ids")
+    p.add_argument(
+        "--end", type=int, help="End number (inclusive) for sequential bin_ids"
+    )
     p.add_argument("--prefix", default="BIN-", help="Prefix for sequential bin_ids")
-    p.add_argument("--pad", type=int, default=4, help="Zero padding width for sequential bin_ids")
-    p.add_argument("--single-per-page", action="store_true", help="Render one label per page")
+    p.add_argument(
+        "--pad", type=int, default=4, help="Zero padding width for sequential bin_ids"
+    )
+    p.add_argument(
+        "--single-per-page", action="store_true", help="Render one label per page"
+    )
+    p.add_argument(
+        "--label-printer",
+        action="store_true",
+        help=(
+            "Preset for label printers: 2x1in page, 0.15in margins all sides, "
+            "one label per page. Implies --single-per-page. Uses preset values "
+            "for --label-width, --label-height, --margin-x, and --margin-y "
+            "unless you explicitly provide those options."
+        ),
+    )
 
-    return p.parse_args()
+    args = p.parse_args()
+    if args.label_printer:
+        # Preset — detect what's still at its default so explicit overrides win.
+        if args.label_width == DEFAULT_LAYOUT.label_width_in:
+            args.label_width = 2.0
+        if args.label_height == DEFAULT_LAYOUT.label_height_in:
+            args.label_height = 1.0
+        if args.margin_x == DEFAULT_LAYOUT.margin_x_in:
+            args.margin_x = 0.15
+        if args.margin_y == DEFAULT_LAYOUT.margin_y_in:
+            args.margin_y = 0.15
+        args.single_per_page = True
+    return args
 
 
 def main() -> None:
@@ -192,8 +261,7 @@ def main() -> None:
         else:
             end = args.end
         bin_ids = [
-            f"{args.prefix}{str(i).zfill(args.pad)}"
-            for i in range(args.start, end + 1)
+            f"{args.prefix}{str(i).zfill(args.pad)}" for i in range(args.start, end + 1)
         ]
     elif args.from_db:
         database_url = os.environ.get("DATABASE_URL")

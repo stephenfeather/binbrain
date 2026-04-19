@@ -4,7 +4,7 @@ This script generates a PDF of QR labels sized for 2" x 1" labels on letter pape
 
 ## Install (uv)
 
-```
+```bash
 cd api
 uv sync --extra scripts
 ```
@@ -16,7 +16,7 @@ Font:
 
 From a file of bin_ids:
 
-```
+```bash
 uv run python scripts/qr_labels.py \
   --input bins.txt \
   --out labels.pdf
@@ -24,7 +24,7 @@ uv run python scripts/qr_labels.py \
 
 From the database (uses `DATABASE_URL`):
 
-```
+```bash
 DATABASE_URL=postgresql+psycopg://binbrain:***@127.0.0.1:5432/binbrain \
 uv run python scripts/qr_labels.py \
   --from-db \
@@ -33,7 +33,7 @@ uv run python scripts/qr_labels.py \
 
 Sequential bin_ids:
 
-```
+```bash
 uv run python scripts/qr_labels.py \
   --sequential \
   --start 1 \
@@ -45,7 +45,7 @@ This generates `BIN-0001` through `BIN-0120` by default. Use `--prefix` and `--p
 
 Label printers (one label per page):
 
-```
+```bash
 uv run python scripts/qr_labels.py \
   --sequential \
   --start 1 \
@@ -53,6 +53,27 @@ uv run python scripts/qr_labels.py \
   --out labels.pdf \
   --single-per-page
 ```
+
+Label printer preset (2" x 1" page, 0.15" margins all sides, one label per
+page — ready to feed directly to a thermal label printer):
+
+```bash
+uv run python scripts/qr_labels.py \
+  --sequential \
+  --start 1 \
+  --count 120 \
+  --out labels.pdf \
+  --label-printer
+```
+
+`--label-printer` implies `--single-per-page` and sets label size to 2"x1"
+with 0.15" margins on all sides. Explicit `--label-width`, `--label-height`,
+`--margin-x`, `--margin-y` override the preset when passed.
+
+Note: `--single-per-page` now honors `--margin-x` / `--margin-y` (previously
+hard-coded to 0). Pass `--margin-x 0 --margin-y 0` if you need full-bleed
+labels.
+
 ## Layout Defaults (2" x 1")
 
 - Label size: 2.0" x 1.0"
