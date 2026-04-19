@@ -53,6 +53,27 @@ uv run python scripts/qr_labels.py \
   --out labels.pdf \
   --single-per-page
 ```
+
+Label printer preset (2" x 1" page, 0.15" margins all sides, one label per
+page — ready to feed directly to a thermal label printer):
+
+```
+uv run python scripts/qr_labels.py \
+  --sequential \
+  --start 1 \
+  --count 120 \
+  --out labels.pdf \
+  --label-printer
+```
+
+`--label-printer` implies `--single-per-page` and sets label size to 2"x1"
+with 0.15" margins on all sides. Explicit `--label-width`, `--label-height`,
+`--margin-x`, `--margin-y` override the preset when passed.
+
+Note: `--single-per-page` now honors `--margin-x` / `--margin-y` (previously
+hard-coded to 0). Pass `--margin-x 0 --margin-y 0` if you need full-bleed
+labels.
+
 ## Layout Defaults (2" x 1")
 
 - Label size: 2.0" x 1.0"
