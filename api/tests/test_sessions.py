@@ -852,18 +852,26 @@ def test_open_session_cap_observes_advisory_lock_contention(app_module, db):
             c.post("/sessions", json={})
 
     def _inspect() -> None:
-        deadline = time.monotonic() + 2.0
+        # ApiDev_008d G-2/SEC-37-1: 1ms poll + 3s deadline. The 5ms/2s
+        # combo from PR #37 had symmetric risks — fast dev laptops could
+        # complete the 18 POSTs between polls and miss the race, while
+        # slow CI runners could miss the 2s deadline and flake.
+        # ApiDev_008d G-1/SEC-37-3: classid filter pins this query to the
+        # ('session_create', api_key_id) namespace so a future unrelated
+        # advisory lock elsewhere in the app cannot false-positive here.
+        deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline and not stop.is_set():
             rows = db.execute(
                 text(
                     "SELECT COUNT(*) FROM pg_locks "
-                    "WHERE locktype = 'advisory' AND granted = false"
+                    "WHERE locktype = 'advisory' AND granted = false "
+                    "AND classid::int = hashtext('session_create')"
                 )
             ).scalar_one()
             if rows:
                 observed_waits.append(int(rows))
                 return
-            time.sleep(0.005)
+            time.sleep(0.001)
 
     inspector = threading.Thread(target=_inspect)
     threads = [threading.Thread(target=_fire) for _ in range(6)]
@@ -899,7 +907,15 @@ def test_ingest_race_close_between_validate_and_insert_lands_photo_and_skips_cou
 
     If the architect ever flips to "reject late writes" (close-wins
     returns 400 invalid_session), flip the status_code assertion below —
-    this test becomes the contract-reversal assertion."""
+    this test becomes the contract-reversal assertion.
+
+    SEC-37-4 (PR #37 review): this test's race geometry depends on the
+    current /ingest transaction shape — validate_session_for_ingest
+    returns BEFORE the photo INSERT + commit at bins.py:~296, with no
+    wrapping ``with db.begin():`` around validate+insert. A future refactor
+    that fuses validate + insert into one explicit transaction would block
+    the closer's DELETE on a row lock instead of racing cleanly; the
+    timing-based assertion here must be revisited if that happens."""
     from app.db import repository as real_repo
 
     s = _post_session(client)
@@ -963,21 +979,89 @@ def test_ingest_race_close_between_validate_and_insert_lands_photo_and_skips_cou
 @pytest.mark.parametrize(
     "adjacent_char",
     [
-        "\u2029",  # PARAGRAPH SEPARATOR — just below U+202A (but Zl category; may bounce control-char check)
         "\u202f",  # NARROW NO-BREAK SPACE — just above U+202E
         "\u2065",  # unassigned — just below U+2066
         "\u206a",  # INHIBIT SYMMETRIC SWAPPING — just above U+2069
     ],
 )
 def test_post_sessions_accepts_codepoints_adjacent_to_bidi_blocklist(client, adjacent_char):
-    """G-5 (QA PR #36): off-by-one guard on the Bidi block. If a refactor
-    flips ``<=`` to ``<`` at either endpoint, the real spoofing codepoints
-    (U+202E RLO, U+2069 PDI) slip through while the per-codepoint tests
-    still pass — because those tests hit the exact boundaries. This test
-    asserts the NEIGHBORS are accepted so a one-off drift breaks CI."""
+    """G-5 (QA PR #36) / G-3 comment fix (PR #37 QA): guards against a
+    WIDENING refactor of the Bidi block (e.g. block expanded to include
+    U+202F or another adjacent codepoint). Per-codepoint tests already
+    cover narrowing drift (``<=`` → ``<`` would let U+202E / U+2069 escape
+    those assertions); this test is the symmetric neighbor-accept
+    assertion. U+2029 was removed from this list in ApiDev_008d because
+    SEC-37-2 category-Zl/Zp block now rejects it — see
+    ``test_post_sessions_rejects_line_and_paragraph_separators``."""
     resp = client.post("/sessions", json={"label": f"label{adjacent_char}tail"})
-    # U+2029 is a Unicode line separator (category Zl). Implementation
-    # choice: it's neither a C0 control nor a Bidi override, so the
-    # current validator accepts it. If a future hardening adds a Zl
-    # block, update this test accordingly.
     assert resp.status_code == 201, (adjacent_char.encode("unicode_escape"), resp.text)
+
+
+# --- SEC-37-2: Zl/Zp category block (PR #37 aegis) ------------------------
+
+
+@pytest.mark.parametrize(
+    "zlzp_char",
+    [
+        "\u2028",  # LINE SEPARATOR (category Zl)
+        "\u2029",  # PARAGRAPH SEPARATOR (category Zp)
+    ],
+)
+def test_post_sessions_rejects_line_and_paragraph_separators(client, zlzp_char):
+    """SEC-37-2 (PR #37 aegis): Unicode category Zl (LINE SEPARATOR,
+    U+2028) and Zp (PARAGRAPH SEPARATOR, U+2029) can cause display-layer
+    line breaks in renderers that honor them, producing labels that wrap
+    oddly or hide trailing content. Category-level block is forward-
+    compatible with any future Zl/Zp additions."""
+    resp = client.post("/sessions", json={"label": f"harmless{zlzp_char}text"})
+    assert resp.status_code == 400, resp.text
+
+
+def test_post_sessions_accepts_codepoint_adjacent_to_zl_block(client):
+    """SEC-37-2 neighbor-accept: U+2027 HYPHENATION POINT (category Po)
+    sits immediately below U+2028 Zl. Positive assertion pins the
+    boundary so a future widening (e.g. category-Po also blocked, or a
+    hex-range expansion catching U+2027) breaks CI. Above-boundary
+    neighbor (U+202A) is already rejected by the Bidi block, so only the
+    below-boundary neighbor is meaningful here."""
+    resp = client.post("/sessions", json={"label": "label\u2027tail"})
+    assert resp.status_code == 201, resp.text
+
+
+# --- SEC-37-3: advisory-lock namespace registry CI guard -------------------
+
+
+def test_advisory_lock_namespaces_match_repository_registry():
+    """SEC-37-3 (PR #37 aegis): the registry comment block at the top of
+    repository.py declares every reserved advisory-lock namespace. Until
+    this test landed, that was honor-system — a future contributor could
+    add a ``pg_advisory_*(hashtext('new_ns'), ...)`` call without
+    declaring it, silently risking namespace collision with another
+    caller. This test walks ``api/app/**/*.py``, extracts every
+    ``pg_advisory_*(hashtext('<ns>'), ...)`` namespace string, and asserts
+    each one is declared in the registry comment. Fails loudly on
+    undeclared additions."""
+    import re
+    from pathlib import Path
+
+    app_root = Path(__file__).resolve().parent.parent / "app"
+    call_pattern = re.compile(r"pg_advisory_\w+\(\s*hashtext\(\s*'([^']+)'\s*\)")
+    found: set[str] = set()
+    for py in app_root.rglob("*.py"):
+        for match in call_pattern.finditer(py.read_text(encoding="utf-8")):
+            found.add(match.group(1))
+
+    registry = (app_root / "db" / "repository.py").read_text(encoding="utf-8")
+    # Registry comment block declares reserved namespaces as, e.g.,
+    #   ('session_create', api_key_id)
+    registry_pattern = re.compile(r"#\s+\('([^']+)',")
+    declared: set[str] = set(registry_pattern.findall(registry))
+
+    undeclared = found - declared
+    assert not undeclared, (
+        f"Advisory-lock namespace(s) {sorted(undeclared)} used in app code "
+        f"but NOT declared in the registry comment block in "
+        f"api/app/db/repository.py. Declared: {sorted(declared)}. "
+        f"Every pg_advisory_* call site must add its namespace to the "
+        f"registry before landing (SEC-36-1 / SEC-37-3)."
+    )
