@@ -22,9 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import secrets
 import threading
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -102,10 +100,7 @@ def test_first_post_stores_response_and_replay_returns_it(client, db, valid_jpeg
     assert stored == 1, f"expected 1 idempotency row, got {stored}"
 
     outcome_rows = db.execute(
-        text(
-            "SELECT COUNT(*) FROM photo_suggestion_outcomes "
-            "WHERE photo_id = :pid"
-        ),
+        text("SELECT COUNT(*) FROM photo_suggestion_outcomes " "WHERE photo_id = :pid"),
         {"pid": photo_id},
     ).scalar()
     assert outcome_rows == len(payload["decisions"])
@@ -159,13 +154,14 @@ def test_same_key_different_body_returns_409(client, db, valid_jpeg_bytes):
     assert "request_id" in body["error"]
 
     # State-unchanged guard: still exactly one accepted row, no rejected row.
-    decisions = db.execute(
-        text(
-            "SELECT decision FROM photo_suggestion_outcomes "
-            "WHERE photo_id = :pid"
-        ),
-        {"pid": photo_id},
-    ).scalars().all()
+    decisions = (
+        db.execute(
+            text("SELECT decision FROM photo_suggestion_outcomes " "WHERE photo_id = :pid"),
+            {"pid": photo_id},
+        )
+        .scalars()
+        .all()
+    )
     assert decisions == ["accepted"]
 
 
@@ -181,16 +177,22 @@ def test_different_keys_same_body_both_land(client, db, valid_jpeg_bytes):
     key2 = _new_key()
     assert key1 != key2
 
-    assert client.post(
-        f"/photos/{photo_id}/outcomes",
-        json=payload,
-        headers={"Idempotency-Key": key1},
-    ).status_code == 200
-    assert client.post(
-        f"/photos/{photo_id}/outcomes",
-        json=payload,
-        headers={"Idempotency-Key": key2},
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/photos/{photo_id}/outcomes",
+            json=payload,
+            headers={"Idempotency-Key": key1},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/photos/{photo_id}/outcomes",
+            json=payload,
+            headers={"Idempotency-Key": key2},
+        ).status_code
+        == 200
+    )
 
     stored = db.execute(
         text("SELECT COUNT(*) FROM idempotency_records"),
@@ -246,13 +248,17 @@ def test_expired_record_is_cleaned_lazily(client, db, valid_jpeg_bytes, test_api
     assert r.json() != {"stale": True}
 
     # Exactly one row survives — the fresh one, not the expired one.
-    rows = db.execute(
-        text(
-            "SELECT created_at < now() - interval '1 hour' AS is_stale "
-            "FROM idempotency_records WHERE api_key_id = :k",
-        ),
-        {"k": api_key_id},
-    ).scalars().all()
+    rows = (
+        db.execute(
+            text(
+                "SELECT created_at < now() - interval '1 hour' AS is_stale "
+                "FROM idempotency_records WHERE api_key_id = :k",
+            ),
+            {"k": api_key_id},
+        )
+        .scalars()
+        .all()
+    )
     assert rows == [False]
 
 
@@ -344,10 +350,7 @@ def test_malformed_idempotency_key_returns_400(bad_key, client, db, valid_jpeg_b
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "invalid_idempotency_key"
     # No domain write, no idempotency row.
-    assert (
-        db.execute(text("SELECT COUNT(*) FROM idempotency_records")).scalar()
-        == 0
-    )
+    assert db.execute(text("SELECT COUNT(*) FROM idempotency_records")).scalar() == 0
     assert (
         db.execute(
             text("SELECT COUNT(*) FROM photo_suggestion_outcomes WHERE photo_id = :pid"),
@@ -362,9 +365,7 @@ def test_malformed_idempotency_key_returns_400(bad_key, client, db, valid_jpeg_b
 # ---------------------------------------------------------------------------
 
 
-def test_concurrent_posts_with_same_key_race_one_winner(
-    app_module, valid_jpeg_bytes, test_api_key
-):
+def test_concurrent_posts_with_same_key_race_one_winner(app_module, valid_jpeg_bytes, test_api_key):
     """Two threads POST K+B at the same moment. Exactly one must run the
     domain write (one row in photo_suggestion_outcomes for this photo_id),
     and both clients must observe the same successful response body.
@@ -374,7 +375,7 @@ def test_concurrent_posts_with_same_key_race_one_winner(
     observes either (a) two domain writes, (b) a 409 raised inside the
     would-be winner, or (c) a deadlock hang — all of which fail cleanly.
     """
-    from app.deps import SessionLocal, engine
+    from app.deps import SessionLocal
 
     # Seed photo via a dedicated client (not part of the race).
     seed_client = TestClient(app_module.app)
@@ -413,17 +414,15 @@ def test_concurrent_posts_with_same_key_race_one_winner(
     # ran the domain write; the loser read back the stored response.
     # (A tie at the SQL level is impossible: one txn acquires the advisory
     # lock first, the other blocks then sees the inserted row.)
-    assert replay_flags.count("true") == 1, (
-        f"expected exactly one X-Idempotent-Replay=true, got {replay_flags}"
-    )
+    assert (
+        replay_flags.count("true") == 1
+    ), f"expected exactly one X-Idempotent-Replay=true, got {replay_flags}"
 
     # Domain write ran exactly once.
     db = SessionLocal()
     try:
         outcome_rows = db.execute(
-            text(
-                "SELECT COUNT(*) FROM photo_suggestion_outcomes WHERE photo_id = :pid"
-            ),
+            text("SELECT COUNT(*) FROM photo_suggestion_outcomes WHERE photo_id = :pid"),
             {"pid": photo_id},
         ).scalar()
         idem_rows = db.execute(

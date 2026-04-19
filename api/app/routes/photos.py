@@ -1,4 +1,6 @@
+import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Optional
@@ -732,11 +734,55 @@ def _parse_client_retry_count(raw: str | None) -> int:
     return value
 
 
+# RFC 4122 UUID: 8-4-4-4-12 hex digits, case-insensitive. We normalize to
+# lowercase before storing/comparing so the client's ``.uuidString.lowercased()``
+# round-trips exactly. No trailing whitespace allowed — the regex is anchored.
+_IDEMPOTENCY_KEY_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _validate_idempotency_key(raw: str) -> str:
+    """Return the normalized (lowercase) UUID string, or raise 400.
+
+    SEC-26-3 / ApiDev_idempotency_outcomes. Malformed keys never reach the
+    DB — they are a client bug and we surface them loudly via
+    ``400 invalid_idempotency_key`` so a bad SDK build does not silently
+    lose dedup across an app update.
+    """
+    normalized = raw.lower()
+    if not _IDEMPOTENCY_KEY_RE.match(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_idempotency_key",
+                "message": "Idempotency-Key must be an RFC 4122 UUID",
+            },
+        )
+    return normalized
+
+
+def _api_key_id_from_request(request: Request) -> int:
+    api_key_id = getattr(request.state, "api_key_id", None)
+    if api_key_id is None:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    return int(api_key_id)
+
+
+def _coerce_stored_body(response_body) -> dict:
+    """``response_body`` column is jsonb; psycopg typically returns it as a
+    dict, but fixture-inserted rows (see TTL cleanup test) land as strings.
+    Normalize so the route always emits a dict-shaped body.
+    """
+    if isinstance(response_body, str):
+        return json.loads(response_body)
+    return response_body
+
+
 @router.post("/photos/{photo_id}/outcomes")
-def post_photo_suggestion_outcomes(
+async def post_photo_suggestion_outcomes(
     photo_id: int,
     body: SuggestionOutcomesRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     """Fire-and-forget: record the full user-decision list for a photo's
@@ -751,13 +797,95 @@ def post_photo_suggestion_outcomes(
     ``X-Client-Retry-Count`` (ApiDev2_005, Swift2b-gamma): iOS offline-queue
     telemetry. Persisted to every row in the batch. Missing or malformed
     → 0 (never 400 — this is telemetry, not validation).
+
+    ``Idempotency-Key`` (ApiDev_idempotency_outcomes, SEC-26-3): optional
+    RFC 4122 UUID. When present, the server binds the key to
+    ``SHA-256(raw request body)`` and returns the stored response on a
+    matching replay (with ``X-Idempotent-Replay: true``). Replays with the
+    same key but a different body return ``409 idempotency_key_mismatch``
+    — never silently overwrite. TTL 24h, cleanup lazy-on-write. Absent
+    header → endpoint behaves exactly as pre-feature (no storage, no
+    lookup). See ``repository.store_idempotent_response`` for the
+    race-serialization contract.
     """
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
 
     client_retry_count = _parse_client_retry_count(request.headers.get("x-client-retry-count"))
+
+    raw_idempotency_key = request.headers.get("idempotency-key")
+    idempotency_key: str | None = None
+    body_sha256: bytes | None = None
+    api_key_id: int | None = None
+
+    if raw_idempotency_key is not None:
+        idempotency_key = _validate_idempotency_key(raw_idempotency_key)
+        api_key_id = _api_key_id_from_request(request)
+        # Hash the raw bytes FastAPI already consumed. request.body() is
+        # cached internally so this second call does not hang the stream.
+        raw_bytes = await request.body()
+        body_sha256 = repository.hash_canonical_body(raw_bytes)
+
+        # Pre-lock fast path — steady-state crash-reclaim replays avoid
+        # every single advisory lock acquisition.
+        existing = repository.fetch_idempotent_record(db, api_key_id, idempotency_key)
+        if existing is not None:
+            if bytes(existing["body_sha256"]) != body_sha256:
+                logger.warning(
+                    "event=idempotency_key_mismatch request_id=%s api_key_id=%s key=%s",
+                    db.info.get("request_id") if db.info else None,
+                    api_key_id,
+                    idempotency_key,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "idempotency_key_mismatch",
+                        "message": (
+                            "request body differs from prior submission "
+                            "under this Idempotency-Key"
+                        ),
+                    },
+                )
+            response.headers["X-Idempotent-Replay"] = "true"
+            response.status_code = int(existing["response_status"])
+            return _coerce_stored_body(existing["response_body"])
+
     decisions = [d.model_dump() for d in body.decisions]
     try:
+        if idempotency_key is not None:
+            assert api_key_id is not None and body_sha256 is not None
+            # Serialize concurrent first-sighting attempts: only one txn
+            # per api_key can be mid-insert on the same key.
+            repository.acquire_idempotency_lock(db, api_key_id)
+            # Under the lock, re-check: a racing peer may have committed
+            # between the pre-check and the lock wait.
+            existing = repository.fetch_idempotent_record(db, api_key_id, idempotency_key)
+            if existing is not None:
+                if bytes(existing["body_sha256"]) != body_sha256:
+                    logger.warning(
+                        "event=idempotency_key_mismatch request_id=%s api_key_id=%s key=%s",
+                        db.info.get("request_id") if db.info else None,
+                        api_key_id,
+                        idempotency_key,
+                    )
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "idempotency_key_mismatch",
+                            "message": (
+                                "request body differs from prior submission "
+                                "under this Idempotency-Key"
+                            ),
+                        },
+                    )
+                response.headers["X-Idempotent-Replay"] = "true"
+                response.status_code = int(existing["response_status"])
+                # Commit releases the advisory lock; no domain write ran.
+                db.commit()
+                return _coerce_stored_body(existing["response_body"])
+
         repository.replace_photo_suggestion_outcomes(
             db,
             photo_id=photo_id,
@@ -766,7 +894,25 @@ def post_photo_suggestion_outcomes(
             decisions=decisions,
             client_retry_count=client_retry_count,
         )
+        response_body = {
+            "version": "1",
+            "photo_id": photo_id,
+            "outcomes_recorded": len(decisions),
+        }
+        if idempotency_key is not None:
+            assert api_key_id is not None and body_sha256 is not None
+            repository.store_idempotent_response(
+                db,
+                api_key_id=api_key_id,
+                key=idempotency_key,
+                body_sha256=body_sha256,
+                response_status=200,
+                response_body=response_body,
+            )
         db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         logger.exception(
@@ -777,15 +923,13 @@ def post_photo_suggestion_outcomes(
         raise HTTPException(status_code=500, detail="internal error") from None
 
     logger.info(
-        "event=photo_outcomes request_id=%s photo_id=%s model=%s count=%s " "client_retry_count=%s",
+        "event=photo_outcomes request_id=%s photo_id=%s model=%s count=%s "
+        "client_retry_count=%s idempotency_key=%s",
         db.info.get("request_id") if db.info else None,
         photo_id,
         body.vision_model,
         len(decisions),
         client_retry_count,
+        idempotency_key,
     )
-    return {
-        "version": "1",
-        "photo_id": photo_id,
-        "outcomes_recorded": len(decisions),
-    }
+    return response_body
