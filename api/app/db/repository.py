@@ -31,9 +31,10 @@ logger = logging.getLogger("binbrain")
 #       cannot be breached under concurrent bursts. Scoped per-owner
 #       so cross-owner session creation is NOT serialized.
 #
-# Optional future guard: a CI grep test that walks ``*.py`` looking for
-# ``pg_advisory_`` calls and asserts every first argument appears in this
-# comment block. Not implemented today; namespace list above is authoritative.
+# CI guard (SEC-37-3): ``test_advisory_lock_namespaces_match_repository_registry``
+# (in ``api/tests/test_sessions.py``) walks ``api/app/**/*.py``, extracts every
+# ``pg_advisory_*(hashtext('<ns>'), ...)`` namespace, and asserts each one
+# appears as ``('<ns>',`` in this comment block. Undeclared additions fail CI.
 # ---------------------------------------------------------------------------
 
 

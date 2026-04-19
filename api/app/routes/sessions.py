@@ -9,6 +9,8 @@ Plan doc: thoughts/shared/plans/2026-04-19-session-id-explicit-boundary.md
 
 from __future__ import annotations
 
+import unicodedata
+
 from app.db import repository
 from app.deps import get_db, logger
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -39,6 +41,11 @@ def _validate_label(label: str | None) -> str | None:
       where a label rendered in the owner's Settings UI shows different
       glyphs than the stored bytes. Low blast radius (labels render only
       to the owner) but trivial to close.
+    - No Unicode category Zl (LINE SEPARATOR) or Zp (PARAGRAPH SEPARATOR)
+      codepoints. ApiDev_008d SEC-37-2: Zl/Zp (currently U+2028, U+2029)
+      can cause display-layer line breaks in renderers that honor them,
+      producing labels that wrap oddly or hide trailing content. Category-
+      level block is forward-compatible with any future Zl/Zp additions.
     """
     if label is None:
         return None
@@ -61,6 +68,11 @@ def _validate_label(label: str | None) -> str | None:
             raise HTTPException(
                 status_code=400,
                 detail="label must not contain Unicode Bidi override codepoints",
+            )
+        if unicodedata.category(c) in ("Zl", "Zp"):
+            raise HTTPException(
+                status_code=400,
+                detail="label must not contain Unicode line/paragraph separators",
             )
     return label
 
