@@ -136,9 +136,16 @@ def test_ingest_records_null_dimensions_when_pil_fails(client, db, monkeypatch, 
 
 
 def test_ingest_persists_session_id_when_provided(client, db, valid_jpeg_bytes):
+    # ApiDev_008 (Q-session-id): session_id is now a server-minted UUID.
+    # The legacy "sess-abc123" free-form string no longer round-trips —
+    # /ingest rejects any session_id that is not a known-open session owned
+    # by the caller (400 invalid_session). Mint a real session first.
+    session = client.post("/sessions", json={}).json()["session"]
+    session_id = session["session_id"]
+
     r = client.post(
         "/ingest",
-        data={"bin_id": "BIN-SESS-0001", "session_id": "sess-abc123"},
+        data={"bin_id": "BIN-SESS-0001", "session_id": session_id},
         files={"photos": ("photo.jpg", valid_jpeg_bytes, "image/jpeg")},
     )
     assert r.status_code == 200, r.text
@@ -148,7 +155,7 @@ def test_ingest_persists_session_id_when_provided(client, db, valid_jpeg_bytes):
         text("SELECT session_id FROM photos WHERE photo_id = :pid"),
         {"pid": photo_id},
     ).scalar()
-    assert sid == "sess-abc123"
+    assert sid == session_id
 
 
 def test_ingest_session_id_is_optional(client, db, valid_jpeg_bytes):
