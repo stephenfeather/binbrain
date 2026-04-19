@@ -173,16 +173,22 @@ def associate_item(
         repository.ensure_bin_active_or_create(db, bin_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="bin not found") from None
-    repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
+    # ApiDev2_013: ``insert_bin_item`` already uses ``ON CONFLICT DO
+    # NOTHING RETURNING id`` and returns True on first insert, False on a
+    # unique-constraint hit. Surface that flag so iOS can render a
+    # "already in bin" signal instead of a silent drop. No schema or
+    # behavior change — the on-conflict branch still updates nothing.
+    inserted = repository.insert_bin_item(db, bin_id, item_id, confidence, quantity)
     db.commit()
 
     logger.info(
-        "event=item_associate request_id=%s bin_id=%s item_id=%s",
+        "event=item_associate request_id=%s bin_id=%s item_id=%s inserted=%s",
         db.info.get("request_id"),
         bin_id,
         item_id,
+        inserted,
     )
-    return {"ok": True, "bin_id": bin_id, "item_id": item_id}
+    return {"ok": True, "bin_id": bin_id, "item_id": item_id, "inserted": inserted}
 
 
 @router.get("/search")
