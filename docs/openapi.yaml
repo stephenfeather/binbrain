@@ -244,11 +244,17 @@ components:
     # Associate
     AssociateResponse:
       type: object
-      required: [ok, bin_id, item_id]
+      required: [ok, bin_id, item_id, inserted]
       properties:
         ok:      { type: boolean, const: true }
         bin_id:  { type: string }
         item_id: { type: integer, minimum: 1 }
+        inserted:
+          type: boolean
+          description: >
+            true if a new bin_items row was created; false if the (bin_id, item_id)
+            pair already existed and the request was idempotent (no change to
+            existing confidence or quantity). ApiDev2_013.
       additionalProperties: false
 
     # Bins
@@ -1127,7 +1133,9 @@ paths:
       description: |
         Links an already-created item to a bin. Use this when the item already
         exists and you only need to record its presence in a different bin.
-        Duplicate associations are silently ignored (`ON CONFLICT DO NOTHING`).
+        Duplicate associations are silently ignored (`ON CONFLICT DO NOTHING`);
+        the `inserted` response flag distinguishes fresh inserts from idempotent
+        no-ops so clients can surface a "already in bin" signal.
       requestBody:
         required: true
         content:
@@ -1161,6 +1169,7 @@ paths:
                 ok: true
                 bin_id: "B-42"
                 item_id: 12
+                inserted: true
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
