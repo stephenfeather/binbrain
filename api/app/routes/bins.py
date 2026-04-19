@@ -4,7 +4,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import aiofiles
 from app.db import repository
@@ -23,10 +23,10 @@ from app.security import validate_bin_id
 from app.services.image_validation import validate_image_file
 from app.services.metadata_schema import validate_device_metadata
 from app.services.upc_lookup import validate_upc
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 # Dev2_016: session_id is client-supplied, opaque, length-capped. Reject
@@ -521,50 +521,169 @@ def remove_item_from_bin(
     return {"version": "1", "bin_id": bin_id, "item_id": item_id, "removed": True}
 
 
-@router.patch("/bins/{bin_id}/items/{item_id}")
+class PatchBinItemRequest(BaseModel):
+    """FEAT-2-backend body. All fields optional; ``minProperties: 1``
+    asserted via ``@model_validator`` below. ``extra='forbid'`` rejects
+    unknown fields with Pydantic's validation error (→ 400 bad_request
+    via the global handler). ``bin_id`` is the TARGET bin on a move; if
+    omitted or equal to the path ``bin_id`` the association stays in
+    place (spec 1449-1456)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    quantity: float | None = Field(default=None, ge=0)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    bin_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "PatchBinItemRequest":
+        if self.quantity is None and self.confidence is None and self.bin_id is None:
+            raise ValueError("At least one of 'quantity', 'confidence', or 'bin_id' is required")
+        return self
+
+
+class PatchBinItemResponse(BaseModel):
+    version: Literal["1"] = "1"
+    bin_id: str
+    item_id: int
+    quantity: float | None
+    confidence: float | None
+    moved: bool
+
+
+@router.patch("/bins/{bin_id}/items/{item_id}", response_model=PatchBinItemResponse)
 def update_item_in_bin(
     bin_id: str,
     item_id: int,
-    payload: dict = Body(...),
+    body: PatchBinItemRequest,
     db: Session = Depends(get_db),
 ):
-    bin_id = (bin_id or "").strip()
-    if not bin_id:
-        raise HTTPException(status_code=400, detail="bin_id is required")
+    """FEAT-2-backend (ApiDev2_012). In-place update OR atomic move.
+
+    Modes (from the body):
+    - ``quantity`` / ``confidence`` only → in-place UPDATE on ``bin_items``.
+    - ``bin_id`` present and != path → move row from source to target,
+      carrying over or overriding ``quantity`` / ``confidence``.
+    - ``bin_id`` == path → treated as in-place (``moved: false``);
+      a supplied ``bin_id`` alone with no override is a no-op.
+    """
+    bin_id = _check_bin_id(bin_id)
 
     if not repository.bin_exists(db, bin_id):
-        raise HTTPException(status_code=404, detail="bin not found")
-
-    quantity = payload.get("quantity")
-    confidence = payload.get("confidence")
-
-    if quantity is None and confidence is None:
         raise HTTPException(
-            status_code=400, detail="at least one of quantity or confidence is required"
+            status_code=404,
+            detail={"code": "bin_not_found", "message": "bin not found"},
         )
 
-    updated = repository.update_bin_item(
-        db, bin_id, item_id, quantity=quantity, confidence=confidence
-    )
-    if not updated:
-        raise HTTPException(status_code=404, detail="item not in bin")
+    target_bin = body.bin_id
+    is_move = target_bin is not None and target_bin != bin_id
 
+    if is_move:
+        # Validate target bin_id with the same regex as the path bin_id
+        # (SEC: reject path separators / dots before reaching the DB).
+        target_bin = _check_bin_id(target_bin)
+        result = repository.move_bin_item(
+            db,
+            source_bin_id=bin_id,
+            target_bin_id=target_bin,
+            item_id=item_id,
+            quantity_override=body.quantity,
+            confidence_override=body.confidence,
+        )
+        if isinstance(result, str):
+            db.rollback()
+            if result == repository.MOVE_ERR_TARGET_ALREADY_HAS_ITEM:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": result,
+                        "message": (
+                            "Target bin already contains this item; delete or "
+                            "update the existing association before moving."
+                        ),
+                    },
+                )
+            # MOVE_ERR_ITEM_NOT_FOUND_IN_SOURCE | MOVE_ERR_TARGET_BIN_NOT_FOUND
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": result,
+                    "message": (
+                        "Item not found in source bin"
+                        if result == repository.MOVE_ERR_ITEM_NOT_FOUND_IN_SOURCE
+                        else "Target bin not found"
+                    ),
+                },
+            )
+
+        db.commit()
+        logger.info(
+            "event=bin_item_move request_id=%s source=%s target=%s item_id=%s",
+            db.info.get("request_id"),
+            bin_id,
+            target_bin,
+            item_id,
+        )
+        return PatchBinItemResponse(
+            bin_id=result["bin_id"],
+            item_id=int(result["item_id"]),
+            quantity=result["quantity"],
+            confidence=result["confidence"],
+            moved=True,
+        )
+
+    # In-place path. ``target_bin == path bin_id`` is treated here as
+    # "no-op move" — apply any quantity/confidence overrides and return
+    # moved: false. If neither override is set, the UPDATE is skipped.
+    if body.quantity is not None or body.confidence is not None:
+        updated = repository.update_bin_item(
+            db,
+            bin_id,
+            item_id,
+            quantity=body.quantity,
+            confidence=body.confidence,
+        )
+        if not updated:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "item_not_found_in_source_bin",
+                    "message": "Item not found in source bin",
+                },
+            )
+    else:
+        # body.bin_id == path and no overrides — pure no-op. Still must
+        # 404 if the row doesn't exist so callers can't treat the PATCH
+        # as a silent success on a missing row.
+        if repository.get_bin_item(db, bin_id, item_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "item_not_found_in_source_bin",
+                    "message": "Item not found in source bin",
+                },
+            )
+
+    row = repository.get_bin_item(db, bin_id, item_id)
+    # ``row`` is guaranteed non-None here (either the UPDATE succeeded or
+    # the no-op branch already confirmed the row exists).
+    assert row is not None
     db.commit()
     logger.info(
         "event=bin_item_update request_id=%s bin_id=%s item_id=%s quantity=%s confidence=%s",
         db.info.get("request_id"),
         bin_id,
         item_id,
-        quantity,
-        confidence,
+        body.quantity,
+        body.confidence,
     )
-    return {
-        "version": "1",
-        "bin_id": bin_id,
-        "item_id": item_id,
-        "quantity": quantity,
-        "confidence": confidence,
-    }
+    return PatchBinItemResponse(
+        bin_id=bin_id,
+        item_id=int(row["item_id"]),
+        quantity=row["quantity"],
+        confidence=row["confidence"],
+        moved=False,
+    )
 
 
 @router.delete("/bins/{bin_id}")

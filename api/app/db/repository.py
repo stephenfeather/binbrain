@@ -319,6 +319,129 @@ def update_bin_item(
     return res.scalar() is not None
 
 
+def get_bin_item(db: Session, bin_id: str, item_id: int) -> dict | None:
+    """Return the ``bin_items`` row for ``(bin_id, item_id)`` or ``None``.
+
+    FEAT-2-backend: the PATCH route's response needs the effective row
+    values (post-update for in-place, post-insert for move) — the spec's
+    ``quantity`` / ``confidence`` are nullable and must reflect what the
+    row actually holds, not just the supplied overrides.
+    """
+    row = (
+        db.execute(
+            text(
+                "SELECT bin_id, item_id, quantity, confidence "
+                "FROM bin_items WHERE bin_id = :b AND item_id = :i"
+            ),
+            {"b": bin_id, "i": item_id},
+        )
+        .mappings()
+        .first()
+    )
+    return dict(row) if row else None
+
+
+# Sentinel error codes returned by ``move_bin_item`` — short, stable
+# strings that the route maps 1-to-1 to HTTP envelope codes.
+MOVE_ERR_ITEM_NOT_FOUND_IN_SOURCE = "item_not_found_in_source_bin"
+MOVE_ERR_TARGET_BIN_NOT_FOUND = "target_bin_not_found"
+MOVE_ERR_TARGET_ALREADY_HAS_ITEM = "target_already_has_item"
+
+
+def move_bin_item(
+    db: Session,
+    *,
+    source_bin_id: str,
+    target_bin_id: str,
+    item_id: int,
+    quantity_override: Optional[float] = None,
+    confidence_override: Optional[float] = None,
+) -> dict | str:
+    """Atomically move one ``bin_items`` row from source to target.
+
+    FEAT-2-backend (ApiDev2_012). Returns the effective target row on
+    success; returns one of the ``MOVE_ERR_*`` sentinel strings on a
+    validation failure (caller renders the 404/409 envelope).
+
+    Transaction shape (all inside the caller's open transaction so the
+    route commits once on success):
+
+    1. ``SELECT ... FROM bin_items WHERE bin_id=:source AND item_id=:i
+       FOR UPDATE`` — row-lock the source row; missing -> NOT_FOUND.
+    2. ``SELECT 1 FROM bins WHERE bin_id=:target AND deleted_at IS NULL``
+       — verify target is active; missing -> TARGET_NOT_FOUND.
+    3. Advisory pre-check on ``bin_items`` for the target; already
+       present -> ALREADY_HAS_ITEM.
+    4. ``DELETE FROM bin_items WHERE bin_id=:source AND item_id=:i``.
+    5. ``INSERT INTO bin_items ...`` with overrides applied. An
+       ``IntegrityError`` on ``bin_items_unique`` (racing concurrent
+       move that committed between step 3 and step 5) is caught and
+       translated to ALREADY_HAS_ITEM. The caller must ``db.rollback()``
+       on any sentinel return.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    source_row = (
+        db.execute(
+            text(
+                "SELECT quantity, confidence FROM bin_items "
+                "WHERE bin_id = :src AND item_id = :i FOR UPDATE"
+            ),
+            {"src": source_bin_id, "i": item_id},
+        )
+        .mappings()
+        .first()
+    )
+    if source_row is None:
+        return MOVE_ERR_ITEM_NOT_FOUND_IN_SOURCE
+
+    target_active = db.execute(
+        text("SELECT 1 FROM bins WHERE bin_id = :tgt AND deleted_at IS NULL"),
+        {"tgt": target_bin_id},
+    ).first()
+    if target_active is None:
+        return MOVE_ERR_TARGET_BIN_NOT_FOUND
+
+    existing_target = db.execute(
+        text("SELECT 1 FROM bin_items WHERE bin_id = :tgt AND item_id = :i"),
+        {"tgt": target_bin_id, "i": item_id},
+    ).first()
+    if existing_target is not None:
+        return MOVE_ERR_TARGET_ALREADY_HAS_ITEM
+
+    new_quantity = quantity_override if quantity_override is not None else source_row["quantity"]
+    new_confidence = (
+        confidence_override if confidence_override is not None else source_row["confidence"]
+    )
+
+    db.execute(
+        text("DELETE FROM bin_items WHERE bin_id = :src AND item_id = :i"),
+        {"src": source_bin_id, "i": item_id},
+    )
+    try:
+        db.execute(
+            text(
+                "INSERT INTO bin_items (bin_id, item_id, quantity, confidence) "
+                "VALUES (:tgt, :i, :q, :c)"
+            ),
+            {
+                "tgt": target_bin_id,
+                "i": item_id,
+                "q": new_quantity,
+                "c": new_confidence,
+            },
+        )
+    except IntegrityError:
+        return MOVE_ERR_TARGET_ALREADY_HAS_ITEM
+
+    return {
+        "bin_id": target_bin_id,
+        "item_id": item_id,
+        "quantity": new_quantity,
+        "confidence": new_confidence,
+    }
+
+
 def insert_photo(
     db: Session,
     bin_id: str,
