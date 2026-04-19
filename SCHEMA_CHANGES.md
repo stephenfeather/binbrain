@@ -1,6 +1,13 @@
 # Schema Changes
 
 ## 2026-04-19
+- ApiDev_idempotency_outcomes (SEC-26-3): new `idempotency_records` table —
+  composite PK `(api_key_id, key)`, `body_sha256 bytea`, `response_status int`,
+  `response_body jsonb`, `created_at timestamptz`. Powers server-side
+  Idempotency-Key dedup on `POST /photos/{id}/outcomes` with 24h TTL and
+  lazy-on-write cleanup scoped to the current api_key.
+  - Migration: `migrations/2026-04-19d_idempotency_records.sql`
+
 - ApiDev2_005 (Swift2b-γ offline outcomes): add `client_retry_count int` to
   `photo_suggestion_outcomes`. Populated from `X-Client-Retry-Count` request
   header on `POST /photos/{id}/outcomes`. NULL for historical rows;

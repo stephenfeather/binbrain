@@ -129,6 +129,8 @@ components:
                 # status→code map for client-facing precision).
                 - cannot_delete_sentinel
                 - invalid_session
+                - invalid_idempotency_key
+                - idempotency_key_mismatch
             message:    { type: string }
             details:    { description: "Structured validation details (present on 400 only)." }
             request_id: { type: string }
@@ -2001,6 +2003,21 @@ paths:
             type: integer
             minimum: 0
             default: 0
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            Optional RFC 4122 UUID. When present, the server binds the
+            key to `SHA-256(raw request body)` and returns the stored
+            response verbatim on a matching replay
+            (`X-Idempotent-Replay: true`). Replays with the same key but
+            a different body return `409 idempotency_key_mismatch` —
+            never silently overwrite (SEC-26-3). TTL 24h; cleanup is
+            lazy-on-write and scoped per api_key. Missing header →
+            endpoint behaves exactly as pre-feature (no dedup).
+          schema:
+            type: string
+            format: uuid
       requestBody:
         required: true
         content:
@@ -2018,6 +2035,14 @@ paths:
           description: Outcomes recorded (or idempotently replaced).
           headers:
             x-request-id: { $ref: "#/components/headers/XRequestId" }
+            X-Idempotent-Replay:
+              description: |
+                Present and set to `true` when this response was replayed
+                from a prior `(api_key_id, Idempotency-Key, body hash)`
+                match. Absent on first-sighting responses.
+              schema:
+                type: string
+                enum: ["true"]
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuggestionOutcomesResponse" }
@@ -2027,6 +2052,16 @@ paths:
                 outcomes_recorded: 3
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            Idempotency-Key collision — same key, different body
+            (SEC-26-3). Error code `idempotency_key_mismatch`. No state
+            mutation occurred.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   # ── Models ──────────────────────────────────────────────────────────────────
