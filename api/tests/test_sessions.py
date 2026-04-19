@@ -406,3 +406,70 @@ def test_sessions_routes_require_api_key(app_module):
     ]:
         resp = bare.request(method, url)
         assert resp.status_code == 401, f"{method} {url} -> {resp.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# QA PR #35 follow-ups
+#   F-2 — Trigger AFTER DELETE on legacy non-UUID / empty session_id.
+#   F-3 — 410 already-closed response body uses stable "session_closed" code.
+# ---------------------------------------------------------------------------
+
+
+def test_trigger_allows_delete_of_legacy_non_uuid_photo_row(client, db):
+    """Phase-1 photos.session_id can be any text. The AFTER DELETE trigger
+    must ignore non-UUID values silently, not block the DELETE."""
+    db.execute(text("INSERT INTO bins (bin_id) VALUES ('BIN-LEGACY-DEL')"))
+    db.execute(
+        text(
+            "INSERT INTO photos (bin_id, path, session_id) "
+            "VALUES ('BIN-LEGACY-DEL', '/tmp/legacy-del.jpg', 'pre-uuid-client-token')"
+        )
+    )
+    db.commit()
+
+    photo_id = db.execute(
+        text("SELECT photo_id FROM photos WHERE session_id = 'pre-uuid-client-token'")
+    ).scalar_one()
+
+    # Must NOT raise — a regression in the DELETE-branch EXCEPTION handler
+    # would propagate invalid_text_representation and abort.
+    db.execute(text("DELETE FROM photos WHERE photo_id = :p"), {"p": photo_id})
+    db.commit()
+
+    assert (
+        db.execute(
+            text("SELECT COUNT(*) FROM photos WHERE photo_id = :p"), {"p": photo_id}
+        ).scalar_one()
+        == 0
+    )
+
+
+def test_trigger_allows_delete_of_empty_string_session_id(client, db):
+    """Defensive: the trigger's <> '' guard should also cover deletes.
+    Empty-string session_id is not expected in production but has been seen
+    in test fixtures historically."""
+    db.execute(text("INSERT INTO bins (bin_id) VALUES ('BIN-EMPTY-DEL')"))
+    db.execute(
+        text(
+            "INSERT INTO photos (bin_id, path, session_id) "
+            "VALUES ('BIN-EMPTY-DEL', '/tmp/empty.jpg', '')"
+        )
+    )
+    db.commit()
+    # Must not raise.
+    db.execute(text("DELETE FROM photos WHERE bin_id = 'BIN-EMPTY-DEL'"))
+    db.commit()
+
+
+def test_delete_sessions_410_body_uses_session_closed_code(client):
+    """QA F-3: 410 response body must carry a stable, meaningful error code
+    so idempotent clients don't alert on what is by contract a benign
+    no-op (double-close from offline queue retry)."""
+    s = _post_session(client)
+    assert client.delete(f"/sessions/{s['session_id']}").status_code == 200
+    resp = client.delete(f"/sessions/{s['session_id']}")
+    assert resp.status_code == 410
+    body = resp.json()
+    assert body["version"] == "1"
+    assert body["error"]["code"] == "session_closed", body
+    assert "already" in body["error"]["message"].lower()

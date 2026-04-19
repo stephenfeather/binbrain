@@ -261,6 +261,11 @@ async def http_exception_handler(request: Request, exc):
         403: "forbidden",
         404: "not_found",
         409: "conflict",
+        # QA F-3 fix: give 410 its own stable code so idempotent clients
+        # (e.g. iOS SessionManager closing an already-closed session via the
+        # offline queue) don't see misleading ``internal_error`` and alert
+        # on what is, by contract, a benign no-op.
+        410: "session_closed",
         413: "payload_too_large",
         415: "unsupported_media_type",
         429: "rate_limited",
