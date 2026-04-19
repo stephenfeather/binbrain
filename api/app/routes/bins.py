@@ -24,6 +24,7 @@ from app.services.image_validation import validate_image_file
 from app.services.metadata_schema import validate_device_metadata
 from app.services.upc_lookup import validate_upc
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -547,6 +548,63 @@ def update_item_in_bin(
         "item_id": item_id,
         "quantity": quantity,
         "confidence": confidence,
+    }
+
+
+@router.delete("/bins/{bin_id}")
+def delete_bin(
+    bin_id: str,
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a bin and reattribute its items to UNASSIGNED.
+
+    FEAT-4-route. Calls ``reattribute_bin_items_to_unassigned`` (PR #28),
+    then stamps ``deleted_at = now()`` on the bin row in the same
+    transaction. The sentinel ``UNASSIGNED`` is preempted with a clean
+    400 + custom error code so the protective trigger never fires.
+    """
+    bin_id = (bin_id or "").strip()
+    if not bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+
+    if bin_id == repository.UNASSIGNED_BIN_ID:
+        # Preempt the protect_unassigned_bin trigger with a stable,
+        # client-facing error code. The global HTTPException handler maps
+        # 400 → "bad_request" by default; this branch needs a more specific
+        # code so we render the envelope inline.
+        return JSONResponse(
+            status_code=400,
+            content={
+                "version": "1",
+                "error": {
+                    "code": "cannot_delete_sentinel",
+                    "message": "The UNASSIGNED bin cannot be deleted.",
+                    "request_id": db.info.get("request_id"),
+                },
+            },
+            headers={"x-request-id": db.info.get("request_id") or ""},
+        )
+
+    moved_item_count = repository.reattribute_bin_items_to_unassigned(db, bin_id)
+    deleted_at = repository.soft_delete_bin(db, bin_id)
+    if deleted_at is None:
+        # Bin was missing or already soft-deleted. Roll back the (no-op or
+        # already-applied) reattribute so the partial work doesn't commit.
+        db.rollback()
+        raise HTTPException(status_code=404, detail="bin not found")
+
+    db.commit()
+    logger.info(
+        "event=bin_delete request_id=%s bin_id=%s moved_item_count=%s",
+        db.info.get("request_id"),
+        bin_id,
+        moved_item_count,
+    )
+    return {
+        "status": "deleted",
+        "bin_id": bin_id,
+        "moved_item_count": moved_item_count,
+        "deleted_at": deleted_at.isoformat(),
     }
 
 
