@@ -222,9 +222,7 @@ async def ingest(
                 status_code=400,
                 detail={
                     "code": "invalid_session",
-                    "message": (
-                        "Session not found, not yours, or already closed"
-                    ),
+                    "message": ("Session not found, not yours, or already closed"),
                 },
             )
     else:

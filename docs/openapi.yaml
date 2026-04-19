@@ -128,6 +128,7 @@ components:
                 # Endpoint-specific codes (handlers bypass the default
                 # status→code map for client-facing precision).
                 - cannot_delete_sentinel
+                - invalid_session
             message:    { type: string }
             details:    { description: "Structured validation details (present on 400 only)." }
             request_id: { type: string }
@@ -157,6 +158,61 @@ components:
             Role of the authenticated API key. Present only when
             `auth_ok` is `true`.
       additionalProperties: true
+
+    # Sessions (ApiDev_008 — Q-session-id explicit boundary)
+    Session:
+      type: object
+      required: [session_id, started_at, ended_at, label, photo_count]
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          description: Server-assigned UUID.
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: ["string", "null"]
+          format: date-time
+          description: Null while the session is open; set by DELETE /sessions/{id}.
+        label:
+          type: ["string", "null"]
+          maxLength: 120
+        photo_count:
+          type: integer
+          minimum: 0
+          description: |
+            Denormalized count of photos currently attributing to this session,
+            maintained by the `photos_update_session_photo_count` trigger.
+      additionalProperties: false
+
+    CreateSessionRequest:
+      type: object
+      properties:
+        label:
+          type: ["string", "null"]
+          maxLength: 120
+          description: |
+            Optional human-readable name. Must not contain control characters.
+      additionalProperties: false
+
+    SessionResponse:
+      type: object
+      required: [version, session]
+      properties:
+        version: { type: string, enum: ["1"] }
+        session: { $ref: "#/components/schemas/Session" }
+      additionalProperties: false
+
+    SessionListResponse:
+      type: object
+      required: [version, sessions]
+      properties:
+        version:  { type: string, enum: ["1"] }
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/Session" }
+      additionalProperties: false
 
     # Ingest
     IngestResponse:
@@ -803,12 +859,16 @@ paths:
                   maxLength: 128
                   pattern: "^[\\x20-\\x7E]*$"
                   description: >
-                    Optional opaque client-supplied identifier grouping
-                    photos taken during a single cataloging session.
-                    Printable ASCII only, at most 128 characters. Stored
-                    verbatim on each photo row; no server-side uniqueness
-                    constraint. Intended for training-signal multi-view
-                    correlation.
+                    Server-minted session UUID obtained from `POST /sessions`.
+                    The server validates that the session exists, belongs to
+                    the caller's api key, and has not been closed. Any of
+                    those failures returns 400 with `error.code =
+                    "invalid_session"` (same code in all three cases to
+                    prevent cross-owner enumeration). Legacy clients may
+                    still omit this field — the photo row simply carries a
+                    NULL session_id. Printable ASCII only, at most 128
+                    characters (historical cap, predates the UUID
+                    requirement).
       responses:
         "200":
           description: Photos saved and associated with the bin.
@@ -825,6 +885,128 @@ paths:
                   - { photo_id: 8, url: "/photos/8/file" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Sessions ────────────────────────────────────────────────────────────────
+  /sessions:
+    post:
+      summary: Open a new cataloging session
+      operationId: createSession
+      tags: [Sessions]
+      description: |
+        Server mints a new session UUID. The caller owns it (scoped by API
+        key) and is the only key that can attach photos to it, close it, or
+        list it. Returns 429 if the caller already has 20 open sessions.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSessionRequest" }
+      responses:
+        "201":
+          description: Session created.
+          headers:
+            x-request-id: { $ref: "#/components/headers/XRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429":
+          description: |
+            Caller already has 20 open sessions. Close an existing session
+            before opening a new one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      summary: List caller's sessions
+      operationId: listSessions
+      tags: [Sessions]
+      description: |
+        Paginated list of the authenticated key's sessions, ordered by
+        `started_at DESC`. Other keys' sessions are never returned.
+      parameters:
+        - in: query
+          name: state
+          required: false
+          schema:
+            type: string
+            enum: [open, closed, all]
+            default: all
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - in: query
+          name: offset
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Session list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionListResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /sessions/{session_id}:
+    get:
+      summary: Fetch a caller's session by id
+      operationId: getSession
+      tags: [Sessions]
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Session row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: |
+            Session does not exist OR belongs to a different API key.
+            Returned identically in both cases so existence cannot be
+            enumerated across owners.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    delete:
+      summary: Close a session
+      operationId: endSession
+      tags: [Sessions]
+      description: |
+        Sets `ended_at = now()` on the session. Returns 410 if it was already
+        closed (idempotent clients may treat 404/410 as success). Returns 404
+        if the session does not exist OR belongs to a different API key.
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Session closed; ended_at is now populated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Session not found OR not yours.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: Session already closed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   # ── Items ───────────────────────────────────────────────────────────────────
   /items:

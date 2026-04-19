@@ -23,7 +23,6 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import text
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -292,9 +291,7 @@ def test_ingest_without_session_id_still_works(client):
 
 
 def test_ingest_with_unknown_uuid_returns_400_invalid_session(client):
-    resp = _ingest(
-        client, "BIN-SESS-E", session_id="00000000-0000-0000-0000-000000000000"
-    )
+    resp = _ingest(client, "BIN-SESS-E", session_id="00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 400, resp.text
     assert resp.json()["error"]["code"] == "invalid_session"
 
@@ -344,9 +341,7 @@ def test_trigger_decrements_photo_count_on_delete_and_floors_at_zero(client, db)
     )
 
     db.execute(
-        text(
-            "DELETE FROM photos WHERE bin_id = 'BIN-TRIG-D' AND session_id = :s"
-        ),
+        text("DELETE FROM photos WHERE bin_id = 'BIN-TRIG-D' AND session_id = :s"),
         {"s": s["session_id"]},
     )
     db.commit()
@@ -366,11 +361,7 @@ def test_trigger_decrements_photo_count_on_delete_and_floors_at_zero(client, db)
             "VALUES ('BIN-TRIG-D', '/tmp/p2.jpg', NULL)"
         )
     )
-    db.execute(
-        text(
-            "DELETE FROM photos WHERE bin_id = 'BIN-TRIG-D' AND session_id IS NULL"
-        )
-    )
+    db.execute(text("DELETE FROM photos WHERE bin_id = 'BIN-TRIG-D' AND session_id IS NULL"))
     db.commit()
     assert (
         db.execute(
@@ -395,9 +386,7 @@ def test_trigger_ignores_non_uuid_legacy_session_ids(client, db):
 
     # No exception implies the trigger handled invalid_text_representation.
     photo_id = db.execute(
-        text(
-            "SELECT photo_id FROM photos WHERE session_id = 'legacy-nonuuid-xyz'"
-        )
+        text("SELECT photo_id FROM photos WHERE session_id = 'legacy-nonuuid-xyz'")
     ).scalar_one()
     assert photo_id is not None
 

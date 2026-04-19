@@ -1461,10 +1461,7 @@ def _session_row_to_dict(row) -> dict:
 def count_open_sessions(db: Session, api_key_id: int) -> int:
     return int(
         db.execute(
-            text(
-                "SELECT COUNT(*) FROM sessions "
-                "WHERE api_key_id = :k AND ended_at IS NULL"
-            ),
+            text("SELECT COUNT(*) FROM sessions " "WHERE api_key_id = :k AND ended_at IS NULL"),
             {"k": api_key_id},
         ).scalar_one()
     )
@@ -1544,9 +1541,7 @@ def list_sessions(
         text(
             "SELECT session_id, started_at, ended_at, label, photo_count "
             "FROM sessions "
-            "WHERE api_key_id = :k"
-            + filter_sql
-            + " ORDER BY started_at DESC "
+            "WHERE api_key_id = :k" + filter_sql + " ORDER BY started_at DESC "
             "LIMIT :limit OFFSET :offset"
         ),
         {"k": api_key_id, "limit": limit, "offset": offset},
@@ -1554,9 +1549,7 @@ def list_sessions(
     return [_session_row_to_dict(r) for r in rows]
 
 
-def validate_session_for_ingest(
-    db: Session, session_id: str, api_key_id: int
-) -> bool:
+def validate_session_for_ingest(db: Session, session_id: str, api_key_id: int) -> bool:
     """True iff the session exists, belongs to caller, and is open.
 
     Returns False (rather than raising) on malformed UUID strings so the route
