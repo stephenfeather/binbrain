@@ -484,3 +484,116 @@ def test_hash_is_raw_bytes_not_json_canonicalization(client, valid_jpeg_bytes):
     )
     assert r2.status_code == 409
     assert r2.json()["error"]["code"] == "idempotency_key_mismatch"
+
+
+# ---------------------------------------------------------------------------
+# SEC-42-1 (ApiDev2_014): response_body size cap enforced at DB layer
+# ---------------------------------------------------------------------------
+
+
+def test_idempotency_response_body_over_64kib_rejected_by_check_constraint(
+    app_module, db, test_api_key
+):
+    """SEC-42-1 (ApiDev2_014): the `idempotency_response_size_cap` CHECK
+    constraint bounds any stored response body at 64 KiB (octet_length
+    of the jsonb's text serialization). The current route's payload is
+    ~60 bytes, so this test exercises the constraint directly via the
+    repository helper with a crafted >64 KiB payload — a future
+    general-purpose caller that stores user-controlled data would hit
+    the constraint here, not after the disk had already filled."""
+    import hashlib as _hashlib
+
+    from app.db import repository
+    from sqlalchemy.exc import IntegrityError
+
+    api_key_id = int(
+        db.execute(
+            text("SELECT id FROM api_keys WHERE key_hash = :h"),
+            {"h": _hashlib.sha256(test_api_key.encode()).hexdigest()},
+        ).scalar_one()
+    )
+
+    # ~70 KiB of payload — comfortably over the 64 KiB cap.
+    oversize_payload = {"blob": "x" * (70 * 1024)}
+    key = str(uuid.uuid4())
+    body_sha = b"\x00" * 32
+
+    with pytest.raises(IntegrityError) as excinfo:
+        repository.store_idempotent_response(
+            db,
+            api_key_id=api_key_id,
+            key=key,
+            body_sha256=body_sha,
+            response_status=200,
+            response_body=oversize_payload,
+        )
+        db.flush()
+    assert "idempotency_response_size_cap" in str(excinfo.value)
+    db.rollback()
+
+    # Under-cap payload (small) still lands cleanly.
+    repository.store_idempotent_response(
+        db,
+        api_key_id=api_key_id,
+        key=str(uuid.uuid4()),
+        body_sha256=body_sha,
+        response_status=200,
+        response_body={"ok": True},
+    )
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# SEC-42-2 / QA-42-O-1 (ApiDev2_014): rollback symmetry — pre-lock 409 now
+# lives inside the outer try: block, so the outer except HTTPException
+# handler owns the rollback for both 409 paths. No inline rollback before
+# the under-lock 409 raise. These are shape tests: assert the route
+# cleanly handles a pre-lock mismatch AND a subsequent successful call on
+# a different key (proves the session wasn't left in a bad state).
+# ---------------------------------------------------------------------------
+
+
+def test_pre_lock_mismatch_409_leaves_session_clean_for_next_call(client, valid_jpeg_bytes):
+    photo_id = _seed_photo(client, valid_jpeg_bytes, "B-ROLLBACK-1")
+    key_a = str(uuid.uuid4())
+    body_a = json.dumps(_payload()).encode()
+    body_b = json.dumps(
+        _payload(
+            decisions=[
+                {
+                    "label": "different",
+                    "confidence": 0.5,
+                    "shown_at": "2026-04-19T19:32:01Z",
+                    "decision": "accepted",
+                }
+            ]
+        )
+    ).encode()
+
+    # Seed the (api_key, key_a) record with body_a.
+    first = client.post(
+        f"/photos/{photo_id}/outcomes",
+        content=body_a,
+        headers={"Idempotency-Key": key_a, "Content-Type": "application/json"},
+    )
+    assert first.status_code == 200
+
+    # Replay key_a with body_b — pre-lock fast path finds the record,
+    # mismatches on body hash, and 409s from inside the try: block.
+    mismatch = client.post(
+        f"/photos/{photo_id}/outcomes",
+        content=body_b,
+        headers={"Idempotency-Key": key_a, "Content-Type": "application/json"},
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json()["error"]["code"] == "idempotency_key_mismatch"
+
+    # Subsequent request with a NEW key on the same session must succeed
+    # — proves the outer handler's rollback ran and the DB session is
+    # not in an aborted txn.
+    follow_up = client.post(
+        f"/photos/{photo_id}/outcomes",
+        content=body_a,
+        headers={"Idempotency-Key": str(uuid.uuid4()), "Content-Type": "application/json"},
+    )
+    assert follow_up.status_code == 200, follow_up.text

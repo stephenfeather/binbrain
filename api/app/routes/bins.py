@@ -531,8 +531,12 @@ class PatchBinItemRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    quantity: float | None = Field(default=None, ge=0)
-    confidence: float | None = Field(default=None, ge=0, le=1)
+    # SEC-40-2 (ApiDev2_014): upper-bound quantity and reject inf/NaN
+    # symmetrically with confidence. Downstream summations, JSON renders,
+    # and iOS label formatters misbehave on float extremes; 1e9 is ~1000x
+    # any realistic hobbyist inventory count.
+    quantity: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+    confidence: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     bin_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
@@ -651,11 +655,13 @@ def update_item_in_bin(
                     "message": "Item not found in source bin",
                 },
             )
+        row = repository.get_bin_item(db, bin_id, item_id)
     else:
-        # body.bin_id == path and no overrides — pure no-op. Still must
-        # 404 if the row doesn't exist so callers can't treat the PATCH
-        # as a silent success on a missing row.
-        if repository.get_bin_item(db, bin_id, item_id) is None:
+        # body.bin_id == path and no overrides — pure no-op. The single
+        # get_bin_item serves both as 404 existence guard and as the
+        # response row source (QA-40-O-4 double-SELECT fold).
+        row = repository.get_bin_item(db, bin_id, item_id)
+        if row is None:
             raise HTTPException(
                 status_code=404,
                 detail={
@@ -664,10 +670,19 @@ def update_item_in_bin(
                 },
             )
 
-    row = repository.get_bin_item(db, bin_id, item_id)
-    # ``row`` is guaranteed non-None here (either the UPDATE succeeded or
-    # the no-op branch already confirmed the row exists).
-    assert row is not None
+    # QA-40-O-3 (ApiDev2_014): prod safety. ``assert`` is stripped under
+    # ``python -O``, so a post-update row that unexpectedly disappeared
+    # (concurrent DELETE after our UPDATE succeeded) would raise
+    # ``AttributeError`` on the next access instead of a clean error.
+    # Raise an explicit 500 through the existing envelope handler.
+    if row is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "internal_error",
+                "message": "Row disappeared between UPDATE and re-read",
+            },
+        )
     db.commit()
     logger.info(
         "event=bin_item_update request_id=%s bin_id=%s item_id=%s quantity=%s confidence=%s",
