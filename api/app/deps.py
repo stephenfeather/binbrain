@@ -97,6 +97,12 @@ def get_active_vision_model() -> str:
 
 
 def set_active_vision_model(model: str):
+    # TODO(audit): conform to new setter signature
+    # (value, *, actor_ip: str, actor_key_id: str) and call
+    # repository.log_setting_change(...) in-transaction with set_setting.
+    # Audit infra landed in S-00-AUDIT (2026-04-20b migration); see
+    # ``thoughts/shared/plans/2026-04-20-runtime-settings-store.md`` §Audit Log
+    # and conformance tasks A-1..A-3.
     global _active_vision_model
     _active_vision_model = model
 
@@ -106,6 +112,10 @@ def get_max_image_px() -> int:
 
 
 def set_max_image_px(value: int):
+    # TODO(audit): conform to new setter signature
+    # (value, *, actor_ip: str, actor_key_id: str) and call
+    # repository.log_setting_change(...) in-transaction with set_setting.
+    # See S-00-AUDIT / A-1..A-3 in the runtime-settings-store plan.
     global _max_image_px
     _max_image_px = value
 
@@ -133,6 +143,10 @@ def set_detection_model(model_id: str) -> None:
     Raises:
         ValueError: if model_id is not in DETECTION_MODEL_ALLOWLIST.
     """
+    # TODO(audit): conform to new setter signature
+    # (value, *, actor_ip: str, actor_key_id: str) and call
+    # repository.log_setting_change(...) in-transaction with set_setting.
+    # See S-00-AUDIT / A-1..A-3 in the runtime-settings-store plan.
     global _detection_model_id
     if model_id not in DETECTION_MODEL_ALLOWLIST:
         raise ValueError(
@@ -147,6 +161,29 @@ def get_yolo_world_conf() -> float:
 
 
 def set_yolo_world_conf(value: float):
+    """CANONICAL SETTER TEMPLATE (pre-S-00-AUDIT shape — kept minimal pending A-1..A-3).
+
+    The target signature for every S-NN / RL-NN / A-NN setter after
+    S-00-AUDIT lands is::
+
+        def set_<name>(value: <Type>, *, actor_ip: str, actor_key_id: str) -> None:
+            # 1. Validate value (type + range). Raise ValueError on bad input.
+            # 2. Open a session; read current value from repository.get_setting().
+            # 3. repository.set_setting(db, "<key>", str(value))
+            # 4. repository.log_setting_change(db, key="<key>",
+            #        old_value=<prev>, new_value=str(value),
+            #        actor_ip=actor_ip, actor_key_id=actor_key_id)
+            # 5. db.commit()  # atomic — rollback discards both writes
+            # 6. Update the module-level cache.
+
+    Steps 3 and 4 must share a single transaction so a failed audit write
+    rolls back the value change too, preserving the invariant that every
+    persisted ``settings`` row has an ``app_settings_audit`` row.
+    """
+    # TODO(audit): conform to new setter signature
+    # (value, *, actor_ip: str, actor_key_id: str) and call
+    # repository.log_setting_change(...) in-transaction with set_setting.
+    # See S-00-AUDIT / A-1..A-3 in the runtime-settings-store plan.
     global _yolo_world_conf
     _yolo_world_conf = value
 

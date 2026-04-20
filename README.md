@@ -88,6 +88,36 @@ All responses include `"version": "1"`. Errors follow a consistent shape:
 
 The `/photos/{photo_id}/suggest` endpoint accepts an optional `?model=` query param to override the vision model per-request.
 
+## Settings audit log
+
+Runtime changes to the `settings` table (made through the setter helpers in
+`api/app/deps.py`) are recorded in the `app_settings_audit` table so changes
+are traceable back to an actor and an IP.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | bigint | Surrogate identity PK |
+| `setting_key` | text | e.g. `yolo_world_conf`, `active_vision_model` |
+| `old_value` | text (nullable) | `NULL` on first write (row absent pre-change) |
+| `new_value` | text | Required, even for no-op re-writes (attempts are logged) |
+| `actor_ip` | inet | Client IP from `Request.client.host` |
+| `actor_key_id` | text | API-key identifier of the admin actor |
+| `changed_at` | timestamptz | Defaults to `now()` |
+
+Indexed on `(setting_key, changed_at DESC)` for per-key history queries:
+
+```sql
+SELECT old_value, new_value, actor_key_id, actor_ip, changed_at
+FROM app_settings_audit
+WHERE setting_key = 'yolo_world_conf'
+ORDER BY changed_at DESC
+LIMIT 20;
+```
+
+The audit write and the value write share a single transaction — if either
+fails, both roll back, preserving the invariant that every persisted
+`settings` row has a matching audit row.
+
 ## Project Structure
 
 ```
