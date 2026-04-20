@@ -37,7 +37,7 @@ _TRUNCATE_BETWEEN_TESTS_SQL = (
     "TRUNCATE search_queries, photo_suggestion_matches, vision_calls, "
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
-    "item_upc_lookups, idempotency_records, "
+    "item_upc_lookups, idempotency_records, app_settings_audit, "
     "item_embeddings, bin_items, photos, sessions, items, bins, "
     "locations RESTART IDENTITY CASCADE"
 )
@@ -49,7 +49,7 @@ _TRUNCATE_ALL_SQL = (
     "TRUNCATE search_queries, photo_suggestion_matches, vision_calls, "
     "photo_suggestion_outcomes, photo_group_items, "
     "photo_detection_groups, photo_detections, photo_labels, "
-    "item_upc_lookups, idempotency_records, "
+    "item_upc_lookups, idempotency_records, app_settings_audit, "
     "item_embeddings, bin_items, photos, sessions, items, bins, "
     "locations, settings, confirmed_classes, api_keys RESTART IDENTITY CASCADE"
 )
@@ -441,6 +441,20 @@ def _init_schema(engine) -> None:
         value text NOT NULL,
         updated_at timestamptz NOT NULL DEFAULT now()
     );
+
+    -- S-00-AUDIT: mirror migrations/2026-04-20b_app_settings_audit.sql
+    DROP TABLE IF EXISTS app_settings_audit CASCADE;
+    CREATE TABLE app_settings_audit (
+        id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        setting_key    text NOT NULL,
+        old_value      text,
+        new_value      text NOT NULL,
+        actor_ip       inet NOT NULL,
+        actor_key_id   text NOT NULL,
+        changed_at     timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_app_settings_audit_key_time
+        ON app_settings_audit (setting_key, changed_at DESC);
 
     DROP TABLE IF EXISTS confirmed_classes CASCADE;
     CREATE TABLE confirmed_classes (
