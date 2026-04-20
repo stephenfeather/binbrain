@@ -1,5 +1,7 @@
 import logging
+import logging.handlers
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -83,7 +85,42 @@ photo_root.mkdir(parents=True, exist_ok=True)
 # Local CPU text embeddings (bge-small-en-v1.5 => 384 dims)
 embedder = TextEmbedding(model_name=EMBED_MODEL_NAME)
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+_LOG_DIR = Path(os.environ.get("LOG_DIR", "/data/logs"))
+
+
+class _ISO8601Formatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        return (
+            datetime.fromtimestamp(record.created, tz=timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+
+
+_log_fmt = _ISO8601Formatter("%(asctime)s %(message)s")
+
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+
+_stream_h = logging.StreamHandler()
+_stream_h.setFormatter(_log_fmt)
+_root.addHandler(_stream_h)
+
+try:
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _file_h = logging.handlers.RotatingFileHandler(
+        _LOG_DIR / "api.log",
+        maxBytes=50 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    _file_h.setFormatter(_log_fmt)
+    _root.addHandler(_file_h)
+except OSError as _log_exc:
+    logging.getLogger("binbrain").warning(
+        "event=log_file_init_failed path=%s err=%s", _LOG_DIR / "api.log", _log_exc
+    )
+
 logger = logging.getLogger("binbrain")
 
 

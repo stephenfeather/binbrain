@@ -47,6 +47,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data/photos:/data/photos
+      - ./data/logs:/data/logs
       # Detection model weights (shared with host benchmarks). Read-only —
       # the container must not mutate these. Host path is gitignored; fresh
       # checkouts need to populate ./models/ before first /detect call, or
