@@ -362,7 +362,10 @@ def _init_schema(engine) -> None:
         response_status int         NOT NULL,
         response_body   jsonb       NOT NULL,
         created_at      timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (api_key_id, key)
+        PRIMARY KEY (api_key_id, key),
+        -- SEC-42-1 (ApiDev2_014): mirror migrations/2026-04-19e_idempotency_response_size_cap.sql
+        CONSTRAINT idempotency_response_size_cap
+            CHECK (octet_length(response_body::text) <= 65536)
     );
     CREATE INDEX idempotency_records_created_at_idx
         ON idempotency_records (created_at);

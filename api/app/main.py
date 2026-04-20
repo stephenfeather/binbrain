@@ -302,16 +302,43 @@ async def http_exception_handler(request: Request, exc):
     )
 
 
+def _sanitize_float_specials(obj):
+    """Replace inf/-inf/NaN floats with string sentinels.
+
+    ApiDev2_014: Starlette's JSONResponse uses ``allow_nan=False``, so if
+    an error dict's ``input`` field carries a rejected NaN/Infinity value
+    the response render itself raises ``ValueError`` and leaks a 500 that
+    masks the original 400. Walk the structure once and stringify any
+    non-finite float so the 400 renders cleanly.
+    """
+    import math
+
+    if isinstance(obj, float):
+        if math.isnan(obj):
+            return "NaN"
+        if math.isinf(obj):
+            return "Infinity" if obj > 0 else "-Infinity"
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_float_specials(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_float_specials(v) for v in obj]
+    return obj
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     # Pydantic error dicts can contain non-JSON-serializable values in `input`
-    # (e.g. raw `bytes` when a client posts multipart to a JSON endpoint).
-    # Route through jsonable_encoder with a bytes fallback so the handler
-    # itself never crashes and masks a 400 as a 500.
+    # (e.g. raw `bytes` when a client posts multipart to a JSON endpoint, or
+    # float inf/NaN when Pydantic rejected them via allow_inf_nan=False).
+    # Route through jsonable_encoder with a bytes fallback + float-special
+    # sanitizer so the 400 handler itself never crashes and masks a 400 as
+    # a 500.
     details = jsonable_encoder(
         exc.errors(),
         custom_encoder={bytes: lambda b: b[:256].decode("utf-8", "backslashreplace")},
     )
+    details = _sanitize_float_specials(details)
     return JSONResponse(
         status_code=400,
         content={

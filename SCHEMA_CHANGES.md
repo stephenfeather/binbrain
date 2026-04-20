@@ -1,6 +1,12 @@
 # Schema Changes
 
 ## 2026-04-19
+- ApiDev2_014 (SEC-42-1): `idempotency_records.response_body` bounded at
+  64 KiB via new `idempotency_response_size_cap` CHECK constraint. Caps
+  disk-growth blast-radius from a future opt-in endpoint that echoes
+  user-controlled data through the idempotency store.
+  - Migration: `migrations/2026-04-19e_idempotency_response_size_cap.sql`
+
 - ApiDev_idempotency_outcomes (SEC-26-3): new `idempotency_records` table —
   composite PK `(api_key_id, key)`, `body_sha256 bytea`, `response_status int`,
   `response_body jsonb`, `created_at timestamptz`. Powers server-side

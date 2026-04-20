@@ -490,3 +490,127 @@ def test_patch_concurrent_moves_into_same_target_yield_one_winner(app_module, cl
         {"i": item},
     ).scalar_one()
     assert remaining_sources <= 1
+
+
+# ---------------------------------------------------------------------------
+# ApiDev2_014 polish
+# ---------------------------------------------------------------------------
+
+
+# SEC-40-2: quantity upper bound + inf/NaN rejection ------------------------
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "label"),
+    [
+        # inf/NaN/-inf must be sent as raw JSON content because the TestClient's
+        # json= kwarg hard-rejects them client-side; real-world misbehaving
+        # clients send them anyway, so the server guard is what matters.
+        ("Infinity", "positive_infinity"),
+        ("-Infinity", "negative_infinity"),
+        ("NaN", "nan"),
+        ("1e20", "over_upper_bound_1e20"),
+        ("1000000001", "over_upper_bound_1e9_plus_1"),
+        ("-1.0", "negative"),
+    ],
+)
+def test_patch_400_on_quantity_out_of_bounds(client, db, raw_value, label):
+    """SEC-40-2 (ApiDev2_014): quantity must be finite and <= 1e9.
+    Prior bound was only ``ge=0`` — inf/NaN/astronomical values slipped
+    through to downstream JSON renderers and iOS formatters."""
+    item = _seed_item(db, f"qty-bound-{label}")
+    bin_id = f"B-QB-{label[:8].upper()}"
+    _seed_bin_item(db, bin_id, item, quantity=1.0, confidence=0.5)
+
+    body = f'{{"quantity": {raw_value}}}'
+    resp = client.patch(
+        f"/bins/{bin_id}/items/{item}",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400, (label, resp.text)
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "label"),
+    [
+        ("Infinity", "positive_infinity"),
+        ("NaN", "nan"),
+    ],
+)
+def test_patch_400_on_confidence_inf_or_nan(client, db, raw_value, label):
+    """SEC-40-2 (ApiDev2_014): confidence now also rejects inf/NaN
+    explicitly via ``allow_inf_nan=False``. Prior ge/le bounds might
+    behave inconsistently across Pydantic versions on these specials;
+    the explicit guard is the documented contract."""
+    item = _seed_item(db, f"conf-finite-{label}")
+    bin_id = f"B-CF-{label[:8].upper()}"
+    _seed_bin_item(db, bin_id, item, quantity=1.0, confidence=0.5)
+
+    body = f'{{"confidence": {raw_value}}}'
+    resp = client.patch(
+        f"/bins/{bin_id}/items/{item}",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400, (label, resp.text)
+
+
+# QA-40-O-5: same-bin PATCH WITH override applies in place -----------------
+
+
+def test_patch_body_bin_id_equals_path_with_override_applies_inplace(client, db):
+    """QA-40-O-5 (ApiDev2_014): same-bin PATCH with explicit overrides
+    must apply the overrides (moved: false, DB row updated). Previously
+    only the no-override case was covered — the override branch was
+    untested."""
+    item = _seed_item(db, "same-bin-override")
+    _seed_bin_item(db, "B-SAMEBIN-OV", item, quantity=2.0, confidence=0.3)
+
+    resp = client.patch(
+        f"/bins/B-SAMEBIN-OV/items/{item}",
+        json={"bin_id": "B-SAMEBIN-OV", "quantity": 99.0, "confidence": 0.95},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["bin_id"] == "B-SAMEBIN-OV"
+    assert body["moved"] is False
+    assert body["quantity"] == 99.0
+    assert body["confidence"] == 0.95
+
+    row = _bin_item_row(db, "B-SAMEBIN-OV", item)
+    assert row is not None
+    assert row["quantity"] == 99.0
+    assert row["confidence"] == 0.95
+
+
+# QA-40-O-3: missing-row post-update returns 500 envelope ------------------
+
+
+def test_patch_500_envelope_when_row_disappears_post_update(client, db, monkeypatch):
+    """QA-40-O-3 (ApiDev2_014): if a concurrent DELETE removes the row
+    between our UPDATE and the re-read, the handler must raise a clean
+    500 envelope (not an ``AttributeError`` leak from a stripped assert
+    under ``python -O``). Monkeypatch ``get_bin_item`` to return None
+    after a successful update_bin_item — simulates the race."""
+    from app.db import repository as real_repo
+
+    item = _seed_item(db, "race-disappear")
+    _seed_bin_item(db, "B-GONE", item, quantity=1.0, confidence=0.5)
+
+    original_get = real_repo.get_bin_item
+
+    def flaky_get(db_, bin_id, item_id):
+        if bin_id == "B-GONE":
+            return None
+        return original_get(db_, bin_id, item_id)
+
+    monkeypatch.setattr(real_repo, "get_bin_item", flaky_get)
+
+    resp = client.patch(f"/bins/B-GONE/items/{item}", json={"quantity": 5.0})
+    assert resp.status_code == 500, resp.text
+    body = resp.json()
+    assert body["error"]["code"] == "internal_error"
