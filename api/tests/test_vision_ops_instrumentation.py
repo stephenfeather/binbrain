@@ -91,9 +91,7 @@ def _seed_item(db, name: str, category: str = "tool") -> int:
     """Insert an item plus a stub 384-dim embedding. Returns item_id."""
     row = (
         db.execute(
-            text(
-                "INSERT INTO items (name, category) VALUES (:name, :category) " "RETURNING item_id"
-            ),
+            text("INSERT INTO items (name, category) VALUES (:name, :category) RETURNING item_id"),
             {"name": name, "category": category},
         )
         .mappings()
@@ -373,7 +371,12 @@ def test_suggest_match_rows_carry_threshold_at_compute_time(
         ]
 
     monkeypatch.setattr("app.routes.photos.repository.search_items_by_embedding", fake_search)
-    monkeypatch.setenv("SUGGEST_MATCH_THRESHOLD", "0.7")
+    # S-01: threshold moved from env to the runtime settings store; patch the
+    # module-level cache directly so this test is independent of DB state and
+    # no longer depends on the module-import-time env read.
+    from app import deps
+
+    monkeypatch.setattr(deps, "_suggest_match_threshold", 0.7)
 
     r = client.get(f"/photos/{photo_id}/suggest")
     assert r.status_code == 200, r.text

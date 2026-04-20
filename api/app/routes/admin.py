@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import urllib.request
 
@@ -11,10 +12,12 @@ from app.deps import (
     get_db,
     get_detection_model_id,
     get_max_image_px,
+    get_suggest_match_threshold,
     logger,
     set_active_vision_model,
     set_detection_model,
     set_max_image_px,
+    set_suggest_match_threshold,
 )
 from app.middleware import require_admin
 from app.services.rate_limiter import require_warmup_rate_limit
@@ -230,6 +233,80 @@ def set_image_size(
         "version": "1",
         "previous_max_image_px": previous,
         "max_image_px": value,
+    }
+
+
+# ── Suggest match threshold (S-01: runtime settings store) ────────────────────
+
+
+@router.get("/settings/suggest-match-threshold")
+def get_suggest_match_threshold_route(request: Request = None):
+    """Return the current cosine-similarity floor for auto-suggestions."""
+    return {
+        "version": "1",
+        "suggest_match_threshold": get_suggest_match_threshold(),
+    }
+
+
+@router.post("/settings/suggest-match-threshold", dependencies=[Depends(require_admin)])
+def set_suggest_match_threshold_route(
+    payload: dict = Body(...),
+    request: Request = None,
+):
+    """Set the auto-suggestion cosine-similarity floor. Requires admin.
+
+    Uses the S-00-AUDIT accessor contract: the setter writes ``settings`` +
+    ``app_settings_audit`` in a single transaction, tagged with the caller's
+    IP and API-key id.
+    """
+    request_id = getattr(request.state, "request_id", None) if request else None
+
+    if "value" not in payload:
+        raise HTTPException(status_code=400, detail="value is required")
+    value = payload["value"]
+    # Reject bool before handing to the setter — bool is a subclass of int
+    # and float(True) would otherwise slip past the range check.
+    if isinstance(value, bool):
+        raise HTTPException(status_code=400, detail="value must be a number")
+
+    # ``request.client.host`` is upstream-controlled: TestClient reports the
+    # literal ``"testclient"`` and some reverse-proxy middleware can surface
+    # a hostname instead of an IP. The audit-log helper validates the value
+    # with ``ipaddress.ip_address(...)`` and would reject anything unparseable,
+    # so normalize here rather than let a legitimate admin write 400 on
+    # something the admin has no control over. We preserve forensic value
+    # when the upstream host *is* a real IP, and fall back to ``0.0.0.0``
+    # otherwise (still a non-empty valid IP that passes the audit contract).
+    raw_host = request.client.host if request and request.client else ""
+    try:
+        ipaddress.ip_address(raw_host)
+        actor_ip = raw_host
+    except (TypeError, ValueError):
+        actor_ip = "0.0.0.0"
+    actor_key_id = str(getattr(request.state, "api_key_id", "") or "")
+    if not actor_key_id:
+        # Auth middleware always sets this for authenticated routes; defensive
+        # guard so the audit-log contract (non-empty actor_key_id) holds.
+        raise HTTPException(status_code=500, detail="authenticated key missing")
+
+    previous = get_suggest_match_threshold()
+    try:
+        set_suggest_match_threshold(value, actor_ip=actor_ip, actor_key_id=actor_key_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+    new_value = get_suggest_match_threshold()
+
+    logger.info(
+        "event=suggest_match_threshold_set request_id=%s previous=%s new=%s",
+        request_id,
+        previous,
+        new_value,
+    )
+    return {
+        "version": "1",
+        "previous_suggest_match_threshold": previous,
+        "suggest_match_threshold": new_value,
     }
 
 
