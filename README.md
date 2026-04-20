@@ -59,8 +59,8 @@ All settings are passed as environment variables to the `api` service (configura
 | `POSTGRES_PASSWORD` | *(required)* | Set in `.env`, used by both containers |
 | `PHOTO_DIR` | `/data/photos` | Filesystem path for uploaded photos |
 | `EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | fastembed model for text embeddings |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL |
-| `OLLAMA_VISION_MODEL` | `qwen3-vl:4b` | Default vision model for photo analysis |
+| `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama API base URL |
+| `OLLAMA_VISION_MODEL` | `qwen3-vl:2b` | Default vision model for photo analysis |
 | `OLLAMA_MAX_IMAGE_PX` | `1280` | Max pixels on longest side before downscaling |
 | `SUGGEST_MATCH_THRESHOLD` | `0.85` | Cosine-similarity floor for auto-suggesting an existing catalogued item on photo upload |
 
