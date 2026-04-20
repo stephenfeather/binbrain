@@ -1,5 +1,4 @@
 import json
-import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +15,7 @@ from app.deps import (
     get_active_vision_model,
     get_db,
     get_max_image_px,
+    get_suggest_match_threshold,
     logger,
     photo_root,
     vec_to_pgvector,
@@ -32,8 +32,6 @@ from pydantic_core import PydanticCustomError
 from sqlalchemy.orm import Session
 
 router = APIRouter()
-
-_SUGGEST_MATCH_THRESHOLD = float(os.environ.get("SUGGEST_MATCH_THRESHOLD", "0.85"))
 
 
 def _is_path_under_photo_root(fpath: Path) -> bool:
@@ -246,8 +244,10 @@ def suggest_for_photo(
 
         # -- embedding match + per-match telemetry ---------------------------
         # Decision 7: read SUGGEST_MATCH_THRESHOLD exactly once per invocation
-        # and write the same value on every match row for this call.
-        threshold_at_compute = float(os.environ.get("SUGGEST_MATCH_THRESHOLD", "0.85"))
+        # and write the same value on every match row for this call. S-01
+        # promoted this knob into the runtime settings store; the DB is the
+        # source of truth, fed through get_suggest_match_threshold().
+        threshold_at_compute = get_suggest_match_threshold()
 
         db2 = SessionLocal()
         try:
@@ -319,7 +319,7 @@ def suggest_for_photo(
                     db2.commit()
                 except Exception as m_exc:
                     logger.warning(
-                        "event=photo_suggestion_matches_write_failed " "photo_id=%s rows=%s err=%s",
+                        "event=photo_suggestion_matches_write_failed photo_id=%s rows=%s err=%s",
                         photo_id,
                         len(match_rows),
                         m_exc,
@@ -360,7 +360,7 @@ def suggest_for_photo(
         error_code = type(exc).__name__
         tracker.mark_failed(photo_id, type(exc).__name__.lower())
         logger.exception(
-            "event=photo_suggest_crash request_id=%s photo_id=%s " "stage=%s error_code=%s",
+            "event=photo_suggest_crash request_id=%s photo_id=%s stage=%s error_code=%s",
             request_id,
             photo_id,
             flags.get("stages", [])[-1] if flags.get("stages") else None,

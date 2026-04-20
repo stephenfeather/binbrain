@@ -42,6 +42,38 @@ _active_vision_model = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
 # YOLO-World confidence threshold (lower than YOLO11s due to zero-shot)
 _yolo_world_conf = float(os.environ.get("YOLO_WORLD_CONF", "0.15"))
 
+
+def _parse_suggest_match_threshold_env() -> float:
+    """Parse ``SUGGEST_MATCH_THRESHOLD`` from the environment (S-01).
+
+    Applied at import time as the pre-DB fallback for
+    ``_suggest_match_threshold``. Swallows malformed or out-of-range values
+    (logs a warning and returns the hardcoded 0.85 default) so a bad
+    operator env cannot crash the FastAPI import.
+    """
+    raw = os.environ.get("SUGGEST_MATCH_THRESHOLD", "0.85")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logging.getLogger("binbrain").warning(
+            "event=settings_env_invalid key=SUGGEST_MATCH_THRESHOLD value=%r "
+            "(not a float; using default 0.85)",
+            raw,
+        )
+        return 0.85
+    if not (0.0 <= value <= 1.0):
+        logging.getLogger("binbrain").warning(
+            "event=settings_env_invalid key=SUGGEST_MATCH_THRESHOLD value=%r "
+            "(outside [0.0, 1.0]; using default 0.85)",
+            raw,
+        )
+        return 0.85
+    return value
+
+
+# Mutable at runtime via POST /settings/suggest-match-threshold (S-01)
+_suggest_match_threshold = _parse_suggest_match_threshold_env()
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
@@ -188,6 +220,75 @@ def set_yolo_world_conf(value: float):
     _yolo_world_conf = value
 
 
+def get_suggest_match_threshold() -> float:
+    """Return the current cosine-similarity floor for auto-suggestions (S-01).
+
+    Source-of-truth order (populated at startup by
+    :func:`load_settings_from_db`):
+
+    1. ``settings`` DB row (``suggest_match_threshold``).
+    2. ``SUGGEST_MATCH_THRESHOLD`` environment variable.
+    3. Hardcoded ``0.85``.
+    """
+    return _suggest_match_threshold
+
+
+def set_suggest_match_threshold(
+    value: float,
+    *,
+    actor_ip: str,
+    actor_key_id: str,
+) -> None:
+    """Set the auto-suggestion match threshold (S-01).
+
+    Follows the S-00-AUDIT canonical setter template: validates the value,
+    writes ``settings`` and ``app_settings_audit`` in the same transaction
+    (so an audit failure discards the settings write too), and only then
+    updates the module-level cache.
+
+    Raises:
+        ValueError: if ``value`` is not a finite number in ``[0.0, 1.0]``.
+    """
+    from app.db import repository
+
+    # Reject bool before float — in Python, ``True``/``False`` are ``int``
+    # instances and float(True) == 1.0, which would sneak past the range check.
+    if isinstance(value, bool):
+        raise ValueError("suggest_match_threshold must not be a bool")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"suggest_match_threshold must be a float, got {value!r}") from None
+    if parsed != parsed:  # NaN
+        raise ValueError("suggest_match_threshold must not be NaN")
+    if not (0.0 <= parsed <= 1.0):
+        raise ValueError(f"suggest_match_threshold must be in [0.0, 1.0], got {parsed}")
+
+    global _suggest_match_threshold
+
+    db = SessionLocal()
+    try:
+        old_value = repository.get_setting(db, "suggest_match_threshold")
+        new_value = str(parsed)
+        repository.set_setting(db, "suggest_match_threshold", new_value)
+        repository.log_setting_change(
+            db,
+            key="suggest_match_threshold",
+            old_value=old_value,
+            new_value=new_value,
+            actor_ip=actor_ip,
+            actor_key_id=actor_key_id,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    _suggest_match_threshold = parsed
+
+
 def load_settings_from_db() -> None:
     """Load persisted settings from DB, falling back to env/defaults."""
     from app.db import repository
@@ -217,6 +318,29 @@ def load_settings_from_db() -> None:
                     "event=settings_load_invalid key=detection_model value=%s "
                     "(not in allowlist; keeping default)",
                     det_model,
+                )
+
+        suggest_threshold = repository.get_setting(db, "suggest_match_threshold")
+        if suggest_threshold:
+            global _suggest_match_threshold
+            try:
+                parsed = float(suggest_threshold)
+                if 0.0 <= parsed <= 1.0 and parsed == parsed:
+                    _suggest_match_threshold = parsed
+                    logger.info(
+                        "event=settings_loaded key=suggest_match_threshold value=%s",
+                        suggest_threshold,
+                    )
+                else:
+                    logger.warning(
+                        "event=settings_load_invalid key=suggest_match_threshold "
+                        "value=%s (out of range; keeping prior cache)",
+                        suggest_threshold,
+                    )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "event=settings_load_invalid key=suggest_match_threshold value=%s",
+                    suggest_threshold,
                 )
     except Exception as e:
         logger.warning("event=settings_load_failed error=%s", str(e)[:200])

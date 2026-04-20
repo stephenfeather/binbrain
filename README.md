@@ -62,7 +62,7 @@ All settings are passed as environment variables to the `api` service (configura
 | `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama API base URL |
 | `OLLAMA_VISION_MODEL` | `qwen3-vl:2b` | Default vision model for photo analysis |
 | `OLLAMA_MAX_IMAGE_PX` | `1280` | Max pixels on longest side before downscaling |
-| `SUGGEST_MATCH_THRESHOLD` | `0.85` | Cosine-similarity floor for auto-suggesting an existing catalogued item on photo upload |
+| `SUGGEST_MATCH_THRESHOLD` | `0.85` | Cosine-similarity floor for auto-suggesting an existing catalogued item on photo upload. Runtime-editable via `POST /settings/suggest-match-threshold` (admin role) — the DB row overrides this env, which is a first-boot fallback only. |
 
 ## API Endpoints
 

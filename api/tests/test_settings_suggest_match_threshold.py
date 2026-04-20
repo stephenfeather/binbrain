@@ -330,8 +330,11 @@ def test_post_settings_suggest_match_threshold_writes_audit_row(client, db, app_
     assert row["new_value"] == "0.55"
     # actor_key_id is the integer PK from api_keys, stringified by the route.
     assert row["actor_key_id"] and row["actor_key_id"] != "0"
-    # TestClient reports 127.0.0.1 as the client host.
-    assert row["ip"] == "127.0.0.1"
+    # FastAPI's TestClient reports ``request.client.host`` as the literal
+    # string ``"testclient"``, which is not a parseable IP. The admin route
+    # normalizes unparseable hosts to ``0.0.0.0`` so the audit contract
+    # (non-null, valid INET) still holds. Real HTTP clients land a real IP.
+    assert row["ip"] == "0.0.0.0"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
