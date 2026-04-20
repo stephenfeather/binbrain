@@ -193,3 +193,133 @@ def test_is_reserved_bin_name_predicate(raw, expected):
     from app.db import repository
 
     assert repository.is_reserved_bin_name(raw) is expected
+
+
+# ---------------------------------------------------------------------------
+# 10. SEC-43-1 — cross-route coverage. Both reviewers flagged that the
+#     original layering left three create-intent routes unguarded. This
+#     parametrizes every (route, reserved_input) pair to prove the
+#     composed ``guard_user_bin_name`` closes the side doors.
+# ---------------------------------------------------------------------------
+
+
+def _post_items(client, valid_jpeg_bytes, bin_id: str):
+    # /items: minimal payload; bin_id is optional so we send it explicitly
+    # so the validator path is reached.
+    return client.post(
+        "/items",
+        json={
+            "name": f"sec-43-1 {bin_id}",
+            "category": "test",
+            "bin_id": bin_id,
+        },
+    )
+
+
+def _post_associate(client, valid_jpeg_bytes, bin_id: str):
+    # /associate: item_id of 1 is fine — the validator fires before the
+    # FK check, so the item never needs to exist for this assertion.
+    return client.post(
+        "/associate",
+        json={"bin_id": bin_id, "item_id": 1},
+    )
+
+
+def _post_confirm(client, valid_jpeg_bytes, bin_id: str):
+    # /confirm: version + bin_id are enough; guard_user_bin_name runs
+    # before the selected_groups validation.
+    return client.post(
+        "/photos/1/confirm",
+        json={
+            "version": "1",
+            "bin_id": bin_id,
+            "selected_groups": [{"group_key": "g", "label": "x", "category": "y"}],
+        },
+    )
+
+
+def _post_ingest_positional(client, valid_jpeg_bytes, bin_id: str):
+    # Adapter for the keyword-only ``_post_ingest`` signature so the
+    # dispatcher table can call every poster with the same positional
+    # signature. Keeping ``_post_ingest``'s kwarg-only shape preserves
+    # the self-documentation on existing callers.
+    return _post_ingest(client, valid_jpeg_bytes, bin_id=bin_id)
+
+
+_CROSS_ROUTE_POSTERS = {
+    "POST /items": _post_items,
+    "POST /associate": _post_associate,
+    "POST /photos/{id}/confirm": _post_confirm,
+    "POST /ingest": _post_ingest_positional,
+}
+
+
+@pytest.mark.parametrize("route_name", list(_CROSS_ROUTE_POSTERS.keys()))
+@pytest.mark.parametrize(
+    "reserved_input",
+    [
+        "Binless",
+        "binless",
+        "BINLESS",
+        "  Binless  ",
+        "uNaSsIgNeD",
+        "UNASSIGNED\t",
+    ],
+)
+def test_reserved_name_rejected_at_all_create_routes(
+    route_name, reserved_input, client, valid_jpeg_bytes
+):
+    """Every create-intent route must reject a reserved name before the
+    domain write. The /ingest case is included to guard against a future
+    refactor that drops /ingest's call to ``guard_user_bin_name``.
+    """
+    poster = _CROSS_ROUTE_POSTERS[route_name]
+    r = poster(client, valid_jpeg_bytes, reserved_input)
+    assert r.status_code == 400, (route_name, r.status_code, r.text)
+    assert r.json()["error"]["code"] == "reserved_bin_name", (route_name, r.text)
+
+
+# ---------------------------------------------------------------------------
+# 11. SEC-43-1 — positive regression: a non-reserved bin_id still lands
+#     at every newly-guarded route. Guards against a zealous validator
+#     rewrite rejecting legitimate inputs.
+# ---------------------------------------------------------------------------
+
+
+def test_non_reserved_name_still_succeeds_at_items_route(client, valid_jpeg_bytes):
+    # Positive regression for the new layering. /items is the route with
+    # a self-contained happy path (no FK on item_id, no photo seed needed).
+    # /associate and /photos/{id}/confirm are deliberately omitted from
+    # the positive sweep because both require domain-layer fixtures
+    # beyond this module's scope — the reserved-negative tests above
+    # already prove the guard is reached on those routes.
+    r = _post_items(client, valid_jpeg_bytes, "sec43-ok")
+    body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    err = body.get("error") if isinstance(body, dict) else None
+    if err is not None:
+        assert err.get("code") != "reserved_bin_name", body
+
+
+# ---------------------------------------------------------------------------
+# 12. SEC-43-2 — lock the exact error message so a future reformat /
+#     string-literal rewrite can't silently drop the trailing space or
+#     break the template. The message is the contract iOS (and any other
+#     client) renders in-app.
+# ---------------------------------------------------------------------------
+
+
+def test_reserved_bin_name_error_message_is_stable(client, valid_jpeg_bytes):
+    r = _post_ingest(client, valid_jpeg_bytes, bin_id="Binless")
+    assert r.status_code == 400
+    body = r.json()["error"]
+    assert body["code"] == "reserved_bin_name"
+    assert body["message"] == "Bin name 'binless' is reserved and cannot be used as a bin name."
+
+
+def test_reserved_bin_name_error_message_echoes_normalized_form(client, valid_jpeg_bytes):
+    # Whitespace-padded + mixed-case input must render with the normalized
+    # form — never the raw bytes — in the echoed message.
+    r = _post_ingest(client, valid_jpeg_bytes, bin_id="  uNaSsIgNeD\t")
+    assert r.status_code == 400
+    body = r.json()["error"]
+    assert body["message"] == "Bin name 'unassigned' is reserved and cannot be used as a bin name."

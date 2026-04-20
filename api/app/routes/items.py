@@ -13,6 +13,7 @@ from app.deps import (
     logger,
     vec_to_pgvector,
 )
+from app.routes.bins import guard_user_bin_name
 from app.services.upc_lookup import validate_upc
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -124,7 +125,10 @@ def create_item(
 
         # 4) Optional association to a bin
         if bin_id:
-            bin_id = bin_id.strip()
+            # SEC-43-1: format-check + reserved-name reject in one call so a
+            # user cannot side-door a "Binless"/"uNaSsIgNeD" bin through
+            # /items when /ingest and /add_to_bin already block it.
+            bin_id = guard_user_bin_name(bin_id)
             try:
                 repository.ensure_bin_active_or_create(db, bin_id)
             except ValueError:
@@ -162,12 +166,17 @@ def associate_item(
     payload: AssociateItemBody,
     db: Session = Depends(get_db),
 ):
-    bin_id = (payload.bin_id or "").strip()
+    raw_bin_id = payload.bin_id or ""
     item_id = payload.item_id
     confidence = payload.confidence
     quantity = payload.quantity
-    if not bin_id:
+    if not raw_bin_id.strip():
         raise HTTPException(status_code=400, detail="bin_id is required")
+    # SEC-43-1: previously this route called neither _check_bin_id nor the
+    # reserved-name reject, so a user could both bypass the path-safety
+    # regex (SEC) and create "Binless"/"uNaSsIgNeD". Composed guard fixes
+    # both at once.
+    bin_id = guard_user_bin_name(raw_bin_id)
 
     try:
         repository.ensure_bin_active_or_create(db, bin_id)
