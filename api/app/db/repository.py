@@ -55,6 +55,55 @@ logger = logging.getLogger("binbrain")
 UNASSIGNED_BIN_ID: str = "UNASSIGNED"
 
 
+# ---------------------------------------------------------------------------
+# Reserved bin-name registry (ApiDev_011).
+#
+# Users may not create or rename bins into these names. Values are stored in
+# their *normalized* form (see ``_normalize_bin_name``); the predicate
+# ``is_reserved_bin_name`` normalizes the caller's raw input before the
+# membership check so the comparison is case-insensitive and whitespace-
+# trimmed. Adding a new reserved name is a one-line change to this frozenset
+# — no validator-logic edit required (see ``test_registry_is_authoritative``).
+#
+# The iOS client mirrors this registry for pre-flight UX
+# (Swift2_023_reserved_bin_names.md); the server is the authoritative reject.
+# When adding or removing an entry here, coordinate the iOS side in lockstep.
+# ---------------------------------------------------------------------------
+_RESERVED_BIN_NAME_STEMS: frozenset[str] = frozenset(
+    {
+        "unassigned",  # collides with the UNASSIGNED sentinel bin_id
+        "binless",  # iOS-facing display string for the unassigned state
+    }
+)
+
+
+def _normalize_bin_name(raw: str) -> str:
+    """Normalize a user-supplied bin name for reserved-registry comparison.
+
+    Uses ``str.casefold()`` rather than ``str.lower()`` — casefold is the
+    Python-correct transform for case-insensitive comparison across Unicode
+    (handles German ß → ``"ss"``, Greek final sigma, etc.). Also strips
+    leading and trailing whitespace so ``"Binless  "`` and
+    ``"\\tunassigned\\n"`` collapse to their reserved form.
+    """
+    return raw.strip().casefold()
+
+
+def is_reserved_bin_name(raw: str) -> bool:
+    """Return True iff ``raw`` (in any case / padding) is in the reserved set.
+
+    Takes the raw user string — callers MUST NOT normalize first. The
+    predicate owns normalization so the registry and the normalizer stay
+    in lock-step. Lives at the HTTP boundary in ``_check_bin_id``; do NOT
+    sprinkle this check into repository helpers, since the ``UNASSIGNED``
+    sentinel row is written by internal seed + soft-delete reattribution
+    paths that are legitimately exempt.
+    """
+    if not isinstance(raw, str):
+        return False
+    return _normalize_bin_name(raw) in _RESERVED_BIN_NAME_STEMS
+
+
 def ensure_bin_active_or_create(db: Session, bin_id: str) -> None:
     row = db.execute(
         text("SELECT deleted_at FROM bins WHERE bin_id = :bin_id"),

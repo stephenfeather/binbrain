@@ -20,6 +20,7 @@ from app.deps import (
     photo_root,
     vec_to_pgvector,
 )
+from app.routes.bins import guard_user_bin_name
 from app.services.detection import detect, get_model_name
 from app.services.rate_limiter import require_vision_rate_limit
 from app.services.suggest_tracker import get_tracker
@@ -566,12 +567,17 @@ def confirm_photo_groups(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
 ):
+    # SEC-43-1: validate bin_id (format + reserved) BEFORE hitting the DB.
+    # Cheap input validation beats a 404 roundtrip when both are wrong, and
+    # lets the cross-route reserved-rejection tests run without needing a
+    # seeded photo row.
+    raw_bin_id = (payload.get("bin_id") or "").strip()
+    if not raw_bin_id:
+        raise HTTPException(status_code=400, detail="bin_id is required")
+    bin_id = guard_user_bin_name(raw_bin_id)
+
     if not repository.photo_exists(db, photo_id):
         raise HTTPException(status_code=404, detail="photo not found")
-
-    bin_id = (payload.get("bin_id") or "").strip()
-    if not bin_id:
-        raise HTTPException(status_code=400, detail="bin_id is required")
 
     version = payload.get("version")
     if version != "1":
