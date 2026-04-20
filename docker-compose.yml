@@ -33,6 +33,7 @@ services:
       VISION_BASE_URL: ${VISION_BASE_URL:-http://host.docker.internal:11434/v1}
       VISION_API_KEY: ${VISION_API_KEY:-ollama}
       YOLO_WORLD_CONF: ${YOLO_WORLD_CONF:-0.15}
+      SUGGEST_MATCH_THRESHOLD: ${SUGGEST_MATCH_THRESHOLD:-0.85}
       # Finding #3: writable model cache/download path owned by the app user.
       # Was defaulting to /models (root-owned, PermissionError). Override with
       # a host path + bind-mount in production to persist weights.
