@@ -22,6 +22,7 @@ from app.deps import (
 )
 from app.routes.bins import guard_user_bin_name
 from app.services.detection import detect, get_model_name
+from app.services.device_metadata import extract_ocr_and_barcodes
 from app.services.rate_limiter import require_vision_rate_limit
 from app.services.suggest_tracker import get_tracker
 from app.services.vision import PROMPT_VERSION, describe_photo
@@ -32,7 +33,6 @@ from pydantic_core import PydanticCustomError
 from sqlalchemy.orm import Session
 
 router = APIRouter()
-
 
 def _is_path_under_photo_root(fpath: Path) -> bool:
     """Return True iff ``fpath`` resolves to a location under ``photo_root``.
@@ -331,15 +331,36 @@ def suggest_for_photo(
         tracker.mark_done(photo_id)
 
         hits_count = len(suggestions)
+
+        # S-DM-01: surface OCR + barcodes from device_metadata (FF-04 allowlist only).
+        # Best-effort: a DB failure here must not break the /suggest response.
+        ocr_results: list[dict] = []
+        barcodes_out: list[dict] = []
+        try:
+            db_dm = SessionLocal()
+            try:
+                raw_dm = repository.fetch_photo_device_metadata(db_dm, photo_id)
+            finally:
+                db_dm.close()
+            ocr_results, barcodes_out = extract_ocr_and_barcodes(raw_dm)
+        except Exception as dm_exc:
+            logger.warning(
+                "event=photo_suggest_device_metadata_failed photo_id=%s err=%s",
+                photo_id,
+                dm_exc,
+            )
+
         logger.info(
             "event=photo_suggest request_id=%s photo_id=%s model=%s "
-            "vision_elapsed_ms=%s vision_hits=%s suggestions=%s",
+            "vision_elapsed_ms=%s vision_hits=%s suggestions=%s ocr=%s barcodes=%s",
             request_id,
             photo_id,
             vision_model,
             vision_elapsed_ms,
             len(vision_hits),
             len(suggestions),
+            len(ocr_results),
+            len(barcodes_out),
         )
         return {
             "version": "1",
@@ -349,6 +370,8 @@ def suggest_for_photo(
             "cached": cached_flag,
             "prompt_version": response_prompt_version,
             "suggestions": suggestions,
+            "ocr_results": ocr_results,
+            "barcodes": barcodes_out,
         }
     except Exception as exc:
         # Dev2_018 (PR#21 review follow-up): any exception reaching the outer

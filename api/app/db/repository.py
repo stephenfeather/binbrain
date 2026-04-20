@@ -659,6 +659,13 @@ def fetch_photo_path(db: Session, photo_id: int) -> str | None:
     ).scalar()
 
 
+def fetch_photo_device_metadata(db: Session, photo_id: int) -> dict | None:
+    return db.execute(
+        text("SELECT device_metadata FROM photos WHERE photo_id = :photo_id"),
+        {"photo_id": photo_id},
+    ).scalar()
+
+
 def fetch_photo_groups(db: Session, photo_id: int) -> list[dict]:
     rows = (
         db.execute(
