@@ -39,25 +39,42 @@ from fastapi.responses import JSONResponse
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load persisted settings, assert security invariants, then warm up Ollama."""
+    logger.info("event=startup_begin")
     load_settings_from_db()
+    logger.info("event=settings_loaded")
 
     # F-02: assert models directory is outside PHOTO_DIR to prevent path-confusion attacks.
     models_resolved = MODELS_DIR.resolve()
     photo_resolved = photo_root.resolve()
+    logger.info(
+        "event=validating_security_invariants models_dir=%s photo_dir=%s",
+        models_resolved,
+        photo_resolved,
+    )
     if str(models_resolved).startswith(str(photo_resolved)):
+        logger.critical(
+            "event=security_violation_detected models_dir=%s photo_dir=%s",
+            models_resolved,
+            photo_resolved,
+        )
         raise RuntimeError(
             f"MODELS_DIR ({MODELS_DIR}) must not be inside PHOTO_DIR ({photo_root}). "
             "Set MODELS_DIR to a directory outside the photo upload area."
         )
+    logger.info("event=security_validation_passed")
 
     # Load confirmed classes; defer YOLO-World init to first detection request
     from app.services import class_registry, detection
 
+    logger.info("event=loading_class_registry")
     db = SessionLocal()
     try:
         class_registry.load_from_db(db)
+        class_count = len(class_registry.get_classes())
+        logger.info("event=class_registry_loaded count=%d", class_count)
         class_registry.set_reload_callback(detection.reload_classes)
         detection.set_deferred_classes(class_registry.get_classes())
+        logger.info("event=deferred_detection_initialized")
     finally:
         db.close()
 
@@ -66,6 +83,12 @@ async def lifespan(app: FastAPI):
         "localhost" in VISION_BASE_URL
         or "host.docker.internal" in VISION_BASE_URL
         or "127.0.0.1" in VISION_BASE_URL
+    )
+    logger.info(
+        "event=vision_config_loaded model=%s is_local=%s base_url=%s",
+        model,
+        is_local,
+        VISION_BASE_URL,
     )
     if is_local:
         logger.info("event=warmup_start model=%s ollama_url=%s", model, OLLAMA_URL)
@@ -94,7 +117,9 @@ async def lifespan(app: FastAPI):
             VISION_BASE_URL,
         )
 
+    logger.info("event=startup_complete status=healthy")
     yield
+    logger.info("event=shutdown_begin")
 
 
 app = FastAPI(title="BinBrain API", lifespan=lifespan)
