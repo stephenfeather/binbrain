@@ -97,7 +97,7 @@ class _ISO8601Formatter(logging.Formatter):
         )
 
 
-_log_fmt = _ISO8601Formatter("%(asctime)s %(message)s")
+_log_fmt = _ISO8601Formatter("[%(asctime)s] %(message)s")
 
 _root = logging.getLogger()
 _root.setLevel(logging.INFO)
