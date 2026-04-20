@@ -26,15 +26,19 @@ def test_log_setting_change_inserts_row(app_module, db):
     )
     db.commit()
 
-    row = db.execute(
-        text(
-            "SELECT setting_key, old_value, new_value, "
-            "host(actor_ip) AS ip, actor_key_id "
-            "FROM app_settings_audit "
-            "WHERE setting_key = 'yolo_world_conf' "
-            "ORDER BY id DESC LIMIT 1"
+    row = (
+        db.execute(
+            text(
+                "SELECT setting_key, old_value, new_value, "
+                "host(actor_ip) AS ip, actor_key_id "
+                "FROM app_settings_audit "
+                "WHERE setting_key = 'yolo_world_conf' "
+                "ORDER BY id DESC LIMIT 1"
+            )
         )
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
     assert row is not None
     assert row["setting_key"] == "yolo_world_conf"
     assert row["old_value"] == "0.15"
@@ -82,10 +86,7 @@ def test_log_setting_change_respects_transaction_rollback(app_module, db):
     db.rollback()
 
     row = db.execute(
-        text(
-            "SELECT COUNT(*) FROM app_settings_audit "
-            "WHERE setting_key = 'rollback_probe'"
-        )
+        text("SELECT COUNT(*) FROM app_settings_audit " "WHERE setting_key = 'rollback_probe'")
     ).scalar()
     assert row == 0
 
@@ -169,6 +170,7 @@ def test_log_setting_change_accepts_ipv6(app_module, db):
     assert row is not None
     # Postgres normalizes "2001:db8::1" — compare via ipaddress.
     import ipaddress
+
     assert ipaddress.ip_address(row) == ipaddress.ip_address("2001:db8::1")
 
 
