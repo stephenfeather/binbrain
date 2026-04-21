@@ -357,6 +357,16 @@ async def http_exception_handler(request: Request, exc):
     else:
         message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
         details = exc.detail if status_code == 400 else None
+    # Log 5xx HTTPExceptions — 4xx are covered by the http_access line.
+    # Unhandled (non-HTTPException) errors are logged by unhandled_exception_handler.
+    if status_code >= 500:
+        logger.warning(
+            "event=http_exception status=%d code=%s path=%s request_id=%s",
+            status_code,
+            error_code,
+            request.url.path,
+            getattr(request.state, "request_id", None),
+        )
     return JSONResponse(
         status_code=status_code,
         content={
