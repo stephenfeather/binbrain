@@ -26,6 +26,7 @@ RATE_LIMIT_DISABLED        bool  dev-only kill-switch ("1"/"true"/"yes" => bypas
                                  against runaway clients and outbound-vision/UPC cost amplification.
 """
 
+import logging
 import os
 from collections import deque
 from collections.abc import Callable
@@ -33,6 +34,8 @@ from threading import Lock
 from time import monotonic
 
 from fastapi import HTTPException, Request
+
+logger = logging.getLogger("binbrain")
 
 _MAX_TRACKED_KEYS: int = int(os.environ.get("RATE_LIMIT_MAX_TRACKED_KEYS", "10000"))
 _ADMIN_MULTIPLIER: float = float(os.environ.get("RATE_LIMIT_ADMIN_MULTIPLIER", "4"))
@@ -170,10 +173,24 @@ def _limiter_key(request: Request) -> tuple[str, float]:
     return key, multiplier
 
 
+def _log_rate_limited(limiter: str, request: Request, key: str) -> None:
+    role = getattr(request.state, "api_key_role", "user")
+    request_id = getattr(request.state, "request_id", None)
+    logger.warning(
+        "event=rate_limited limiter=%s key=%s role=%s path=%s request_id=%s",
+        limiter,
+        key,
+        role,
+        request.url.path,
+        request_id,
+    )
+
+
 def require_vision_rate_limit(request: Request) -> None:
     """Rate-limit dependency for /photos/{id}/suggest and /photos/{id}/detect."""
     key, mult = _limiter_key(request)
     if not vision_limiter.check(key, role_multiplier=mult):
+        _log_rate_limited("vision", request, key)
         raise HTTPException(status_code=429, detail="rate limit exceeded")
 
 
@@ -181,6 +198,7 @@ def require_warmup_rate_limit(request: Request) -> None:
     """Rate-limit dependency for model-warmup and admin model routes."""
     key, mult = _limiter_key(request)
     if not warmup_limiter.check(key, role_multiplier=mult):
+        _log_rate_limited("warmup", request, key)
         raise HTTPException(status_code=429, detail="rate limit exceeded")
 
 
@@ -188,4 +206,5 @@ def require_upc_rate_limit(request: Request) -> None:
     """Rate-limit dependency for /upc/{upc} (outbound HTTP lookup)."""
     key, mult = _limiter_key(request)
     if not upc_limiter.check(key, role_multiplier=mult):
+        _log_rate_limited("upc", request, key)
         raise HTTPException(status_code=429, detail="rate limit exceeded")

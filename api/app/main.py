@@ -204,6 +204,13 @@ async def global_rate_limit_middleware(request: Request, call_next):
     multiplier = _ADMIN_MULTIPLIER if role == "admin" else 1.0
     if not global_limiter.check(key, role_multiplier=multiplier):
         request_id = getattr(request.state, "request_id", None)
+        logger.warning(
+            "event=rate_limited limiter=global key=%s role=%s path=%s request_id=%s",
+            key,
+            role,
+            request.url.path,
+            request_id,
+        )
         return JSONResponse(
             status_code=429,
             content={
