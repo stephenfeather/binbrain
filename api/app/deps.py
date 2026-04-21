@@ -96,8 +96,12 @@ class _ISO8601Formatter(logging.Formatter):
             .replace("+00:00", "Z")
         )
 
+    def format(self, record):
+        record.levelname_lower = record.levelname.lower()
+        return super().format(record)
 
-_log_fmt = _ISO8601Formatter("[%(asctime)s] %(message)s")
+
+_log_fmt = _ISO8601Formatter("[%(asctime)s] level=%(levelname_lower)s %(message)s")
 
 _root = logging.getLogger()
 _root.setLevel(logging.INFO)
@@ -105,6 +109,13 @@ _root.setLevel(logging.INFO)
 _stream_h = logging.StreamHandler()
 _stream_h.setFormatter(_log_fmt)
 _root.addHandler(_stream_h)
+
+# Suppress httpx/httpcore request-level INFO noise. The api emits its own
+# vision_request_start / vision_response events that capture the same calls
+# with structured fields, so httpx's "HTTP Request: POST ..." lines are
+# redundant and break the event=<name> grep schema.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 try:
     _LOG_DIR.mkdir(parents=True, exist_ok=True)

@@ -120,6 +120,7 @@ async def lifespan(app: FastAPI):
     logger.info("event=startup_complete status=healthy")
     yield
     logger.info("event=shutdown_begin")
+    logger.info("event=shutdown_complete")
 
 
 app = FastAPI(title="BinBrain API", lifespan=lifespan)

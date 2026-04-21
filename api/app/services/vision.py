@@ -155,7 +155,7 @@ def _normalize_bboxes(
             flags_out["bbox_normalized"] = True
 
         logger.info(
-            "event=vision.bbox.normalized photo_id=%s name=%s from_pixel=%s "
+            "event=vision_bbox_normalized photo_id=%s name=%s from_pixel=%s "
             "to_normalized=[%.3f,%.3f,%.3f,%.3f] image_size=(%d,%d)",
             photo_id,
             s.get("name"),
@@ -198,7 +198,7 @@ def _log_suspicious_bboxes(
             if flags_out is not None:
                 flags_out["whole_image_bbox_warn"] = True
             logger.warning(
-                "event=vision.suggest.whole_image_bbox photo_id=%s name=%s coverage=%.3f bbox=%s",
+                "event=vision_suggest_whole_image_bbox photo_id=%s name=%s coverage=%.3f bbox=%s",
                 photo_id,
                 s.get("name"),
                 coverage,
@@ -359,7 +359,7 @@ def describe_photo(
         model,
         elapsed_ms,
     )
-    logger.info(
+    logger.debug(
         "event=vision_response_raw photo_id=%s content=%r",
         photo_id,
         content[:500] if content else None,

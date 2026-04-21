@@ -92,9 +92,9 @@ def test_describe_photo_normalizes_pixel_space_bbox(tmp_path, monkeypatch, caplo
     assert bbox == pytest.approx([86 / 1024, 138 / 1024, 991 / 1024, 997 / 1024], abs=0.001)
     # INFO telemetry so the conversion is visible in prod logs.
     assert any(
-        "vision.bbox.normalized" in r.getMessage() and "photo_id=1" in r.getMessage()
+        "vision_bbox_normalized" in r.getMessage() and "photo_id=1" in r.getMessage()
         for r in caplog.records
-    ), f"expected vision.bbox.normalized INFO, got: {[r.getMessage() for r in caplog.records]}"
+    ), f"expected vision_bbox_normalized INFO, got: {[r.getMessage() for r in caplog.records]}"
 
 
 def test_describe_photo_normalizes_non_square_image(tmp_path, monkeypatch):
@@ -150,7 +150,7 @@ def test_describe_photo_accepts_already_normalized_bbox(tmp_path, monkeypatch, c
 
     assert hits[0]["bbox"] == [0.1, 0.2, 0.5, 0.6]
     # Already normalized — do not log conversion.
-    assert not any("vision.bbox.normalized" in r.getMessage() for r in caplog.records)
+    assert not any("vision_bbox_normalized" in r.getMessage() for r in caplog.records)
 
 
 def test_describe_photo_clamps_out_of_range_pixel_bbox(tmp_path, monkeypatch):
