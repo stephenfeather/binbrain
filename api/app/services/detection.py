@@ -96,11 +96,11 @@ def reload_classes(classes: list[str]) -> None:
         with _model_lock:
             model = _get_model()
             if classes:
-                logger.warning("event=yoloe_reload_start count=%d", count)
+                logger.info("event=yoloe_reload_start count=%d", count)
                 model.set_classes(classes)
-                logger.warning("event=yoloe_reload_done count=%d", count)
+                logger.info("event=yoloe_reload_done count=%d", count)
             else:
-                logger.warning("event=yoloe_reload_empty")
+                logger.info("event=yoloe_reload_empty")
     except Exception as exc:
         msg = f"{type(exc).__name__}: {exc}"
         logger.error(
