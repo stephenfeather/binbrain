@@ -1,7 +1,7 @@
 import logging
 import logging.handlers
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -91,7 +91,7 @@ _LOG_DIR = Path(os.environ.get("LOG_DIR", "/data/logs"))
 class _ISO8601Formatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         return (
-            datetime.fromtimestamp(record.created, tz=timezone.utc)
+            datetime.fromtimestamp(record.created, tz=UTC)
             .isoformat(timespec="milliseconds")
             .replace("+00:00", "Z")
         )

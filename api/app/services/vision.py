@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # so rejection analytics are attributed to the exact prompt that produced
 # the suggestion. Do not introduce a second version identifier elsewhere;
 # bump this when _PROMPT changes materially.
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 # ApiDev_009 (Q-prompt-version closeout): pinned SHA-256 prefix of the current
 # `_PROMPT` text below. The CI guard test
@@ -35,7 +35,7 @@ PROMPT_VERSION = "v2"
 # Whitespace-only / wording-polish changes that should NOT count as a new
 # version may update only the hash — but think twice, because analytics will
 # not be able to distinguish old-prompt rows from new-prompt rows.
-PROMPT_VERSION_HASH = "6d49b52f"
+PROMPT_VERSION_HASH = "93c7545b"
 
 # Dev2_015 iter 2: prior iter 1 prompt was not followed by Fireworks — logs
 # showed bbox=[86,138,991,997] (pixels, not 0-1) and one suggestion per photo.
@@ -61,6 +61,9 @@ _PROMPT = (
     "Do NOT merge distinct objects into a single whole-image bbox. "
     'If you cannot precisely localize distinct objects, return an empty list "suggestions": [] — '
     "do NOT return approximate, placeholder, or whole-image boxes. OMIT items you cannot localize. "
+    "RULE: The 'name' field must be the SPECIFIC visible object or product name "
+    "(e.g. 'Elegoo cable kit', 'wire stripper', 'Arduino Uno'). "
+    "NEVER use a category enum value ('fastener', 'electronics', 'tool', 'label_packaging', 'other') as the name. "
     "FINAL REMINDER: each bbox coordinate must be a decimal between 0.0 and 1.0. "
     "No explanation, no markdown."
 )
@@ -356,7 +359,7 @@ def describe_photo(
         model,
         elapsed_ms,
     )
-    logger.debug(
+    logger.info(
         "event=vision_response_raw photo_id=%s content=%r",
         photo_id,
         content[:500] if content else None,
