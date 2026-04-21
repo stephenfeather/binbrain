@@ -1,6 +1,7 @@
 import hashlib
 import json
 import threading
+import time
 import urllib.request
 import uuid
 from contextlib import asynccontextmanager
@@ -130,8 +131,24 @@ app = FastAPI(title="BinBrain API", lifespan=lifespan)
 async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
     request.state.request_id = request_id
+    t0 = time.monotonic()
     response = await call_next(request)
     response.headers["x-request-id"] = request_id
+    # Access log: one line per handler-reached request. Early rejections from
+    # outer middleware (auth 401, rate-limit 429, body-size 413) short-circuit
+    # before call_next returns here and are covered by their own event= lines.
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    api_key_id = getattr(request.state, "api_key_id", None)
+    logger.info(
+        "event=http_access method=%s path=%s status=%d ms=%d "
+        "request_id=%s api_key_id=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+        request_id,
+        api_key_id,
+    )
     return response
 
 
