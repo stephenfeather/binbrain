@@ -115,6 +115,11 @@ def _check_bin_id(raw: str) -> str:
     try:
         return validate_bin_id(raw.strip() if raw else "")
     except ValueError:
+        logger.warning(
+            "event=bin_id_rejected raw=%r length=%d",
+            raw[:128] if isinstance(raw, str) else raw,
+            len(raw) if isinstance(raw, str) else 0,
+        )
         raise HTTPException(
             status_code=400,
             detail=(
