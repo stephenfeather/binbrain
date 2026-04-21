@@ -135,6 +135,8 @@ def test_suggest_writes_vision_call_on_fresh_success(client, db, monkeypatch, va
     assert row["cached"] is False
     assert row["elapsed_ms"] is not None and row["elapsed_ms"] >= 0
     assert row["hits_count"] == 2
+    # Load-bearing: verifies the live PROMPT_VERSION propagates to vision_calls
+    # telemetry rows. Bump this value whenever PROMPT_VERSION changes.
     assert row["prompt_version"] == "v3"
     assert row["error_code"] is None
     assert row["model"]  # non-empty

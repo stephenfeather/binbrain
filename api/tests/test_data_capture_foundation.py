@@ -221,6 +221,8 @@ def test_suggest_persists_prompt_version(client, db, monkeypatch, valid_jpeg_byt
         .all()
     )
     assert rows, "expected at least one detection row"
+    # Load-bearing: verifies the live PROMPT_VERSION constant propagates to
+    # photo_detections rows. Bump this value whenever PROMPT_VERSION changes.
     assert all(v == "v3" for v in rows), rows
 
 
@@ -249,6 +251,9 @@ def test_suggest_cached_rows_prompt_version_roundtrip(client, db, monkeypatch, v
         .scalars()
         .all()
     )
+    # Load-bearing: verifies rows written on the first call carry the live
+    # PROMPT_VERSION even when served from the cache on the second call.
+    # Bump this value whenever PROMPT_VERSION changes.
     assert rows == ["v3"]
 
 
