@@ -294,6 +294,10 @@ async def api_key_auth_middleware(request: Request, call_next):
         try:
             repository.touch_api_key_last_used(s, key_row["id"])
             s.commit()
+        except Exception:
+            logger.exception(
+                "event=api_key_touch_failed key_id=%s", key_row["id"]
+            )
         finally:
             s.close()
 
