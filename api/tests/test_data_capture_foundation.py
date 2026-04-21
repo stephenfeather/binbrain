@@ -221,12 +221,12 @@ def test_suggest_persists_prompt_version(client, db, monkeypatch, valid_jpeg_byt
         .all()
     )
     assert rows, "expected at least one detection row"
-    assert all(v == "v2" for v in rows), rows
+    assert all(v == "v3" for v in rows), rows
 
 
 def test_suggest_cached_rows_prompt_version_roundtrip(client, db, monkeypatch, valid_jpeg_bytes):
     """Dev2_014 cache-hit path: the second call is served from the DB, but the
-    persisted rows written on the first call must still carry ``prompt_version = 'v2'``
+    persisted rows written on the first call must still carry ``prompt_version = 'v3'``
     and the cached branch must still function.
     """
     photo_id = _seed_photo(client, valid_jpeg_bytes, "BIN-PV-0002")
@@ -249,7 +249,7 @@ def test_suggest_cached_rows_prompt_version_roundtrip(client, db, monkeypatch, v
         .scalars()
         .all()
     )
-    assert rows == ["v2"]
+    assert rows == ["v3"]
 
 
 # ---------------------------------------------------------------------------

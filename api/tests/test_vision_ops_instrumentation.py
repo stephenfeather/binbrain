@@ -135,7 +135,7 @@ def test_suggest_writes_vision_call_on_fresh_success(client, db, monkeypatch, va
     assert row["cached"] is False
     assert row["elapsed_ms"] is not None and row["elapsed_ms"] >= 0
     assert row["hits_count"] == 2
-    assert row["prompt_version"] == "v2"
+    assert row["prompt_version"] == "v3"
     assert row["error_code"] is None
     assert row["model"]  # non-empty
 
