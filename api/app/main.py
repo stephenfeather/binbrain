@@ -137,14 +137,23 @@ async def request_id_middleware(request: Request, call_next):
     # Access log: one line per handler-reached request. Early rejections from
     # outer middleware (auth 401, rate-limit 429, body-size 413) short-circuit
     # before call_next returns here and are covered by their own event= lines.
+    # Severity is graded by status so `grep level=error` surfaces every 5xx,
+    # `level=warning` surfaces 4xx, and routine 2xx/3xx stays at info.
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     api_key_id = getattr(request.state, "api_key_id", None)
-    logger.info(
+    status = response.status_code
+    if status >= 500:
+        access_log = logger.error
+    elif status >= 400:
+        access_log = logger.warning
+    else:
+        access_log = logger.info
+    access_log(
         "event=http_access method=%s path=%s status=%d ms=%d "
         "request_id=%s api_key_id=%s",
         request.method,
         request.url.path,
-        response.status_code,
+        status,
         elapsed_ms,
         request_id,
         api_key_id,
@@ -360,7 +369,7 @@ async def http_exception_handler(request: Request, exc):
     # Log 5xx HTTPExceptions — 4xx are covered by the http_access line.
     # Unhandled (non-HTTPException) errors are logged by unhandled_exception_handler.
     if status_code >= 500:
-        logger.warning(
+        logger.error(
             "event=http_exception status=%d code=%s path=%s request_id=%s",
             status_code,
             error_code,
