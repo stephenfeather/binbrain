@@ -25,10 +25,18 @@ The env var ``MAX_REQUEST_BODY_BYTES`` is documented in ``app.config``.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 
 _Send = Callable[[dict], Awaitable[None]]
 _Receive = Callable[[], Awaitable[dict]]
+
+logger = logging.getLogger("binbrain")
+
+
+def _client_ip(scope: dict) -> str:
+    client = scope.get("client")
+    return client[0] if isinstance(client, list | tuple) and client else "unknown"
 
 
 class BodySizeLimitMiddleware:
@@ -56,6 +64,14 @@ class BodySizeLimitMiddleware:
                 except ValueError:
                     declared = -1
                 if declared > self.max_bytes:
+                    logger.warning(
+                        "event=request_too_large mode=content_length "
+                        "declared=%d cap=%d path=%s ip=%s",
+                        declared,
+                        self.max_bytes,
+                        scope.get("path", ""),
+                        _client_ip(scope),
+                    )
                     await self._send_413(send)
                     await _drain(receive)
                     return
@@ -94,6 +110,14 @@ class BodySizeLimitMiddleware:
             more_body = message.get("more_body", False)
 
         if cap_exceeded:
+            logger.warning(
+                "event=request_too_large mode=streaming "
+                "observed=%d cap=%d path=%s ip=%s",
+                total,
+                self.max_bytes,
+                scope.get("path", ""),
+                _client_ip(scope),
+            )
             await self._send_413(send)
             return
 
