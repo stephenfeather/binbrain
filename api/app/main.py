@@ -226,7 +226,16 @@ async def api_key_auth_middleware(request: Request, call_next):
     raw_key = request.headers.get("x-api-key")
     request_id = getattr(request.state, "request_id", None)
 
+    client = request.client
+    client_ip = client.host if client else "unknown"
+
     if not raw_key:
+        logger.warning(
+            "event=auth_failed reason=missing_key request_id=%s ip=%s path=%s",
+            request_id,
+            client_ip,
+            request.url.path,
+        )
         return JSONResponse(
             status_code=401,
             content={
@@ -248,6 +257,13 @@ async def api_key_auth_middleware(request: Request, call_next):
         db.close()
 
     if not key_row:
+        logger.warning(
+            "event=auth_failed reason=invalid_key request_id=%s ip=%s path=%s key_prefix=%s",
+            request_id,
+            client_ip,
+            request.url.path,
+            key_hash[:8],
+        )
         return JSONResponse(
             status_code=401,
             content={
