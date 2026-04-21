@@ -96,7 +96,7 @@ def test_post_sessions_429_when_caller_has_over_20_open_sessions(client):
     # 21st open session must be refused.
     resp = client.post("/sessions", json={})
     assert resp.status_code == 429, resp.text
-    assert resp.json()["error"]["code"] == "rate_limited"
+    assert resp.json()["error"]["code"] == "too_many_open_sessions"
 
 
 # ---------------------------------------------------------------------------
@@ -529,17 +529,18 @@ def test_open_session_cap_holds_under_concurrent_post(app_module, db):
     assert 429 in results, results
 
 
-def test_post_session_at_cap_returns_429_with_rate_limited_code(client):
+def test_post_session_at_cap_returns_429_with_too_many_open_sessions_code(client):
     """Reinforces the existing 429 test with a body assertion — the
-    error.code must be 'rate_limited' not 'internal_error' (regression guard
-    for future code_map / detail changes)."""
+    error.code must be 'too_many_open_sessions' (an endpoint-specific code
+    distinct from the global rate-limit middleware's 'rate_limited'), not
+    'internal_error'. Regression guard for future code_map / detail changes."""
     for _ in range(20):
         assert client.post("/sessions", json={}).status_code == 201
     resp = client.post("/sessions", json={})
     assert resp.status_code == 429
     body = resp.json()
     assert body["version"] == "1"
-    assert body["error"]["code"] == "rate_limited"
+    assert body["error"]["code"] == "too_many_open_sessions"
 
 
 # --- F-4: 404 body equivalence between "not found" and "not yours" --------

@@ -102,12 +102,18 @@ def create_session(
         db, api_key_id, label, MAX_OPEN_SESSIONS_PER_KEY
     )
     if session is None:
+        # Endpoint-specific code so clients can distinguish the open-session
+        # cap from actual request-rate throttling (429 global rate-limit
+        # middleware also returns a 429, but with code=rate_limited).
         raise HTTPException(
             status_code=429,
-            detail=(
-                f"too many open sessions "
-                f"(limit {MAX_OPEN_SESSIONS_PER_KEY}); close existing sessions first"
-            ),
+            detail={
+                "code": "too_many_open_sessions",
+                "message": (
+                    f"too many open sessions "
+                    f"(limit {MAX_OPEN_SESSIONS_PER_KEY}); close existing sessions first"
+                ),
+            },
         )
 
     db.commit()

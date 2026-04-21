@@ -132,6 +132,7 @@ components:
                 - invalid_session
                 - invalid_idempotency_key
                 - idempotency_key_mismatch
+                - too_many_open_sessions
             message:    { type: string }
             details:    { description: "Structured validation details (present on 400 only)." }
             request_id: { type: string }
