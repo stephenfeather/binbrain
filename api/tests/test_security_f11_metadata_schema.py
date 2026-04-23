@@ -4,7 +4,7 @@ Constraints enforced:
 - 4 KiB size cap
 - Top-level allowlist: {"device_processing"}
 - Inner allowlist for device_processing keys
-- Max nesting depth 4
+- Max nesting depth 5
 - Per-value string max 1 KiB
 - HMAC-SHA256 hashing of sensitive fields (device_id, imei, mac, serial)
   with server-side pepper from env METADATA_HASH_PEPPER
@@ -70,12 +70,12 @@ def test_validate_device_metadata_rejects_oversized():
 
 
 def test_validate_device_metadata_rejects_deep_nesting():
-    """Nesting depth > 4 is rejected."""
+    """Nesting depth > 5 is rejected."""
     import pytest
     from app.services.metadata_schema import validate_device_metadata
 
-    # root(0) → device_processing(1) → quality_scores(2) → level3(3) → level4(4) → level5(5)
-    deep = {"device_processing": {"quality_scores": {"a": {"b": {"c": "too deep"}}}}}
+    # root(0) → device_processing(1) → quality_scores(2) → a(3) → b(4) → c(5) → d(6)
+    deep = {"device_processing": {"quality_scores": {"a": {"b": {"c": {"d": "too deep"}}}}}}
     with pytest.raises(ValueError, match="depth"):
         validate_device_metadata(json.dumps(deep))
 
@@ -94,6 +94,114 @@ def test_validate_device_metadata_accepts_empty_device_processing():
     from app.services.metadata_schema import validate_device_metadata
 
     validate_device_metadata(json.dumps({"device_processing": {}}))
+
+
+def test_validate_device_metadata_accepts_ios_extended_payload():
+    """Accept the iOS client's extended device_processing payload.
+
+    Covers saliency_context / capture_metadata / quality_override_context /
+    canny_metrics as top-level device_processing keys, plus bounding_box on
+    OCR and barcode entries (which reaches nesting depth 5).
+    """
+    from app.services.metadata_schema import validate_device_metadata
+
+    payload = {
+        "device_processing": {
+            "version": "1",
+            "pipeline_ms": 623,
+            "ios_version": "26.0",
+            "device_model": "iPhone16,1",
+            "quality_scores": {
+                "blur_variance": 842.3,
+                "exposure_mean": 0.47,
+                "saliency_coverage": 0.72,
+                "shortest_side": 1080,
+            },
+            "ocr": [
+                {
+                    "text": "M3x8 DIN 912",
+                    "confidence": 0.94,
+                    "bounding_box": {
+                        "x": 0.1,
+                        "y": 0.2,
+                        "width": 0.3,
+                        "height": 0.1,
+                    },
+                }
+            ],
+            "barcodes": [
+                {
+                    "payload": "4005176834561",
+                    "symbology": "EAN-13",
+                    "bounding_box": {
+                        "x": 0.4,
+                        "y": 0.5,
+                        "width": 0.1,
+                        "height": 0.05,
+                    },
+                }
+            ],
+            "classifications": [{"label": "screw", "confidence": 0.82}],
+            "saliency_context": {
+                "status": "detected",
+                "object_count": 1,
+                "coverage": 0.72,
+                "union_bounding_box": {
+                    "x": 0.1,
+                    "y": 0.2,
+                    "width": 0.5,
+                    "height": 0.6,
+                },
+                "crop_threshold": 0.5,
+                "crop_decision": "applied",
+            },
+            "capture_metadata": {
+                "original_width": 4032,
+                "original_height": 3024,
+                "original_bytes": 2_500_000,
+                "input_format": "heic",
+            },
+            "crop_applied": {
+                "original_size": [4032, 3024],
+                "crop_rect": [420, 310, 3200, 2400],
+            },
+            "quality_override_context": {
+                "bypassed": True,
+                "failed_gate": "blur",
+                "message": "user override",
+                "measured": 120.0,
+                "threshold": 200.0,
+                "label": "blur_variance",
+                "threshold_label": "min_blur_variance",
+            },
+            "canny_metrics": {
+                "analysis_longest_side": 1024,
+                "gaussian_sigma": 1.4,
+                "threshold_low": 50.0,
+                "threshold_high": 150.0,
+                "hysteresis_passes": 1,
+                "full_frame_edge_density": 0.08,
+                "saliency_edge_density": 0.12,
+                "upload_frame_edge_density": 0.09,
+            },
+            "optimized_upload": {
+                "optimized_width": 1600,
+                "optimized_height": 1200,
+                "optimized_bytes": 220_000,
+                "upload_format": "jpeg",
+                "resize_applied": True,
+                "compression_quality": 0.85,
+                "compression_ratio": 0.12,
+                "crop_fraction": 0.6,
+            },
+        }
+    }
+    result = validate_device_metadata(json.dumps(payload))
+    dp = result["device_processing"]
+    assert dp["saliency_context"]["status"] == "detected"
+    assert dp["canny_metrics"]["threshold_high"] == 150.0
+    assert dp["ocr"][0]["bounding_box"]["x"] == 0.1
+    assert dp["optimized_upload"]["compression_quality"] == 0.85
 
 
 def test_metadata_max_bytes_is_4kib():

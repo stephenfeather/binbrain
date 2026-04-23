@@ -5,7 +5,7 @@ Constraints
 - Top-level key allowlist:      {"device_processing"}
 - Inner key allowlist:          ALLOWED_DEVICE_PROCESSING_KEYS
 - Size cap:                     4 KiB (METADATA_MAX_BYTES)
-- Max nesting depth:            4 levels
+- Max nesting depth:            5 levels (accommodates ocr[i].bounding_box.x)
 - Max per-value string length:  1 KiB (STRING_MAX_BYTES)
 - Sensitive fields:             fields whose name matches /(device_id|imei|mac|serial)$/i
                                 are HMAC-SHA256 hashed with server-side pepper
@@ -29,7 +29,7 @@ import re
 
 METADATA_MAX_BYTES: int = 4 * 1024  # 4 KiB
 STRING_MAX_BYTES: int = 1 * 1024  # 1 KiB per string value
-NESTING_MAX_DEPTH: int = 4
+NESTING_MAX_DEPTH: int = 5
 
 _ALLOWED_TOP_LEVEL_KEYS: frozenset[str] = frozenset({"device_processing"})
 
@@ -47,6 +47,12 @@ ALLOWED_DEVICE_PROCESSING_KEYS: frozenset[str] = frozenset(
         "barcodes",
         "classifications",
         "crop_applied",
+        # Optional pipeline context objects sent by the iOS client.
+        "saliency_context",
+        "capture_metadata",
+        "quality_override_context",
+        "canny_metrics",
+        "optimized_upload",
         # Device identity fields — values are HMAC-SHA256 hashed with server-side pepper
         # (env METADATA_HASH_PEPPER) before persistence (see below).
         "device_id",

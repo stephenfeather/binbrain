@@ -230,6 +230,184 @@ components:
           items: { $ref: "#/components/schemas/PhotoRecord" }
       additionalProperties: false
 
+    # Device metadata (JSON-string body of the `device_metadata` multipart field)
+    DeviceMetadata:
+      type: object
+      description: |
+        On-device processing metadata attached to ingested photos. Submitted as a
+        JSON string in the `/ingest` multipart form. Server enforces: 4 KiB total
+        size cap, max nesting depth 5, max 1 KiB per string value. Unknown keys
+        inside `device_processing` are rejected. Fields named `device_id`, `*_imei`,
+        `*_mac`, `*_serial` are HMAC-SHA256 hashed server-side before persistence.
+      additionalProperties: false
+      properties:
+        device_processing: { $ref: "#/components/schemas/DeviceProcessing" }
+
+    DeviceProcessing:
+      type: object
+      additionalProperties: false
+      description: >
+        Only the keys listed below are accepted at this level. All fields are
+        optional.
+      properties:
+        version:          { type: string }
+        pipeline_ms:      { type: number }
+        ios_version:      { type: string }
+        device_model:     { type: string }
+        quality_scores:
+          type: object
+          properties:
+            blur_variance:     { type: number }
+            exposure_mean:     { type: number }
+            saliency_coverage: { type: number }
+            shortest_side:     { type: integer }
+        ocr:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceOcrEntry" }
+        barcodes:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceBarcodeEntry" }
+        classifications:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceClassificationEntry" }
+        saliency_context:         { $ref: "#/components/schemas/SaliencyContext" }
+        capture_metadata:         { $ref: "#/components/schemas/CaptureMetadata" }
+        crop_applied:             { $ref: "#/components/schemas/CropApplied" }
+        quality_override_context: { $ref: "#/components/schemas/QualityOverrideContext" }
+        canny_metrics:            { $ref: "#/components/schemas/CannyMetrics" }
+        optimized_upload:         { $ref: "#/components/schemas/OptimizedUpload" }
+        device_id:     { type: string, description: "HMAC-SHA256 hashed server-side before storage." }
+        device_serial: { type: string, description: "HMAC-SHA256 hashed server-side before storage." }
+        device_imei:   { type: string, description: "HMAC-SHA256 hashed server-side before storage." }
+        wifi_mac:      { type: string, description: "HMAC-SHA256 hashed server-side before storage." }
+        bluetooth_mac: { type: string, description: "HMAC-SHA256 hashed server-side before storage." }
+
+    NormalizedBoundingBox:
+      type: object
+      description: Normalized coordinates in [0, 1] relative to the image.
+      properties:
+        x:      { type: number }
+        y:      { type: number }
+        width:  { type: number }
+        height: { type: number }
+
+    DeviceOcrEntry:
+      type: object
+      required: [text, confidence]
+      properties:
+        text:         { type: string }
+        confidence:   { type: number }
+        bounding_box: { $ref: "#/components/schemas/NormalizedBoundingBox" }
+
+    DeviceBarcodeEntry:
+      type: object
+      required: [payload, symbology]
+      properties:
+        payload:      { type: string }
+        symbology:    { type: string }
+        bounding_box: { $ref: "#/components/schemas/NormalizedBoundingBox" }
+
+    DeviceClassificationEntry:
+      type: object
+      required: [label, confidence]
+      properties:
+        label:      { type: string }
+        confidence: { type: number }
+
+    SaliencyContext:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [detected, no_objects, analysis_failed, not_run]
+        object_count:       { type: integer }
+        coverage:           { type: number }
+        union_bounding_box: { $ref: "#/components/schemas/NormalizedBoundingBox" }
+        crop_threshold:     { type: number }
+        crop_decision:
+          type: string
+          enum: [applied, skipped_threshold_met, skipped_no_bounding_box, skipped_analysis_failed, skipped_crop_failed]
+
+    CaptureMetadata:
+      type: object
+      description: Camera/capture context from the iOS client. All fields optional.
+      properties:
+        original_width:       { type: integer }
+        original_height:      { type: integer }
+        original_bytes:       { type: integer }
+        input_format:
+          type: string
+          enum: [jpeg, png, heic, unknown]
+        camera_device_type:   { type: string, description: "e.g. tripleCamera, wideAngleCamera." }
+        camera_position:
+          type: string
+          enum: [front, back]
+        zoom_factor:          { type: number }
+        flash_used:           { type: boolean }
+        torch_used:           { type: boolean }
+        hdr_enabled:          { type: boolean }
+        iso:                  { type: number }
+        exposure_duration_ms: { type: number, description: "EXIF exposure duration (seconds × 1000)." }
+        focus_mode:           { type: string }
+        lens_position:        { type: number, minimum: 0, maximum: 1 }
+        focal_length_mm:      { type: number }
+
+    CropApplied:
+      type: object
+      properties:
+        original_size:
+          type: array
+          items: { type: integer }
+          minItems: 2
+          maxItems: 2
+          description: "[width, height] of the source image."
+        crop_rect:
+          type: array
+          items: { type: integer }
+          minItems: 4
+          maxItems: 4
+          description: "[x, y, width, height] in source-image pixels."
+
+    QualityOverrideContext:
+      type: object
+      properties:
+        bypassed: { type: boolean }
+        failed_gate:
+          type: string
+          enum: [resolution, blur, exposure, saliency]
+        message:         { type: string }
+        measured:        { type: number }
+        threshold:       { type: number }
+        label:           { type: string }
+        threshold_label: { type: string }
+
+    CannyMetrics:
+      type: object
+      properties:
+        analysis_longest_side:     { type: integer }
+        gaussian_sigma:            { type: number }
+        threshold_low:             { type: number }
+        threshold_high:            { type: number }
+        hysteresis_passes:         { type: integer }
+        full_frame_edge_density:   { type: number }
+        saliency_edge_density:     { type: number }
+        upload_frame_edge_density: { type: number }
+
+    OptimizedUpload:
+      type: object
+      description: Client-side resize/compression record for the actual uploaded bytes.
+      properties:
+        optimized_width:     { type: integer }
+        optimized_height:    { type: integer }
+        optimized_bytes:     { type: integer }
+        upload_format:
+          type: string
+          enum: [jpeg, png, heic, webp]
+        resize_applied:      { type: boolean }
+        compression_quality: { type: number }
+        compression_ratio:   { type: number }
+        crop_fraction:       { type: number }
+
     # Items
     UpsertItemResponse:
       type: object
@@ -860,10 +1038,15 @@ paths:
                   description: "Image files to upload."
                 device_metadata:
                   type: string
-                  description: >
-                    JSON string containing on-device processing metadata
-                    (OCR results, barcode detections, classifications, quality scores).
-                    Applied to all photos in the batch.
+                  description: |
+                    JSON string (schema: `DeviceMetadata`) containing on-device
+                    processing metadata — OCR, barcodes, classifications, quality
+                    scores, saliency/canny/capture context, and the optimized
+                    upload record. Applied to all photos in the batch. The server
+                    parses this string as JSON and validates it against
+                    `DeviceMetadata`; malformed or disallowed content returns 400.
+                  contentMediaType: application/json
+                  x-schema-ref: "#/components/schemas/DeviceMetadata"
                 session_id:
                   type: string
                   maxLength: 128
