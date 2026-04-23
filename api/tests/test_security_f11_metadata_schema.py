@@ -194,6 +194,10 @@ def test_validate_device_metadata_accepts_ios_extended_payload():
                 "compression_ratio": 0.12,
                 "crop_fraction": 0.6,
             },
+            "user_behavior": {
+                "retake_count": 2,
+                "quality_bypass_count": 1,
+            },
         }
     }
     result = validate_device_metadata(json.dumps(payload))
@@ -202,6 +206,7 @@ def test_validate_device_metadata_accepts_ios_extended_payload():
     assert dp["canny_metrics"]["threshold_high"] == 150.0
     assert dp["ocr"][0]["bounding_box"]["x"] == 0.1
     assert dp["optimized_upload"]["compression_quality"] == 0.85
+    assert dp["user_behavior"]["retake_count"] == 2
 
 
 def test_metadata_max_bytes_is_4kib():

@@ -53,6 +53,7 @@ ALLOWED_DEVICE_PROCESSING_KEYS: frozenset[str] = frozenset(
         "quality_override_context",
         "canny_metrics",
         "optimized_upload",
+        "user_behavior",
         # Device identity fields — values are HMAC-SHA256 hashed with server-side pepper
         # (env METADATA_HASH_PEPPER) before persistence (see below).
         "device_id",

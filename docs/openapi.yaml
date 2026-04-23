@@ -276,6 +276,7 @@ components:
         quality_override_context: { $ref: "#/components/schemas/QualityOverrideContext" }
         canny_metrics:            { $ref: "#/components/schemas/CannyMetrics" }
         optimized_upload:         { $ref: "#/components/schemas/OptimizedUpload" }
+        user_behavior:            { $ref: "#/components/schemas/UserBehavior" }
         device_id:     { type: string, description: "HMAC-SHA256 hashed server-side before storage." }
         device_serial: { type: string, description: "HMAC-SHA256 hashed server-side before storage." }
         device_imei:   { type: string, description: "HMAC-SHA256 hashed server-side before storage." }
@@ -407,6 +408,26 @@ components:
         compression_quality: { type: number }
         compression_ratio:   { type: number }
         crop_fraction:       { type: number }
+
+    UserBehavior:
+      type: object
+      description: |
+        Per-photo snapshot of the user's in-app behaviour during the current
+        cataloging sheet. Counters are cumulative across the sheet up to (and
+        including, for `quality_bypass_count`) the current photo.
+      properties:
+        retake_count:
+          type: integer
+          minimum: 0
+          description: >
+            Cumulative "Retake Photo" taps on this cataloging sheet before the
+            current photo was captured.
+        quality_bypass_count:
+          type: integer
+          minimum: 0
+          description: >
+            Cumulative "Upload Anyway" taps on this cataloging sheet, including
+            the current photo if it bypassed the quality gate.
 
     # Items
     UpsertItemResponse:
