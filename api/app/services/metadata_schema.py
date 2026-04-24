@@ -4,7 +4,7 @@ Constraints
 -----------
 - Top-level key allowlist:      {"device_processing"}
 - Inner key allowlist:          ALLOWED_DEVICE_PROCESSING_KEYS
-- Size cap:                     4 KiB (METADATA_MAX_BYTES)
+- Size cap:                     15 KiB (METADATA_MAX_BYTES)
 - Max nesting depth:            5 levels (accommodates ocr[i].bounding_box.x)
 - Max per-value string length:  1 KiB (STRING_MAX_BYTES)
 - Sensitive fields:             fields whose name matches /(device_id|imei|mac|serial)$/i
@@ -27,7 +27,7 @@ import re
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-METADATA_MAX_BYTES: int = 4 * 1024  # 4 KiB
+METADATA_MAX_BYTES: int = 15 * 1024  # 15 KiB
 STRING_MAX_BYTES: int = 1 * 1024  # 1 KiB per string value
 NESTING_MAX_DEPTH: int = 5
 

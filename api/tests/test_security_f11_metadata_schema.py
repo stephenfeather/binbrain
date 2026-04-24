@@ -57,12 +57,12 @@ def test_validate_device_metadata_rejects_unknown_inner_key():
 
 
 def test_validate_device_metadata_rejects_oversized():
-    """Payload exceeding 4 KiB is rejected with 'size' error."""
+    """Payload exceeding METADATA_MAX_BYTES is rejected with 'size' error."""
     import pytest
     from app.services.metadata_schema import METADATA_MAX_BYTES, validate_device_metadata
 
-    # Many small ocr entries — each text < 1 KiB but total > 4 KiB.
-    many_ocr = [{"text": f"item-{i:05d}", "confidence": 0.9} for i in range(200)]
+    # Many small ocr entries — each text < 1 KiB but total > METADATA_MAX_BYTES.
+    many_ocr = [{"text": f"item-{i:05d}", "confidence": 0.9} for i in range(500)]
     big = json.dumps({"device_processing": {"ocr": many_ocr}})
     assert len(big.encode()) > METADATA_MAX_BYTES, "Test payload must exceed size cap"
     with pytest.raises(ValueError, match="size"):
@@ -209,10 +209,10 @@ def test_validate_device_metadata_accepts_ios_extended_payload():
     assert dp["user_behavior"]["retake_count"] == 2
 
 
-def test_metadata_max_bytes_is_4kib():
+def test_metadata_max_bytes_is_15kib():
     from app.services.metadata_schema import METADATA_MAX_BYTES
 
-    assert METADATA_MAX_BYTES == 4 * 1024
+    assert METADATA_MAX_BYTES == 15 * 1024
 
 
 def test_metadata_string_max_bytes_is_1kib():
