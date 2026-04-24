@@ -1,3 +1,5 @@
+import pytest
+from app.db.repository import _normalize_category
 from app.services.upc_lookup import _simplify_category, validate_upc
 
 
@@ -159,6 +161,23 @@ def test_project_upcitemdb_response_missing_items():
         "total": 0,
         "items": [],
     }
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("   ", None),
+        ("electronics", "electronics"),
+        ("Electronics", "electronics"),
+        ("  Electronics  ", "electronics"),
+        ("MixedCase", "mixedcase"),
+        ("\tFastener\n", "fastener"),
+    ],
+)
+def test_normalize_category(raw, expected):
+    assert _normalize_category(raw) == expected
 
 
 def test_embedding_dimension_validation(client, app_module, monkeypatch):
