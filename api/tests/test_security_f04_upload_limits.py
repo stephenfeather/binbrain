@@ -96,12 +96,16 @@ def test_add_to_bin_rejects_too_many_files(client):
     ), f"Expected 400 for 21 files, got {resp.status_code}: {resp.text}"
 
 
-def test_ingest_rejects_oversized_request_via_content_length(client):
-    """POST /ingest with Content-Length > 50 MiB must return 413."""
-    # Send a request with a spoofed Content-Length header.
-    # TestClient sets Content-Length automatically for multipart; we override it.
+def test_ingest_rejects_oversized_request_via_content_length(user_client):
+    """POST /ingest with Content-Length > 50 MiB must return 413 for user keys.
+
+    Uses ``user_client`` (role=user) so the 50 MiB cap applies; the default
+    ``client`` fixture is an admin key and now gets the 500 MiB admin cap
+    (see BodySizeLimitMiddleware admin bypass). The admin-bypass path has
+    its own coverage in test_security_ff01_body_size_middleware.py.
+    """
     fifty_one_mib = 51 * 1024 * 1024
-    resp = client.post(
+    resp = user_client.post(
         "/ingest",
         data={"bin_id": "SIZETEST01"},
         files=[("photos", ("big.jpg", b"x" * 100, "image/jpeg"))],
