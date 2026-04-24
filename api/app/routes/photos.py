@@ -672,6 +672,15 @@ class SuggestionOutcome(BaseModel):
     shown_at: datetime
     decision: Literal["accepted", "rejected", "edited", "ignored"]
     edited_to_label: Optional[str] = None
+    # S-PROV-02: iOS knows the item_id at outcomes-POST time (it just
+    # called /items → /associate). Previously the server dropped it on
+    # the floor and relied on /photos/{id}/confirm to stitch item_id
+    # via link_suggestion_outcomes_to_item — but iOS never calls
+    # /confirm, so every outcome row landed with item_id=NULL. Accept
+    # it here and persist directly. Optional for backwards compat with
+    # older clients; FK (photo_suggestion_outcomes_item_id_fkey,
+    # ON DELETE SET NULL) rejects ids that don't reference an item.
+    item_id: Optional[int] = None
 
     @model_validator(mode="after")
     def _check_shape(self) -> "SuggestionOutcome":

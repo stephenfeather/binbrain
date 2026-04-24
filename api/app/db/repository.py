@@ -1520,11 +1520,11 @@ def replace_photo_suggestion_outcomes(
             INSERT INTO photo_suggestion_outcomes
               (photo_id, vision_model, prompt_version, label, category,
                confidence, bbox, shown_at, decision, edited_to_label,
-               client_retry_count)
+               client_retry_count, item_id)
             VALUES
               (:photo_id, :vision_model, :prompt_version, :label, :category,
                :confidence, :bbox, :shown_at, :decision, :edited_to_label,
-               :client_retry_count)
+               :client_retry_count, :item_id)
             """
         ),
         [
@@ -1533,6 +1533,7 @@ def replace_photo_suggestion_outcomes(
                 "vision_model": vision_model,
                 "prompt_version": prompt_version,
                 "client_retry_count": client_retry_count,
+                "item_id": None,
                 **d,
             }
             for d in decisions

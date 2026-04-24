@@ -240,3 +240,159 @@ def test_rejected_outcome_does_not_link(client, db, valid_jpeg_bytes):
         {"item_id": item_id},
     ).scalar_one()
     assert linked == 0
+
+
+# ---------------------------------------------------------------------------
+# S-PROV-02: item_id in the /outcomes payload is persisted directly,
+# bypassing the /confirm stitching step. This is the iOS flow:
+# /ingest → /items → /associate → /outcomes with item_id.
+# ---------------------------------------------------------------------------
+
+
+def _create_item_in_bin(client, bin_id: str, name: str, category: str) -> int:
+    r = client.post(
+        "/items",
+        json={"name": name, "category": category, "bin_id": bin_id},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["item_id"]
+
+
+def test_outcomes_item_id_is_persisted_without_confirm(client, db, valid_jpeg_bytes):
+    """iOS flow: create item via /items, then send item_id in /outcomes.
+
+    No /confirm call — the stitch happens at INSERT time in the
+    outcomes handler, exactly what the iOS client actually does.
+    """
+    bin_id = "BIN-PROV-IOSFLOW-0001"
+    photo_id = _seed_photo(client, valid_jpeg_bytes, bin_id)
+    item_id = _create_item_in_bin(client, bin_id, "Apple Magic Mouse", "electronics")
+    bbox = [0.12, 0.22, 0.52, 0.62]
+
+    _post_outcome(
+        client,
+        photo_id,
+        {
+            "label": "Apple Magic Mouse",
+            "category": "electronics",
+            "bbox": bbox,
+            "shown_at": "2026-04-24T13:00:00Z",
+            "decision": "accepted",
+            "item_id": item_id,
+        },
+    )
+
+    stored_item_id = db.execute(
+        text(
+            "SELECT item_id FROM photo_suggestion_outcomes "
+            "WHERE photo_id = :photo_id AND decision = 'accepted'"
+        ),
+        {"photo_id": photo_id},
+    ).scalar_one()
+    assert stored_item_id == item_id
+
+    resp = client.get(f"/bins/{bin_id}")
+    assert resp.status_code == 200
+    match = next(
+        (it for it in resp.json()["items"] if it["name"] == "Apple Magic Mouse"),
+        None,
+    )
+    assert match is not None
+    assert match["source_photo_id"] == photo_id
+    assert match["source_bbox"] == bbox
+
+
+def test_outcomes_without_item_id_still_accepted(client, db, valid_jpeg_bytes):
+    """Backwards compat: a pre-fix client that omits item_id still gets 200.
+
+    The row lands with item_id=NULL (same as old behaviour). No regression
+    for clients that have not yet shipped the new payload field.
+    """
+    bin_id = "BIN-PROV-NOITEM-0001"
+    photo_id = _seed_photo(client, valid_jpeg_bytes, bin_id)
+
+    _post_outcome(
+        client,
+        photo_id,
+        {
+            "label": "Unlinked Thing",
+            "category": "misc",
+            "bbox": [0.0, 0.0, 0.1, 0.1],
+            "shown_at": "2026-04-24T13:00:00Z",
+            "decision": "accepted",
+        },
+    )
+
+    stored_item_id = db.execute(
+        text(
+            "SELECT item_id FROM photo_suggestion_outcomes "
+            "WHERE photo_id = :photo_id AND decision = 'accepted'"
+        ),
+        {"photo_id": photo_id},
+    ).scalar_one()
+    assert stored_item_id is None
+
+
+def test_outcomes_with_edited_decision_carries_item_id(client, db, valid_jpeg_bytes):
+    """Edited outcomes also honour the client-supplied item_id.
+
+    The iOS flow creates an item from the edited_to_label, so item_id
+    must be persisted on 'edited' rows too — the same way /confirm's
+    link step handled the edited branch previously.
+    """
+    bin_id = "BIN-PROV-EDITED-ITEM-0001"
+    photo_id = _seed_photo(client, valid_jpeg_bytes, bin_id)
+    item_id = _create_item_in_bin(client, bin_id, "brass gear", "part")
+
+    _post_outcome(
+        client,
+        photo_id,
+        {
+            "label": "plastic gear",
+            "category": "part",
+            "bbox": [0.2, 0.2, 0.4, 0.4],
+            "shown_at": "2026-04-24T13:00:00Z",
+            "decision": "edited",
+            "edited_to_label": "brass gear",
+            "item_id": item_id,
+        },
+    )
+
+    stored_item_id = db.execute(
+        text(
+            "SELECT item_id FROM photo_suggestion_outcomes "
+            "WHERE photo_id = :photo_id AND decision = 'edited'"
+        ),
+        {"photo_id": photo_id},
+    ).scalar_one()
+    assert stored_item_id == item_id
+
+
+def test_outcomes_with_nonexistent_item_id_rejected_by_fk(client, valid_jpeg_bytes):
+    """FK guards against a malicious / buggy client sending garbage item_id.
+
+    photo_suggestion_outcomes.item_id has a FK to items.item_id with
+    ON DELETE SET NULL — the INSERT itself rejects nonexistent ids,
+    surfacing as a 500 from the generic exception handler. The column
+    does NOT silently fall back to NULL; callers must send a real id
+    or omit the field.
+    """
+    bin_id = "BIN-PROV-FK-0001"
+    photo_id = _seed_photo(client, valid_jpeg_bytes, bin_id)
+
+    payload = {
+        "vision_model": "test-vision-model",
+        "prompt_version": "v1",
+        "decisions": [
+            {
+                "label": "ghost",
+                "category": "misc",
+                "bbox": [0.0, 0.0, 0.1, 0.1],
+                "shown_at": "2026-04-24T13:00:00Z",
+                "decision": "accepted",
+                "item_id": 99_999_999,
+            }
+        ],
+    }
+    r = client.post(f"/photos/{photo_id}/outcomes", json=payload)
+    assert r.status_code >= 400, r.text
