@@ -5,6 +5,12 @@ from pathlib import Path
 
 # ── Upload limits (F-04) ──────────────────────────────────────────────────────
 MAX_REQUEST_BODY_BYTES: int = int(os.environ.get("MAX_REQUEST_BODY_BYTES", str(50 * 1024 * 1024)))
+# Admin-role keys get a higher cumulative body-size cap for bulk ingest.
+# Falls back to the user cap when unset, so behaviour is unchanged unless
+# overridden.
+MAX_REQUEST_BODY_BYTES_ADMIN: int = int(
+    os.environ.get("MAX_REQUEST_BODY_BYTES_ADMIN", str(500 * 1024 * 1024))
+)
 MAX_FILE_BYTES: int = int(os.environ.get("MAX_FILE_BYTES", str(15 * 1024 * 1024)))
 MAX_FILES_PER_REQUEST: int = int(os.environ.get("MAX_FILES_PER_REQUEST", "20"))
 

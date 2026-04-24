@@ -11,6 +11,7 @@ from app.config import (
     MAX_FILE_BYTES,
     MAX_FILES_PER_REQUEST,
     MAX_REQUEST_BODY_BYTES,
+    MAX_REQUEST_BODY_BYTES_ADMIN,
     MODELS_DIR,
 )
 from fastapi import Request
@@ -27,6 +28,7 @@ VISION_API_KEY = os.environ.get("VISION_API_KEY", "ollama")
 
 # Re-export for callers that import these from app.deps (backwards compat).
 MAX_REQUEST_BODY_BYTES = MAX_REQUEST_BODY_BYTES
+MAX_REQUEST_BODY_BYTES_ADMIN = MAX_REQUEST_BODY_BYTES_ADMIN
 MAX_FILE_BYTES = MAX_FILE_BYTES
 MAX_FILES_PER_REQUEST = MAX_FILES_PER_REQUEST
 MODELS_DIR = MODELS_DIR

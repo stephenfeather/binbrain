@@ -10,6 +10,7 @@ from app.body_size_middleware import BodySizeLimitMiddleware
 from app.db import repository
 from app.deps import (
     MAX_REQUEST_BODY_BYTES,
+    MAX_REQUEST_BODY_BYTES_ADMIN,
     MODELS_DIR,
     OLLAMA_URL,
     VISION_BASE_URL,
@@ -467,7 +468,43 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # oversize bodies (including chunked or spoofed Content-Length) are rejected
 # before any downstream code — including the multipart parser that would
 # otherwise spool to disk — observes the request body.
-app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
+#
+# Admin-role API keys get a higher cap (MAX_REQUEST_BODY_BYTES_ADMIN) for
+# bulk ingest. The resolver hashes X-API-Key, looks up the role via
+# repository.validate_api_key, and caches the result for 60s in-process so
+# we don't add a per-request DB roundtrip. Misses / unknown keys fall back
+# to the user cap — a broken resolver must never *raise* the cap.
+_BODY_SIZE_ROLE_CACHE: dict[str, tuple[str, float]] = {}
+_BODY_SIZE_ROLE_CACHE_TTL = 60.0
+_BODY_SIZE_ROLE_CACHE_LOCK = threading.Lock()
+
+
+def _resolve_api_key_role(raw_key: str) -> str | None:
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    now = time.time()
+    with _BODY_SIZE_ROLE_CACHE_LOCK:
+        cached = _BODY_SIZE_ROLE_CACHE.get(key_hash)
+        if cached and cached[1] > now:
+            return cached[0]
+    db = SessionLocal()
+    try:
+        row = repository.validate_api_key(db, key_hash)
+    finally:
+        db.close()
+    if not row:
+        return None
+    role = row.get("role", "user") or "user"
+    with _BODY_SIZE_ROLE_CACHE_LOCK:
+        _BODY_SIZE_ROLE_CACHE[key_hash] = (role, now + _BODY_SIZE_ROLE_CACHE_TTL)
+    return role
+
+
+app.add_middleware(
+    BodySizeLimitMiddleware,
+    max_bytes=MAX_REQUEST_BODY_BYTES,
+    admin_max_bytes=MAX_REQUEST_BODY_BYTES_ADMIN,
+    role_resolver=_resolve_api_key_role,
+)
 
 
 # ── Middleware ordering assertion ───────────────────────────────────────────────

@@ -207,3 +207,182 @@ def test_non_http_scope_is_passed_through():
 
     _run(mw({"type": "lifespan"}, recv, send))
     assert called["n"] == 1
+
+
+# ── Admin role bypass: higher cap for admin X-API-Key ────────────────────────
+
+
+def test_admin_key_gets_admin_cap_for_body_between_user_and_admin_caps():
+    """Body between user cap and admin cap must pass for admin keys."""
+    from app.body_size_middleware import BodySizeLimitMiddleware
+
+    user_cap = 100
+    admin_cap = 1000
+
+    def resolver(raw_key: str) -> str | None:
+        return "admin" if raw_key == "bb_admin_key" else "user"
+
+    mw = BodySizeLimitMiddleware(
+        _noop_app,
+        max_bytes=user_cap,
+        admin_max_bytes=admin_cap,
+        role_resolver=resolver,
+    )
+    headers = [
+        (b"content-length", b"500"),
+        (b"x-api-key", b"bb_admin_key"),
+    ]
+    scope = _http_scope(headers)
+    chunks = [b"z" * 500]
+    send = _SendCollector()
+
+    _run(mw(scope, _receive_from(chunks), send))
+
+    assert send.status == 200, f"expected 200, got {send.status}"
+    assert send.body_bytes == b"ok:500"
+
+
+def test_user_key_rejected_when_body_exceeds_user_cap():
+    """Non-admin keys still get the tight user cap."""
+    from app.body_size_middleware import BodySizeLimitMiddleware
+
+    user_cap = 100
+    admin_cap = 1000
+
+    def resolver(raw_key: str) -> str | None:
+        return "admin" if raw_key == "bb_admin_key" else "user"
+
+    mw = BodySizeLimitMiddleware(
+        _noop_app,
+        max_bytes=user_cap,
+        admin_max_bytes=admin_cap,
+        role_resolver=resolver,
+    )
+    headers = [
+        (b"content-length", b"500"),
+        (b"x-api-key", b"bb_user_key"),
+    ]
+    scope = _http_scope(headers)
+    chunks = [b"z" * 500]
+    send = _SendCollector()
+
+    _run(mw(scope, _receive_from(chunks), send))
+
+    assert send.status == 413, f"expected 413, got {send.status}"
+
+
+def test_unknown_key_falls_back_to_user_cap():
+    """Resolver returning None (unknown key) must NOT raise the cap."""
+    from app.body_size_middleware import BodySizeLimitMiddleware
+
+    user_cap = 100
+    admin_cap = 1000
+
+    def resolver(raw_key: str) -> str | None:
+        return None
+
+    mw = BodySizeLimitMiddleware(
+        _noop_app,
+        max_bytes=user_cap,
+        admin_max_bytes=admin_cap,
+        role_resolver=resolver,
+    )
+    headers = [
+        (b"content-length", b"500"),
+        (b"x-api-key", b"bb_whoever"),
+    ]
+    scope = _http_scope(headers)
+    chunks = [b"z" * 500]
+    send = _SendCollector()
+
+    _run(mw(scope, _receive_from(chunks), send))
+
+    assert send.status == 413, f"expected 413, got {send.status}"
+
+
+def test_resolver_exception_falls_back_to_user_cap():
+    """A raising resolver must not leak capacity — fall back to user cap."""
+    from app.body_size_middleware import BodySizeLimitMiddleware
+
+    user_cap = 100
+    admin_cap = 1000
+
+    def resolver(raw_key: str) -> str | None:
+        raise RuntimeError("db down")
+
+    mw = BodySizeLimitMiddleware(
+        _noop_app,
+        max_bytes=user_cap,
+        admin_max_bytes=admin_cap,
+        role_resolver=resolver,
+    )
+    headers = [
+        (b"content-length", b"500"),
+        (b"x-api-key", b"bb_admin_key"),
+    ]
+    scope = _http_scope(headers)
+    chunks = [b"z" * 500]
+    send = _SendCollector()
+
+    _run(mw(scope, _receive_from(chunks), send))
+
+    assert send.status == 413, f"expected 413, got {send.status}"
+
+
+def test_no_api_key_header_uses_user_cap():
+    """Without X-API-Key, resolver is not consulted and user cap applies."""
+    from app.body_size_middleware import BodySizeLimitMiddleware
+
+    user_cap = 100
+    admin_cap = 1000
+    resolver_calls = {"n": 0}
+
+    def resolver(raw_key: str) -> str | None:
+        resolver_calls["n"] += 1
+        return "admin"
+
+    mw = BodySizeLimitMiddleware(
+        _noop_app,
+        max_bytes=user_cap,
+        admin_max_bytes=admin_cap,
+        role_resolver=resolver,
+    )
+    headers = [(b"content-length", b"500")]
+    scope = _http_scope(headers)
+    chunks = [b"z" * 500]
+    send = _SendCollector()
+
+    _run(mw(scope, _receive_from(chunks), send))
+
+    assert send.status == 413, f"expected 413, got {send.status}"
+    assert resolver_calls["n"] == 0, "resolver called without X-API-Key header"
+
+
+def test_admin_streaming_body_over_user_cap_under_admin_cap_passes():
+    """Streaming oversize-vs-user / under-admin body passes for admin."""
+    from app.body_size_middleware import BodySizeLimitMiddleware
+
+    user_cap = 100
+    admin_cap = 1000
+
+    def resolver(raw_key: str) -> str | None:
+        return "admin"
+
+    mw = BodySizeLimitMiddleware(
+        _noop_app,
+        max_bytes=user_cap,
+        admin_max_bytes=admin_cap,
+        role_resolver=resolver,
+    )
+    headers = [
+        (b"transfer-encoding", b"chunked"),
+        (b"x-api-key", b"bb_admin_key"),
+    ]
+    scope = _http_scope(headers)
+    chunks = [b"q" * 200, b"q" * 200, b"q" * 200]
+    send = _SendCollector()
+
+    _run(mw(scope, _receive_from(chunks), send))
+
+    assert send.status == 200, f"expected 200, got {send.status}"
+    assert send.body_bytes == b"ok:600"

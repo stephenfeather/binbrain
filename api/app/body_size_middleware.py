@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable
 
 _Send = Callable[[dict], Awaitable[None]]
 _Receive = Callable[[], Awaitable[dict]]
+_RoleResolver = Callable[[str], str | None]
 
 logger = logging.getLogger("binbrain")
 
@@ -45,16 +46,58 @@ class BodySizeLimitMiddleware:
     Installed as the outermost HTTP middleware so that oversize bodies are
     rejected before any downstream middleware (auth, rate limit) or handler
     starts consuming them.
+
+    Admin-role API keys are granted a higher cap via ``admin_max_bytes``.
+    A ``role_resolver`` callable maps a raw ``X-API-Key`` header value to the
+    key's role ("admin" / "user" / None for unknown). The resolver is the
+    single injection point so the middleware stays decoupled from the DB —
+    callers wire a real resolver in production; unit tests pass a stub.
     """
 
-    def __init__(self, app, max_bytes: int) -> None:
+    def __init__(
+        self,
+        app,
+        max_bytes: int,
+        admin_max_bytes: int | None = None,
+        role_resolver: _RoleResolver | None = None,
+    ) -> None:
         self.app = app
         self.max_bytes = int(max_bytes)
+        self.admin_max_bytes = (
+            int(admin_max_bytes) if admin_max_bytes is not None else self.max_bytes
+        )
+        self.role_resolver = role_resolver
+
+    def _effective_cap(self, scope: dict) -> int:
+        """Resolve the body-size cap for this request.
+
+        Returns ``admin_max_bytes`` when the X-API-Key header maps to an
+        admin-role key; ``max_bytes`` otherwise. Failures in the resolver
+        fall back to the user cap — a misconfigured resolver must never
+        *raise* the cap for unauthenticated traffic.
+        """
+        if self.role_resolver is None or self.admin_max_bytes == self.max_bytes:
+            return self.max_bytes
+        raw_key: str | None = None
+        for name, value in scope.get("headers", ()):
+            if name == b"x-api-key":
+                raw_key = value.decode("latin-1", errors="ignore")
+                break
+        if not raw_key:
+            return self.max_bytes
+        try:
+            role = self.role_resolver(raw_key)
+        except Exception:
+            logger.exception("event=body_size_role_resolver_failed")
+            return self.max_bytes
+        return self.admin_max_bytes if role == "admin" else self.max_bytes
 
     async def __call__(self, scope: dict, receive: _Receive, send: _Send) -> None:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
+
+        effective_cap = self._effective_cap(scope)
 
         # Fast-reject when Content-Length is present and already over cap.
         for name, value in scope.get("headers", ()):
@@ -63,16 +106,16 @@ class BodySizeLimitMiddleware:
                     declared = int(value)
                 except ValueError:
                     declared = -1
-                if declared > self.max_bytes:
+                if declared > effective_cap:
                     logger.warning(
                         "event=request_too_large mode=content_length "
                         "declared=%d cap=%d path=%s ip=%s",
                         declared,
-                        self.max_bytes,
+                        effective_cap,
                         scope.get("path", ""),
                         _client_ip(scope),
                     )
-                    await self._send_413(send)
+                    await self._send_413(send, effective_cap)
                     await _drain(receive)
                     return
                 break
@@ -98,7 +141,7 @@ class BodySizeLimitMiddleware:
                 break
             body = message.get("body", b"")
             total += len(body)
-            if total > self.max_bytes:
+            if total > effective_cap:
                 cap_exceeded = True
                 # Drain any remaining body frames before responding so the
                 # client's stream is fully consumed (prevents broken-pipe
@@ -114,11 +157,11 @@ class BodySizeLimitMiddleware:
                 "event=request_too_large mode=streaming "
                 "observed=%d cap=%d path=%s ip=%s",
                 total,
-                self.max_bytes,
+                effective_cap,
                 scope.get("path", ""),
                 _client_ip(scope),
             )
-            await self._send_413(send)
+            await self._send_413(send, effective_cap)
             return
 
         # Under cap: replay the buffered body frames to the downstream app,
@@ -132,13 +175,14 @@ class BodySizeLimitMiddleware:
 
         await self.app(scope, replay_receive, send)
 
-    async def _send_413(self, send: _Send) -> None:
+    async def _send_413(self, send: _Send, effective_cap: int | None = None) -> None:
+        cap = self.max_bytes if effective_cap is None else effective_cap
         body = json.dumps(
             {
                 "version": "1",
                 "error": {
                     "code": "payload_too_large",
-                    "message": (f"Request body exceeds the {self.max_bytes}-byte limit"),
+                    "message": (f"Request body exceeds the {cap}-byte limit"),
                 },
             }
         ).encode()
