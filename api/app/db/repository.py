@@ -251,6 +251,13 @@ def insert_upc_lookup(
     return int(res.scalar_one())
 
 
+def _normalize_category(category: Optional[str]) -> Optional[str]:
+    if category is None:
+        return None
+    normalized = category.strip().lower()
+    return normalized or None
+
+
 def insert_item(
     db: Session,
     name: str,
@@ -258,6 +265,7 @@ def insert_item(
     notes: Optional[str],
     upc: Optional[str] = None,
 ) -> int:
+    category = _normalize_category(category)
     res = db.execute(
         text(
             """
@@ -284,6 +292,7 @@ def insert_item_with_status(
     notes: Optional[str],
     upc: Optional[str] = None,
 ) -> tuple[int, bool]:
+    category = _normalize_category(category)
     res = (
         db.execute(
             text(
