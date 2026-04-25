@@ -810,6 +810,50 @@ def _coerce_stored_body(response_body) -> dict:
     return response_body
 
 
+def _maybe_idempotent_replay(
+    existing: dict | None,
+    *,
+    body_sha256: bytes,
+    response: Response,
+    request_id: str | None,
+    api_key_id: int,
+    idempotency_key: str,
+) -> dict | None:
+    """SEC-26-3 / SEC-42-2: handle a hit on the idempotency-key store.
+
+    Returns ``None`` when ``existing`` is ``None`` so the caller proceeds
+    with the domain write. On a hash match, sets ``X-Idempotent-Replay``
+    plus the stored status code on ``response`` and returns the decoded
+    body. On a hash mismatch, logs and raises ``409`` — the outer
+    ``except HTTPException`` block in the route owns the rollback (do
+    NOT add a rollback here).
+
+    The caller is responsible for ``db.commit()`` in the under-lock
+    branch to release the advisory lock; this helper does not commit.
+    """
+    if existing is None:
+        return None
+    if bytes(existing["body_sha256"]) != body_sha256:
+        logger.warning(
+            "event=idempotency_key_mismatch request_id=%s api_key_id=%s key=%s",
+            request_id,
+            api_key_id,
+            idempotency_key,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "idempotency_key_mismatch",
+                "message": (
+                    "request body differs from prior submission " "under this Idempotency-Key"
+                ),
+            },
+        )
+    response.headers["X-Idempotent-Replay"] = "true"
+    response.status_code = int(existing["response_status"])
+    return _coerce_stored_body(existing["response_body"])
+
+
 @router.post("/photos/{photo_id}/outcomes")
 async def post_photo_suggestion_outcomes(
     photo_id: int,
@@ -870,30 +914,20 @@ async def post_photo_suggestion_outcomes(
     try:
         if idempotency_key is not None:
             assert api_key_id is not None and body_sha256 is not None
+            request_id = db.info.get("request_id") if db.info else None
             # Pre-lock fast path — steady-state crash-reclaim replays avoid
             # every single advisory lock acquisition.
             existing = repository.fetch_idempotent_record(db, api_key_id, idempotency_key)
-            if existing is not None:
-                if bytes(existing["body_sha256"]) != body_sha256:
-                    logger.warning(
-                        "event=idempotency_key_mismatch request_id=%s api_key_id=%s key=%s",
-                        db.info.get("request_id") if db.info else None,
-                        api_key_id,
-                        idempotency_key,
-                    )
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "code": "idempotency_key_mismatch",
-                            "message": (
-                                "request body differs from prior submission "
-                                "under this Idempotency-Key"
-                            ),
-                        },
-                    )
-                response.headers["X-Idempotent-Replay"] = "true"
-                response.status_code = int(existing["response_status"])
-                return _coerce_stored_body(existing["response_body"])
+            replay = _maybe_idempotent_replay(
+                existing,
+                body_sha256=body_sha256,
+                response=response,
+                request_id=request_id,
+                api_key_id=api_key_id,
+                idempotency_key=idempotency_key,
+            )
+            if replay is not None:
+                return replay
 
             # Serialize concurrent first-sighting attempts: only one txn
             # per api_key can be mid-insert on the same key.
@@ -901,29 +935,18 @@ async def post_photo_suggestion_outcomes(
             # Under the lock, re-check: a racing peer may have committed
             # between the pre-check and the lock wait.
             existing = repository.fetch_idempotent_record(db, api_key_id, idempotency_key)
-            if existing is not None:
-                if bytes(existing["body_sha256"]) != body_sha256:
-                    logger.warning(
-                        "event=idempotency_key_mismatch request_id=%s api_key_id=%s key=%s",
-                        db.info.get("request_id") if db.info else None,
-                        api_key_id,
-                        idempotency_key,
-                    )
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "code": "idempotency_key_mismatch",
-                            "message": (
-                                "request body differs from prior submission "
-                                "under this Idempotency-Key"
-                            ),
-                        },
-                    )
-                response.headers["X-Idempotent-Replay"] = "true"
-                response.status_code = int(existing["response_status"])
+            replay = _maybe_idempotent_replay(
+                existing,
+                body_sha256=body_sha256,
+                response=response,
+                request_id=request_id,
+                api_key_id=api_key_id,
+                idempotency_key=idempotency_key,
+            )
+            if replay is not None:
                 # Commit releases the advisory lock; no domain write ran.
                 db.commit()
-                return _coerce_stored_body(existing["response_body"])
+                return replay
 
         metadata_upc = extract_upc_from_device_metadata(
             repository.fetch_photo_device_metadata(db, photo_id)
