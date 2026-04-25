@@ -120,6 +120,209 @@ def _detection_row_to_hit(row: dict) -> dict:
     }
 
 
+def _get_cached_detections(
+    photo_id: int, vision_model: str
+) -> tuple[list[dict], dict[int, int], str | None] | None:
+    """Look up cached photo_detections for (photo_id, vision_model).
+
+    Returns ``(vision_hits, detection_id_by_hit_idx, prompt_version)`` on a
+    cache hit, ``None`` when the cache is empty. ``prompt_version`` is the
+    value stamped at write time (Dev2_016b: historical lineage, not live
+    PROMPT_VERSION).
+    """
+    db = SessionLocal()
+    try:
+        cached_rows = repository.get_photo_detections(db, photo_id, vision_model)
+    finally:
+        db.close()
+    if not cached_rows:
+        return None
+    vision_hits = [_detection_row_to_hit(r) for r in cached_rows]
+    det_ids = {i: r["id"] for i, r in enumerate(cached_rows)}
+    return vision_hits, det_ids, cached_rows[0]["prompt_version"]
+
+
+def _call_vlm_and_persist(
+    photo_id: int,
+    resolved_path: Path,
+    vision_model: str,
+    flags: dict,
+) -> tuple[list[dict], dict[int, int], int]:
+    """Call the VLM and persist detections for future cache hits.
+
+    Clear-then-insert (decision 1: latest vision answer wins). RETURNING ids
+    lets us FK match-telemetry rows. Returns
+    ``(vision_hits, detection_id_by_hit_idx, vision_elapsed_ms)``.
+    """
+    vision_hits, vision_elapsed_ms = describe_photo(
+        str(resolved_path),
+        VISION_BASE_URL,
+        VISION_API_KEY,
+        vision_model,
+        get_max_image_px(),
+        photo_id=photo_id,
+        flags_out=flags,
+    )
+    db = SessionLocal()
+    try:
+        repository.clear_photo_detections(db, photo_id, vision_model)
+        persistable: list[tuple[int, dict]] = []
+        for i, h in enumerate(vision_hits):
+            row = _hit_to_detection_row(h)
+            if row is not None:
+                persistable.append((i, row))
+        det_ids: dict[int, int] = {}
+        if persistable:
+            detection_ids = repository.insert_photo_detections(
+                db,
+                photo_id,
+                vision_model,
+                [r for _, r in persistable],
+                prompt_version=PROMPT_VERSION,
+            )
+            det_ids = {
+                hit_idx: det_id
+                for (hit_idx, _), det_id in zip(persistable, detection_ids, strict=True)
+            }
+        db.commit()
+    finally:
+        db.close()
+    return vision_hits, det_ids, vision_elapsed_ms
+
+
+def _match_and_record(
+    photo_id: int,
+    vision_hits: list[dict],
+    detection_id_by_hit_idx: dict[int, int],
+    threshold_at_compute: float,
+) -> list[dict]:
+    """Embedding match + per-match telemetry write.
+
+    Returns a list of suggestion dicts sorted by descending confidence,
+    breaking ties on name. Dev2_018: persist the match (score, threshold)
+    per detection so threshold tuning is answerable from data; NULL
+    matched_item_id when below threshold (the rejection signal is what makes
+    the table useful for tuning). Match-telemetry is best-effort — a DB
+    failure must not break the /suggest response contract.
+    """
+    db = SessionLocal()
+    try:
+        suggestions: list[dict] = []
+        match_rows: list[dict] = []
+
+        for hit_idx, hit in enumerate(vision_hits):
+            name = (hit.get("name") or "").strip()
+            category = hit.get("category")
+            vision_conf = float(hit.get("confidence") or 0.5)
+            if not name:
+                continue
+
+            suggestion: dict = {
+                "item_id": None,
+                "name": name,
+                "category": category,
+                "confidence": round(vision_conf, 4),
+                "bbox": hit.get("bbox"),
+                "bins": [],
+                "match": None,
+            }
+
+            try:
+                qvec = embed_text(canonical_item_text(name, category, None))
+                matches = repository.search_items_by_embedding(db, vec_to_pgvector(qvec), limit=1)
+                if matches:
+                    m = matches[0]
+                    score = float(m["score"])
+                    above = score >= threshold_at_compute
+                    det_id = detection_id_by_hit_idx.get(hit_idx)
+                    if det_id is not None:
+                        match_rows.append(
+                            {
+                                "photo_detection_id": det_id,
+                                "matched_item_id": int(m["item_id"]) if above else None,
+                                "score": score,
+                                "threshold_at_compute": threshold_at_compute,
+                            }
+                        )
+                    if above:
+                        suggestion["match"] = {
+                            "item_id": m["item_id"],
+                            "name": m["name"],
+                            "category": m["category"],
+                            "score": round(score, 4),
+                            "bins": list(m["bins"]) if m["bins"] else [],
+                        }
+            except Exception:
+                pass
+
+            suggestions.append(suggestion)
+
+        suggestions.sort(key=lambda s: (-s["confidence"], s["name"] or ""))
+
+        if match_rows:
+            try:
+                repository.insert_photo_suggestion_matches(db, rows=match_rows)
+                db.commit()
+            except Exception as m_exc:
+                logger.warning(
+                    "event=photo_suggestion_matches_write_failed photo_id=%s rows=%s err=%s",
+                    photo_id,
+                    len(match_rows),
+                    m_exc,
+                )
+    finally:
+        db.close()
+    return suggestions
+
+
+def _write_vision_call_telemetry(
+    *,
+    photo_id: int,
+    vision_model: str,
+    response_prompt_version: str | None,
+    started_at: datetime,
+    hits_count: int | None,
+    cached_flag: bool,
+    outcome: str,
+    error_code: str | None,
+    flags: dict,
+) -> None:
+    """Best-effort vision_calls telemetry. NEVER raises.
+
+    Uses a fresh session intentionally: if the main /suggest session rolled
+    back due to an exception, the vision_calls row still needs to persist.
+    Pool checkout cost is microseconds versus the value of preserving the
+    error row.
+    """
+    try:
+        elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+        db = SessionLocal()
+        try:
+            repository.insert_vision_call(
+                db,
+                photo_id=photo_id,
+                model=vision_model,
+                prompt_version=response_prompt_version,
+                base_url=VISION_BASE_URL,
+                started_at=started_at,
+                elapsed_ms=elapsed_ms,
+                hits_count=hits_count,
+                cached=cached_flag,
+                outcome=outcome,
+                error_code=error_code,
+                flags=flags,
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as tel_exc:
+        logger.warning(
+            "event=vision_call_telemetry_write_failed photo_id=%s err=%s",
+            photo_id,
+            tel_exc,
+        )
+
+
 @router.get("/photos/{photo_id}/suggest", dependencies=[Depends(require_vision_rate_limit)])
 def suggest_for_photo(
     photo_id: int,
@@ -150,7 +353,7 @@ def suggest_for_photo(
     # Dev2_018: telemetry bookkeeping. Initialised before any branch that may
     # raise so the finally-block write has a consistent row to emit.
     started_at = datetime.now(UTC)
-    flags: dict = {"stages": []}
+    flags: dict = {"stages": ["resolve"]}
     outcome = "ok"
     error_code: str | None = None
     hits_count: int | None = None
@@ -158,29 +361,19 @@ def suggest_for_photo(
     # Dev2_016b: on a cache hit we echo the prompt_version stamped at write
     # time (historical lineage), not the live PROMPT_VERSION constant.
     response_prompt_version: str | None = PROMPT_VERSION
-    # Dev2_018: hit_idx -> photo_detections.id for wiring match-telemetry FKs.
     detection_id_by_hit_idx: dict[int, int] = {}
     vision_hits: list[dict] = []
     vision_elapsed_ms = 0
 
     tracker = get_tracker()
     tracker.start(photo_id)
-    flags["stages"].append("resolve")
 
     try:
-        # -- cache path ------------------------------------------------------
         if not refresh:
-            db_read = SessionLocal()
-            try:
-                cached_rows = repository.get_photo_detections(db_read, photo_id, vision_model)
-            finally:
-                db_read.close()
-            if cached_rows:
-                vision_hits = [_detection_row_to_hit(r) for r in cached_rows]
-                detection_id_by_hit_idx = {i: r["id"] for i, r in enumerate(cached_rows)}
-                vision_elapsed_ms = 0
+            cached = _get_cached_detections(photo_id, vision_model)
+            if cached is not None:
+                vision_hits, detection_id_by_hit_idx, response_prompt_version = cached
                 cached_flag = True
-                response_prompt_version = cached_rows[0]["prompt_version"]
                 logger.info(
                     "event=photo_suggest_cache_hit request_id=%s photo_id=%s model=%s hits=%s",
                     request_id,
@@ -189,7 +382,6 @@ def suggest_for_photo(
                     len(vision_hits),
                 )
 
-        # -- fresh VLM path --------------------------------------------------
         if not cached_flag:
             flags["stages"].append("vlm")
             logger.info(
@@ -197,14 +389,8 @@ def suggest_for_photo(
                 request_id,
                 photo_id,
             )
-            vision_hits, vision_elapsed_ms = describe_photo(
-                str(resolved_path),
-                VISION_BASE_URL,
-                VISION_API_KEY,
-                vision_model,
-                get_max_image_px(),
-                photo_id=photo_id,
-                flags_out=flags,
+            vision_hits, detection_id_by_hit_idx, vision_elapsed_ms = _call_vlm_and_persist(
+                photo_id, resolved_path, vision_model, flags
             )
             logger.info(
                 "event=photo_suggest_vision_done request_id=%s photo_id=%s ms=%s hits=%s",
@@ -214,120 +400,17 @@ def suggest_for_photo(
                 len(vision_hits),
             )
 
-            # Persist detections for future cache hits. Clear first so re-runs
-            # replace rather than accumulate (decision 1: "latest vision
-            # answer wins"). RETURNING ids lets us FK match-telemetry rows.
-            db_write = SessionLocal()
-            try:
-                repository.clear_photo_detections(db_write, photo_id, vision_model)
-                persistable: list[tuple[int, dict]] = []
-                for i, h in enumerate(vision_hits):
-                    row = _hit_to_detection_row(h)
-                    if row is not None:
-                        persistable.append((i, row))
-                if persistable:
-                    detection_ids = repository.insert_photo_detections(
-                        db_write,
-                        photo_id,
-                        vision_model,
-                        [r for _, r in persistable],
-                        prompt_version=PROMPT_VERSION,
-                    )
-                    detection_id_by_hit_idx = {
-                        hit_idx: det_id
-                        for (hit_idx, _), det_id in zip(persistable, detection_ids, strict=True)
-                    }
-                db_write.commit()
-            finally:
-                db_write.close()
-
         tracker.update_stage(photo_id, "embedding_match")
         flags["stages"].append("embed")
 
-        # -- embedding match + per-match telemetry ---------------------------
         # Decision 7: read SUGGEST_MATCH_THRESHOLD exactly once per invocation
         # and write the same value on every match row for this call. S-01
         # promoted this knob into the runtime settings store; the DB is the
         # source of truth, fed through get_suggest_match_threshold().
         threshold_at_compute = get_suggest_match_threshold()
-
-        db2 = SessionLocal()
-        try:
-            suggestions: list[dict] = []
-            match_rows: list[dict] = []
-
-            for hit_idx, hit in enumerate(vision_hits):
-                name = (hit.get("name") or "").strip()
-                category = hit.get("category")
-                vision_conf = float(hit.get("confidence") or 0.5)
-                if not name:
-                    continue
-
-                suggestion: dict = {
-                    "item_id": None,
-                    "name": name,
-                    "category": category,
-                    "confidence": round(vision_conf, 4),
-                    "bbox": hit.get("bbox"),
-                    "bins": [],
-                    "match": None,
-                }
-
-                try:
-                    qvec = embed_text(canonical_item_text(name, category, None))
-                    matches = repository.search_items_by_embedding(
-                        db2, vec_to_pgvector(qvec), limit=1
-                    )
-                    if matches:
-                        m = matches[0]
-                        score = float(m["score"])
-                        above = score >= threshold_at_compute
-                        # Dev2_018: persist the match (score, threshold) per
-                        # detection so threshold tuning is answerable from
-                        # data. NULL matched_item_id when below threshold —
-                        # that rejection signal is exactly what makes the
-                        # table useful for tuning.
-                        det_id = detection_id_by_hit_idx.get(hit_idx)
-                        if det_id is not None:
-                            match_rows.append(
-                                {
-                                    "photo_detection_id": det_id,
-                                    "matched_item_id": int(m["item_id"]) if above else None,
-                                    "score": score,
-                                    "threshold_at_compute": threshold_at_compute,
-                                }
-                            )
-                        if above:
-                            suggestion["match"] = {
-                                "item_id": m["item_id"],
-                                "name": m["name"],
-                                "category": m["category"],
-                                "score": round(score, 4),
-                                "bins": list(m["bins"]) if m["bins"] else [],
-                            }
-                except Exception:
-                    pass
-
-                suggestions.append(suggestion)
-
-            suggestions.sort(key=lambda s: (-s["confidence"], s["name"] or ""))
-
-            # Dev2_018 (PR#21 review follow-up): match-telemetry is as
-            # best-effort as the vision_calls row. A DB failure here must not
-            # break the /suggest response contract.
-            if match_rows:
-                try:
-                    repository.insert_photo_suggestion_matches(db2, rows=match_rows)
-                    db2.commit()
-                except Exception as m_exc:
-                    logger.warning(
-                        "event=photo_suggestion_matches_write_failed photo_id=%s rows=%s err=%s",
-                        photo_id,
-                        len(match_rows),
-                        m_exc,
-                    )
-        finally:
-            db2.close()
+        suggestions = _match_and_record(
+            photo_id, vision_hits, detection_id_by_hit_idx, threshold_at_compute
+        )
 
         flags["stages"].append("match")
         tracker.mark_done(photo_id)
@@ -354,10 +437,10 @@ def suggest_for_photo(
         }
     except Exception as exc:
         # Dev2_018 (PR#21 review follow-up): any exception reaching the outer
-        # try — VLM call, detection persistence, embedding match — updates the
-        # telemetry fields before the finally block writes the row. Without
-        # this, a late-stage DB failure would return HTTP 500 while
-        # vision_calls recorded outcome=ok, corrupting the error-rate metric.
+        # try updates telemetry fields before the finally block writes the
+        # row. Without this, a late-stage DB failure would return HTTP 500
+        # while vision_calls recorded outcome=ok, corrupting the error-rate
+        # metric.
         outcome = "error"
         error_code = type(exc).__name__
         tracker.mark_failed(photo_id, type(exc).__name__.lower())
@@ -370,41 +453,17 @@ def suggest_for_photo(
         )
         raise
     finally:
-        # Dev2_018: best-effort vision_calls telemetry. Runs on every terminal
-        # state (success, cache hit, or error). NEVER lets its own failure
-        # affect the /suggest response contract — a raising writer is logged
-        # and swallowed so the user-facing behaviour is unchanged.
-        try:
-            elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
-            # Telemetry uses a fresh session intentionally: if the main
-            # /suggest session rolled back due to an exception, the
-            # vision_calls row still needs to persist. Pool checkout cost is
-            # microseconds versus the value of preserving the error row.
-            db_tel = SessionLocal()
-            try:
-                repository.insert_vision_call(
-                    db_tel,
-                    photo_id=photo_id,
-                    model=vision_model,
-                    prompt_version=response_prompt_version,
-                    base_url=VISION_BASE_URL,
-                    started_at=started_at,
-                    elapsed_ms=elapsed_ms,
-                    hits_count=hits_count,
-                    cached=cached_flag,
-                    outcome=outcome,
-                    error_code=error_code,
-                    flags=flags,
-                )
-                db_tel.commit()
-            finally:
-                db_tel.close()
-        except Exception as tel_exc:
-            logger.warning(
-                "event=vision_call_telemetry_write_failed photo_id=%s err=%s",
-                photo_id,
-                tel_exc,
-            )
+        _write_vision_call_telemetry(
+            photo_id=photo_id,
+            vision_model=vision_model,
+            response_prompt_version=response_prompt_version,
+            started_at=started_at,
+            hits_count=hits_count,
+            cached_flag=cached_flag,
+            outcome=outcome,
+            error_code=error_code,
+            flags=flags,
+        )
 
 
 @router.get("/photos/{photo_id}/suggest/status")
