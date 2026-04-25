@@ -24,6 +24,7 @@ from app.routes.bins import guard_user_bin_name
 from app.services.detection import detect, get_model_name
 from app.services.rate_limiter import require_vision_rate_limit
 from app.services.suggest_tracker import get_tracker
+from app.services.upc_lookup import extract_upc_from_device_metadata
 from app.services.vision import PROMPT_VERSION, describe_photo
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -595,6 +596,9 @@ def confirm_photo_groups(
         raise HTTPException(status_code=404, detail="bin not found") from None
 
     model = get_model_name()
+    metadata_upc = extract_upc_from_device_metadata(
+        repository.fetch_photo_device_metadata(db, photo_id)
+    )
     results = []
     try:
         for g in selected_groups:
@@ -609,7 +613,9 @@ def confirm_photo_groups(
                 raise HTTPException(status_code=400, detail="category is required")
             quantity = g.get("quantity")
 
-            item_id, inserted = repository.insert_item_with_status(db, label, category, None)
+            item_id, inserted = repository.insert_item_with_status(
+                db, label, category, None, upc=metadata_upc
+            )
             linked = repository.insert_bin_item(db, bin_id, item_id, None, quantity)
             repository.insert_photo_group_item(db, photo_id, model, label, category, item_id)
             repository.link_suggestion_outcomes_to_item(

@@ -180,6 +180,79 @@ def test_normalize_category(raw, expected):
     assert _normalize_category(raw) == expected
 
 
+class TestExtractUpcFromDeviceMetadata:
+    def _picker(self):
+        from app.services.upc_lookup import extract_upc_from_device_metadata
+
+        return extract_upc_from_device_metadata
+
+    def test_none_metadata(self):
+        assert self._picker()(None) is None
+
+    def test_non_dict_metadata(self):
+        assert self._picker()("not a dict") is None
+
+    def test_missing_device_processing(self):
+        assert self._picker()({}) is None
+
+    def test_device_processing_not_dict(self):
+        assert self._picker()({"device_processing": "nope"}) is None
+
+    def test_missing_barcodes(self):
+        assert self._picker()({"device_processing": {}}) is None
+
+    def test_barcodes_not_list(self):
+        assert self._picker()({"device_processing": {"barcodes": "x"}}) is None
+
+    def test_empty_barcodes(self):
+        assert self._picker()({"device_processing": {"barcodes": []}}) is None
+
+    def test_picks_valid_upca(self):
+        meta = {
+            "device_processing": {"barcodes": [{"payload": "012345678905", "symbology": "UPC-A"}]}
+        }
+        assert self._picker()(meta) == "012345678905"
+
+    def test_picks_valid_ean13(self):
+        meta = {
+            "device_processing": {"barcodes": [{"payload": "4005176834561", "symbology": "EAN-13"}]}
+        }
+        assert self._picker()(meta) == "4005176834561"
+
+    def test_skips_invalid_picks_first_valid(self):
+        meta = {
+            "device_processing": {
+                "barcodes": [
+                    {"payload": "abc", "symbology": "QR"},
+                    {"payload": "12345"},
+                    {"payload": "012345678905", "symbology": "UPC-A"},
+                    {"payload": "4005176834561", "symbology": "EAN-13"},
+                ]
+            }
+        }
+        assert self._picker()(meta) == "012345678905"
+
+    def test_skips_non_dict_entries(self):
+        meta = {"device_processing": {"barcodes": ["string", None, {"payload": "012345678905"}]}}
+        assert self._picker()(meta) == "012345678905"
+
+    def test_non_string_payload(self):
+        meta = {"device_processing": {"barcodes": [{"payload": 12345}]}}
+        assert self._picker()(meta) is None
+
+    def test_no_valid_upcs(self):
+        meta = {
+            "device_processing": {
+                "barcodes": [
+                    {"payload": "abc"},
+                    {"payload": "12345"},
+                    {"payload": "abcdefghijkl"},
+                ]
+            }
+        }
+        assert self._picker()(meta) is None
+
+
 def test_embedding_dimension_validation(client, app_module, monkeypatch):
     import app.routes.items as items_mod
 

@@ -66,6 +66,24 @@ def validate_upc(upc: str) -> bool:
     return len(upc) in (12, 13)
 
 
+def extract_upc_from_device_metadata(metadata: dict | None) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+    dp = metadata.get("device_processing")
+    if not isinstance(dp, dict):
+        return None
+    barcodes = dp.get("barcodes")
+    if not isinstance(barcodes, list):
+        return None
+    for bc in barcodes:
+        if not isinstance(bc, dict):
+            continue
+        payload = bc.get("payload")
+        if isinstance(payload, str) and validate_upc(payload):
+            return payload
+    return None
+
+
 def _simplify_category(raw: str | None) -> str | None:
     """Extract the first segment from a Google taxonomy string.
 

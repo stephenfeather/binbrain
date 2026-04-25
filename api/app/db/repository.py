@@ -661,6 +661,17 @@ def delete_photo(db: Session, photo_id: int) -> str | None:
     ).scalar()
 
 
+def fetch_photo_device_metadata(db: Session, photo_id: int) -> dict | None:
+    row = db.execute(
+        text("SELECT device_metadata FROM photos WHERE photo_id = :photo_id"),
+        {"photo_id": photo_id},
+    ).first()
+    if row is None:
+        return None
+    metadata = row[0]
+    return metadata if isinstance(metadata, dict) else None
+
+
 def fetch_photo_path(db: Session, photo_id: int) -> str | None:
     return db.execute(
         text("SELECT path FROM photos WHERE photo_id = :photo_id"),

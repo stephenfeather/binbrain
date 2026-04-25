@@ -309,7 +309,7 @@ def test_ingest_rejects_unknown_nested_metadata_key(client, valid_jpeg_bytes):
 
 
 def test_ingest_rejects_oversized_metadata(client, valid_jpeg_bytes):
-    many_ocr = [{"text": f"item-{i:05d}", "confidence": 0.9} for i in range(200)]
+    many_ocr = [{"text": f"item-{i:05d}", "confidence": 0.9} for i in range(500)]
     huge = json.dumps({"device_processing": {"ocr": many_ocr}})
     resp = client.post(
         "/ingest",
