@@ -74,6 +74,20 @@ router = APIRouter()
 
 _PHOTO_ROOT_RESOLVED: Path | None = None
 
+# Allowlist of photo extensions accepted on upload. An UploadFile whose
+# filename ends in one of these is preserved on disk with that extension;
+# anything else gets renamed to `.tmp` (validation still runs against magic
+# bytes, not the suffix). Kept as a module constant so /ingest and
+# /bins/{id}/add agree on the set without copying the literal.
+_ALLOWED_PHOTO_EXTS: tuple[str, ...] = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".heic",
+    ".heif",
+)
+
 # FF-04: allowlist of photo fields safe to expose in user-plane responses.
 # The photos row also carries `path` (F-10: internal FS path) and
 # `device_metadata` (FF-04: OCR/classification/telemetry) — neither may leak.
@@ -241,6 +255,43 @@ def _validate_and_place(tmp: Path, final: Path) -> None:
     shutil.move(str(tmp), str(final))
 
 
+async def _save_uploaded_photo(
+    up: UploadFile, bin_dir: Path
+) -> tuple[Path, tuple[int | None, int | None]]:
+    """Save *up* under *bin_dir*; return ``(final_path, (width, height))``.
+
+    Streams to a system-temp file (F-05), validates magic bytes, and renames
+    into place. Then captures EXIF-rotated pixel dimensions on a best-effort
+    pass — a corrupt image that passes type validation but fails to decode
+    for size returns ``(None, None)`` so ingest never aborts on a metadata
+    read. Callers that need request-id-tagged dim-failure telemetry should
+    log on ``(None, None)`` themselves; ``Image.open`` failures are not
+    re-raised here.
+    """
+    ext = os.path.splitext(up.filename or "")[1].lower()
+    if ext not in _ALLOWED_PHOTO_EXTS:
+        ext = ".tmp"
+
+    fname = f"{uuid.uuid4().hex}{ext}"
+    tmp_fd, tmp_name = tempfile.mkstemp(suffix=".upload_tmp")
+    os.close(tmp_fd)
+    tmp_path = Path(tmp_name)
+    final_path = bin_dir / fname
+
+    await _stream_upload(up, tmp_path)
+    _validate_and_place(tmp_path, final_path)
+
+    pw: int | None
+    ph: int | None
+    try:
+        with Image.open(final_path) as img:
+            pw, ph = ImageOps.exif_transpose(img).size
+    except (UnidentifiedImageError, OSError):
+        pw = ph = None
+
+    return final_path, (pw, ph)
+
+
 @router.post("/ingest")
 async def ingest(
     request: Request,
@@ -324,40 +375,15 @@ async def ingest(
 
     saved = []
     for up in photos:
-        ext = os.path.splitext(up.filename or "")[1].lower()
-        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"):
-            ext = ".tmp"
-
-        fname = f"{uuid.uuid4().hex}{ext}"
-        # F-05: write to system temp dir (outside photo_root) so a rejected
-        # upload leaves no residue under photo_root.  bin_dir is created
-        # lazily inside _validate_and_place only on success.
-        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".upload_tmp")
-        os.close(tmp_fd)
-        tmp_path = Path(tmp_name)
-        final_path = bin_dir / fname
-
-        # F-04: stream to temp; F-05: validate and rename.
-        await _stream_upload(up, tmp_path)
-        _validate_and_place(tmp_path, final_path)
-
-        # Dev2_016: capture pixel dimensions (after EXIF rotation) so downstream
-        # training can back-map normalized bboxes without re-reading files.
-        # Best-effort: if PIL can't decode the placed file, insert NULL dims and
-        # log — ingest must not fail because of a metadata-only read.
-        pw: int | None
-        ph: int | None
-        try:
-            with Image.open(final_path) as img:
-                pw, ph = ImageOps.exif_transpose(img).size
-        except (UnidentifiedImageError, OSError) as exc:
+        # F-04 + F-05: stream → validate → place under bin_dir; also captures
+        # Dev2_016 EXIF-rotated dims as best-effort metadata.
+        final_path, (pw, ph) = await _save_uploaded_photo(up, bin_dir)
+        if pw is None:
             logger.warning(
-                "event=ingest_dims_failed request_id=%s photo_path=%s err=%s",
+                "event=ingest_dims_failed request_id=%s photo_path=%s",
                 db.info.get("request_id"),
                 final_path,
-                exc,
             )
-            pw = ph = None
 
         photo_id = repository.insert_photo(
             db,
@@ -458,21 +484,7 @@ async def add_to_bin(
             _assert_within_photo_root(bin_dir)
 
             for up in photos:
-                ext = os.path.splitext(up.filename or "")[1].lower()
-                if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"):
-                    ext = ".tmp"
-
-                fname = f"{uuid.uuid4().hex}{ext}"
-                # F-05: write to system temp dir so rejected uploads leave no
-                # residue under photo_root.  bin_dir created lazily on success.
-                tmp_fd, tmp_name = tempfile.mkstemp(suffix=".upload_tmp")
-                os.close(tmp_fd)
-                tmp_path = Path(tmp_name)
-                final_path = bin_dir / fname
-
-                await _stream_upload(up, tmp_path)
-                _validate_and_place(tmp_path, final_path)
-
+                final_path, _dims = await _save_uploaded_photo(up, bin_dir)
                 photo_id = repository.insert_photo(db, bin_id, str(final_path))
                 saved_photos.append(_public_photo(photo_id))
 
