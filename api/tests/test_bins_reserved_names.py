@@ -159,10 +159,10 @@ def test_sentinel_row_survives_validator(client, db, valid_jpeg_bytes):
 
 
 def test_registry_is_authoritative(monkeypatch, client, valid_jpeg_bytes):
-    from app.db import repository
+    from app.db import bins
 
-    extended = frozenset(repository._RESERVED_BIN_NAME_STEMS | {"teststem"})
-    monkeypatch.setattr(repository, "_RESERVED_BIN_NAME_STEMS", extended)
+    extended = frozenset(bins._RESERVED_BIN_NAME_STEMS | {"teststem"})
+    monkeypatch.setattr(bins, "_RESERVED_BIN_NAME_STEMS", extended)
 
     r = _post_ingest(client, valid_jpeg_bytes, bin_id="TestStem")
     assert r.status_code == 400
