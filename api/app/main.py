@@ -16,6 +16,7 @@ from app.deps import (
     VISION_BASE_URL,
     SessionLocal,
     get_active_vision_model,
+    is_local_ollama,
     load_settings_from_db,
     logger,
     photo_root,
@@ -81,11 +82,7 @@ async def lifespan(app: FastAPI):
         db.close()
 
     model = get_active_vision_model()
-    is_local = (
-        "localhost" in VISION_BASE_URL
-        or "host.docker.internal" in VISION_BASE_URL
-        or "127.0.0.1" in VISION_BASE_URL
-    )
+    is_local = is_local_ollama()
     logger.info(
         "event=vision_config_loaded model=%s is_local=%s base_url=%s",
         model,
@@ -150,8 +147,7 @@ async def request_id_middleware(request: Request, call_next):
     else:
         access_log = logger.info
     access_log(
-        "event=http_access method=%s path=%s status=%d ms=%d "
-        "request_id=%s api_key_id=%s",
+        "event=http_access method=%s path=%s status=%d ms=%d " "request_id=%s api_key_id=%s",
         request.method,
         request.url.path,
         status,
@@ -322,9 +318,7 @@ async def api_key_auth_middleware(request: Request, call_next):
             repository.touch_api_key_last_used(s, key_row["id"])
             s.commit()
         except Exception:
-            logger.exception(
-                "event=api_key_touch_failed key_id=%s", key_row["id"]
-            )
+            logger.exception("event=api_key_touch_failed key_id=%s", key_row["id"])
         finally:
             s.close()
 

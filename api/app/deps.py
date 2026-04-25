@@ -25,6 +25,14 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 VISION_BASE_URL = os.environ.get("VISION_BASE_URL", "http://localhost:11434/v1")
 VISION_API_KEY = os.environ.get("VISION_API_KEY", "ollama")
 
+_LOCAL_OLLAMA_HOSTS = ("localhost", "host.docker.internal", "127.0.0.1")
+
+
+def is_local_ollama() -> bool:
+    """True when VISION_BASE_URL points to a local Ollama instance."""
+    return any(host in VISION_BASE_URL for host in _LOCAL_OLLAMA_HOSTS)
+
+
 # Re-export for callers that import these from app.deps (backwards compat).
 MAX_REQUEST_BODY_BYTES = MAX_REQUEST_BODY_BYTES
 MAX_REQUEST_BODY_BYTES_ADMIN = MAX_REQUEST_BODY_BYTES_ADMIN

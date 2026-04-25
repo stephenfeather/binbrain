@@ -12,6 +12,7 @@ from app.deps import (
     get_detection_model_id,
     get_max_image_px,
     get_suggest_match_threshold,
+    is_local_ollama,
     logger,
     set_active_vision_model,
     set_detection_model,
@@ -54,15 +55,6 @@ def _actor_audit_context(request: Request) -> tuple[str, str]:
     return actor_ip, actor_key_id
 
 
-def _is_local_ollama() -> bool:
-    """True when VISION_BASE_URL points to a local Ollama instance."""
-    return (
-        "localhost" in VISION_BASE_URL
-        or "host.docker.internal" in VISION_BASE_URL
-        or "127.0.0.1" in VISION_BASE_URL
-    )
-
-
 @router.get("/models")
 def list_models(request: Request = None):
     """List available vision models and the active selection.
@@ -74,7 +66,7 @@ def list_models(request: Request = None):
     request_id = getattr(request.state, "request_id", None) if request else None
     active = get_active_vision_model()
 
-    if not _is_local_ollama():
+    if not is_local_ollama():
         from urllib.parse import urlparse
 
         provider_host = urlparse(VISION_BASE_URL).hostname or VISION_BASE_URL
