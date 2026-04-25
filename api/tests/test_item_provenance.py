@@ -197,18 +197,17 @@ def test_edited_outcome_links_via_edited_to_label(client, db, valid_jpeg_bytes):
     ).scalar_one()
     assert linked == item_id
 
-    # But 'edited' outcomes do NOT surface through GET /bins — the projection
-    # filters on decision='accepted' so the item_id link alone isn't enough.
-    # This is intentional: we only show provenance for suggestions the user
-    # actually accepted.
+    # 'edited' outcomes surface through GET /bins just like 'accepted': the
+    # user did pick the item from this photo, they just renamed the label.
+    # The projection treats both decisions as valid attributions.
     resp = client.get(f"/bins/{bin_id}")
     match = next(
         (it for it in resp.json()["items"] if it["name"] == "brass gear"),
         None,
     )
     assert match is not None
-    assert match["source_photo_id"] is None
-    assert match["source_bbox"] is None
+    assert match["source_photo_id"] == photo_id
+    assert match["source_bbox"] == bbox
 
 
 # ---------------------------------------------------------------------------

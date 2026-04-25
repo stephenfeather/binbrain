@@ -593,7 +593,7 @@ def fetch_bin_items(db: Session, bin_id: str) -> list[dict]:
                 SELECT photo_id, bbox
                 FROM photo_suggestion_outcomes
                 WHERE item_id = i.item_id
-                  AND decision = 'accepted'
+                  AND decision IN ('accepted', 'edited')
                 ORDER BY decided_at DESC
                 LIMIT 1
             ) pso ON TRUE
