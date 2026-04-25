@@ -7,6 +7,12 @@ labels.pdf
 
 # Photo storage (binary uploads, not source)
 data/
+# Whitelist source-controlled config that lives under data/.
+!data/
+data/*
+!data/logs/
+data/logs/*
+!data/logs/api.colortailrc
 
 # Downloaded model weights
 *.pt
