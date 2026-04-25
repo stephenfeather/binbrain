@@ -13,7 +13,7 @@ from app.config import (
     MAX_REQUEST_BODY_BYTES_ADMIN,
     MODELS_DIR,
 )
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastembed import TextEmbedding
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -151,6 +151,18 @@ def get_db(request: Request):
         yield db
     finally:
         db.close()
+
+
+def require_api_key_id(request: Request) -> int:
+    """Return ``request.state.api_key_id`` or raise 401.
+
+    Defense in depth — ``api_key_auth_middleware`` should have already
+    rejected unauthenticated requests before a route handler runs.
+    """
+    api_key_id = getattr(request.state, "api_key_id", None)
+    if api_key_id is None:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    return int(api_key_id)
 
 
 def canonical_item_text(name: str, category: str | None, notes: str | None) -> str:

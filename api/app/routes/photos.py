@@ -18,6 +18,7 @@ from app.deps import (
     get_suggest_match_threshold,
     logger,
     photo_root,
+    require_api_key_id,
     vec_to_pgvector,
 )
 from app.routes.bins import guard_user_bin_name
@@ -799,13 +800,6 @@ def _validate_idempotency_key(raw: str) -> str:
     return normalized
 
 
-def _api_key_id_from_request(request: Request) -> int:
-    api_key_id = getattr(request.state, "api_key_id", None)
-    if api_key_id is None:
-        raise HTTPException(status_code=401, detail="Missing API key")
-    return int(api_key_id)
-
-
 def _coerce_stored_body(response_body) -> dict:
     """``response_body`` column is jsonb; psycopg typically returns it as a
     dict, but fixture-inserted rows (see TTL cleanup test) land as strings.
@@ -859,7 +853,7 @@ async def post_photo_suggestion_outcomes(
 
     if raw_idempotency_key is not None:
         idempotency_key = _validate_idempotency_key(raw_idempotency_key)
-        api_key_id = _api_key_id_from_request(request)
+        api_key_id = require_api_key_id(request)
         # Hash the raw bytes FastAPI already consumed. request.body() is
         # cached internally so this second call does not hang the stream.
         raw_bytes = await request.body()

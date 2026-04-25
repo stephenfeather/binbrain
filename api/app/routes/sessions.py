@@ -12,7 +12,7 @@ from __future__ import annotations
 import unicodedata
 
 from app.db import repository
-from app.deps import get_db, logger
+from app.deps import get_db, logger, require_api_key_id
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -77,22 +77,13 @@ def _validate_label(label: str | None) -> str | None:
     return label
 
 
-def _require_api_key_id(request: Request) -> int:
-    api_key_id = getattr(request.state, "api_key_id", None)
-    if api_key_id is None:
-        # Defense in depth — the auth middleware should have already rejected
-        # unauthenticated requests before a route handler runs.
-        raise HTTPException(status_code=401, detail="Missing API key")
-    return int(api_key_id)
-
-
 @router.post("/sessions", status_code=201)
 def create_session(
     request: Request,
     body: CreateSessionRequest,
     db: Session = Depends(get_db),
 ):
-    api_key_id = _require_api_key_id(request)
+    api_key_id = require_api_key_id(request)
     label = _validate_label(body.label)
 
     # ApiDev_008b F-1 / SEC-35-1: count+insert is a single guarded INSERT so
@@ -132,7 +123,7 @@ def delete_session(
     session_id: str,
     db: Session = Depends(get_db),
 ):
-    api_key_id = _require_api_key_id(request)
+    api_key_id = require_api_key_id(request)
 
     try:
         result = repository.end_session(db, session_id, api_key_id)
@@ -163,7 +154,7 @@ def get_session(
     session_id: str,
     db: Session = Depends(get_db),
 ):
-    api_key_id = _require_api_key_id(request)
+    api_key_id = require_api_key_id(request)
 
     try:
         session = repository.find_session(db, session_id, api_key_id)
@@ -189,6 +180,6 @@ def list_sessions_route(
         # 400 so it maps cleanly to our ErrorResponse envelope.
         raise HTTPException(status_code=400, detail="limit must be <= 100")
 
-    api_key_id = _require_api_key_id(request)
+    api_key_id = require_api_key_id(request)
     sessions = repository.list_sessions(db, api_key_id, state, limit, offset)
     return {"version": "1", "sessions": sessions}
