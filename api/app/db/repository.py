@@ -661,6 +661,19 @@ def delete_photo(db: Session, photo_id: int) -> str | None:
     ).scalar()
 
 
+def backfill_item_upc_if_missing(db: Session, item_id: int, upc: str) -> bool:
+    res = db.execute(
+        text(
+            """
+            UPDATE items SET upc = :upc
+            WHERE item_id = :item_id AND upc IS NULL
+            """
+        ),
+        {"item_id": item_id, "upc": upc},
+    )
+    return bool(res.rowcount)
+
+
 def fetch_photo_device_metadata(db: Session, photo_id: int) -> dict | None:
     row = db.execute(
         text("SELECT device_metadata FROM photos WHERE photo_id = :photo_id"),

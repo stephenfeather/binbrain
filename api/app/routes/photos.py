@@ -913,6 +913,14 @@ async def post_photo_suggestion_outcomes(
                 db.commit()
                 return _coerce_stored_body(existing["response_body"])
 
+        metadata_upc = extract_upc_from_device_metadata(
+            repository.fetch_photo_device_metadata(db, photo_id)
+        )
+        if metadata_upc is not None:
+            for d in body.decisions:
+                if d.item_id is not None and d.decision in ("accepted", "edited"):
+                    repository.backfill_item_upc_if_missing(db, d.item_id, metadata_upc)
+
         repository.replace_photo_suggestion_outcomes(
             db,
             photo_id=photo_id,
