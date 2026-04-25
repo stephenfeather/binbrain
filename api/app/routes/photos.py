@@ -435,6 +435,7 @@ def suggest_status(photo_id: int):
 @router.get("/photos/{photo_id}/file")
 def get_photo_file(
     photo_id: int,
+    request: Request,
     w: Optional[int] = Query(
         None,
         ge=16,
@@ -453,10 +454,15 @@ def get_photo_file(
 
     ext = fpath.suffix.lower()
     content_type = _MIME_TYPES.get(ext, "application/octet-stream")
+    etag = f'"{photo_id}-{w or 0}"'
     cache_headers = {
         "Cache-Control": "public, max-age=31536000, immutable",
-        "ETag": f'"{photo_id}-{w or 0}"',
+        "ETag": etag,
     }
+
+    inm = request.headers.get("if-none-match")
+    if inm is not None and (inm.strip() == "*" or etag in (t.strip() for t in inm.split(","))):
+        return Response(status_code=304, headers=cache_headers)
 
     if w is None:
         return Response(

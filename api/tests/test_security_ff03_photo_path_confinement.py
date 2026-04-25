@@ -134,6 +134,67 @@ def test_file_serves_in_root_photo(client, _seed_bin, valid_jpeg_bytes):
             resp.status_code == 200
         ), f"Expected 200 for in-root photo, got {resp.status_code}: {resp.text}"
         assert resp.content == valid_jpeg_bytes
+        assert resp.headers["cache-control"] == "public, max-age=31536000, immutable"
+        assert resp.headers["etag"] == f'"{photo_id}-0"'
+    finally:
+        if photo_file.exists():
+            photo_file.unlink()
+
+
+def test_file_resized_etag_distinct_from_original(client, _seed_bin, valid_jpeg_bytes):
+    """Resized variant carries an ETag that includes the width."""
+    from app.deps import photo_root
+
+    photo_root.mkdir(parents=True, exist_ok=True)
+    photo_file = photo_root / "ff03_etag_resize.jpg"
+    photo_file.write_bytes(valid_jpeg_bytes)
+    photo_id = _insert_photo_row(_seed_bin, str(photo_file))
+    try:
+        resp = client.get(f"/photos/{photo_id}/file?w=64")
+        assert resp.status_code == 200
+        assert resp.headers["etag"] == f'"{photo_id}-64"'
+    finally:
+        if photo_file.exists():
+            photo_file.unlink()
+
+
+def test_file_returns_304_when_if_none_match_matches(client, _seed_bin, valid_jpeg_bytes):
+    """A client sending the prior ETag back in If-None-Match gets 304."""
+    from app.deps import photo_root
+
+    photo_root.mkdir(parents=True, exist_ok=True)
+    photo_file = photo_root / "ff03_304.jpg"
+    photo_file.write_bytes(valid_jpeg_bytes)
+    photo_id = _insert_photo_row(_seed_bin, str(photo_file))
+    try:
+        etag = f'"{photo_id}-0"'
+        resp = client.get(
+            f"/photos/{photo_id}/file",
+            headers={"If-None-Match": etag},
+        )
+        assert resp.status_code == 304
+        assert resp.headers["etag"] == etag
+        assert resp.content == b""
+    finally:
+        if photo_file.exists():
+            photo_file.unlink()
+
+
+def test_file_returns_200_when_if_none_match_mismatches(client, _seed_bin, valid_jpeg_bytes):
+    """A stale ETag (different photo_id) does not short-circuit."""
+    from app.deps import photo_root
+
+    photo_root.mkdir(parents=True, exist_ok=True)
+    photo_file = photo_root / "ff03_no304.jpg"
+    photo_file.write_bytes(valid_jpeg_bytes)
+    photo_id = _insert_photo_row(_seed_bin, str(photo_file))
+    try:
+        resp = client.get(
+            f"/photos/{photo_id}/file",
+            headers={"If-None-Match": '"99999-0"'},
+        )
+        assert resp.status_code == 200
+        assert resp.content == valid_jpeg_bytes
     finally:
         if photo_file.exists():
             photo_file.unlink()
