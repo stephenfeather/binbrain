@@ -60,21 +60,23 @@ def test_set_detection_model_rejects_arbitrary_path(app_module):
     from app.deps import set_detection_model
 
     with pytest.raises(ValueError):
-        set_detection_model("/tmp/evil.pt")
+        set_detection_model("/tmp/evil.pt", actor_ip="127.0.0.1", actor_key_id="k1")
 
 
 def test_set_detection_model_rejects_photo_path(app_module):
     from app.deps import set_detection_model
 
     with pytest.raises(ValueError):
-        set_detection_model("/data/photos/uploaded_payload.pt")
+        set_detection_model(
+            "/data/photos/uploaded_payload.pt", actor_ip="127.0.0.1", actor_key_id="k1"
+        )
 
 
 def test_set_detection_model_rejects_unknown_id(app_module):
     from app.deps import set_detection_model
 
     with pytest.raises(ValueError):
-        set_detection_model("my_custom_model")
+        set_detection_model("my_custom_model", actor_ip="127.0.0.1", actor_key_id="k1")
 
 
 def test_set_detection_model_accepts_allowlisted_id(app_module):
@@ -82,7 +84,7 @@ def test_set_detection_model_accepts_allowlisted_id(app_module):
     from app.deps import get_detection_model_id, set_detection_model
 
     first_id = next(iter(DETECTION_MODEL_ALLOWLIST))
-    set_detection_model(first_id)
+    set_detection_model(first_id, actor_ip="127.0.0.1", actor_key_id="k1")
     assert get_detection_model_id() == first_id
 
 

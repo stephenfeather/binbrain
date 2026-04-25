@@ -66,8 +66,9 @@ def test_settings_table_empty_on_fresh_start(db):
 
 def test_load_settings_from_db(app_module, db):
     """load_settings_from_db reads persisted values into runtime globals."""
+    from app import deps
     from app.db import repository
-    from app.deps import get_max_image_px, load_settings_from_db, set_max_image_px
+    from app.deps import get_max_image_px, load_settings_from_db
 
     original = get_max_image_px()
 
@@ -79,7 +80,7 @@ def test_load_settings_from_db(app_module, db):
     load_settings_from_db()
     assert get_max_image_px() == 512
 
-    # Restore original
-    set_max_image_px(original)
+    # Restore original (bypass setter to avoid an extra audit row in the DB).
+    deps._max_image_px = original
     repository.set_setting(db, "max_image_px", str(original))
     db.commit()

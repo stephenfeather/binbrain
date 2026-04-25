@@ -3,7 +3,6 @@ import logging.handlers
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from app.config import (
     DEFAULT_DETECTION_MODEL_ID,
@@ -146,7 +145,7 @@ def get_db(request: Request):
         db.close()
 
 
-def canonical_item_text(name: str, category: Optional[str], notes: Optional[str]) -> str:
+def canonical_item_text(name: str, category: str | None, notes: str | None) -> str:
     parts = [f"name: {name}"]
     if category:
         parts.append(f"category: {category}")
@@ -155,7 +154,7 @@ def canonical_item_text(name: str, category: Optional[str], notes: Optional[str]
     return "\n".join(parts)
 
 
-def fingerprint_for(name: str, category: Optional[str]) -> str:
+def fingerprint_for(name: str, category: str | None) -> str:
     name_part = (name or "").strip().lower()
     cat_part = (category or "").strip().lower()
     return f"{name_part}|{cat_part}"
@@ -178,14 +177,24 @@ def get_active_vision_model() -> str:
     return _active_vision_model
 
 
-def set_active_vision_model(model: str):
-    # TODO(audit): conform to new setter signature
-    # (value, *, actor_ip: str, actor_key_id: str) and call
-    # repository.log_setting_change(...) in-transaction with set_setting.
-    # Audit infra landed in S-00-AUDIT (2026-04-20b migration); see
-    # ``thoughts/shared/plans/2026-04-20-runtime-settings-store.md`` §Audit Log
-    # and conformance tasks A-1..A-3.
+def set_active_vision_model(
+    model: str,
+    *,
+    actor_ip: str,
+    actor_key_id: str,
+) -> None:
+    """Set the active vision model and persist it (S-00-AUDIT).
+
+    Validation of model availability (warmup) is the route's responsibility;
+    this setter only persists and audits the chosen value.
+    """
     global _active_vision_model
+    _persist_setting_with_audit(
+        key="active_vision_model",
+        new_value=model,
+        actor_ip=actor_ip,
+        actor_key_id=actor_key_id,
+    )
     _active_vision_model = model
 
 
@@ -193,12 +202,29 @@ def get_max_image_px() -> int:
     return _max_image_px
 
 
-def set_max_image_px(value: int):
-    # TODO(audit): conform to new setter signature
-    # (value, *, actor_ip: str, actor_key_id: str) and call
-    # repository.log_setting_change(...) in-transaction with set_setting.
-    # See S-00-AUDIT / A-1..A-3 in the runtime-settings-store plan.
+def set_max_image_px(
+    value: int,
+    *,
+    actor_ip: str,
+    actor_key_id: str,
+) -> None:
+    """Set the max image size (S-00-AUDIT).
+
+    Raises:
+        ValueError: if ``value`` is not an int in ``[128, 4096]``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"max_image_px must be an int, got {value!r}")
+    if value < 128 or value > 4096:
+        raise ValueError(f"max_image_px must be in [128, 4096], got {value}")
+
     global _max_image_px
+    _persist_setting_with_audit(
+        key="max_image_px",
+        new_value=str(value),
+        actor_ip=actor_ip,
+        actor_key_id=actor_key_id,
+    )
     _max_image_px = value
 
 
@@ -219,22 +245,30 @@ def get_detection_model_id() -> str:
     return _detection_model_id
 
 
-def set_detection_model(model_id: str) -> None:
-    """Set the active detection model by logical ID.
+def set_detection_model(
+    model_id: str,
+    *,
+    actor_ip: str,
+    actor_key_id: str,
+) -> None:
+    """Set the active detection model by logical ID (S-00-AUDIT).
 
     Raises:
         ValueError: if model_id is not in DETECTION_MODEL_ALLOWLIST.
     """
-    # TODO(audit): conform to new setter signature
-    # (value, *, actor_ip: str, actor_key_id: str) and call
-    # repository.log_setting_change(...) in-transaction with set_setting.
-    # See S-00-AUDIT / A-1..A-3 in the runtime-settings-store plan.
-    global _detection_model_id
     if model_id not in DETECTION_MODEL_ALLOWLIST:
         raise ValueError(
             f"model_id {model_id!r} is not in the detection model allowlist; "
             f"allowed: {list(DETECTION_MODEL_ALLOWLIST)}"
         )
+
+    global _detection_model_id
+    _persist_setting_with_audit(
+        key="detection_model",
+        new_value=model_id,
+        actor_ip=actor_ip,
+        actor_key_id=actor_key_id,
+    )
     _detection_model_id = model_id
 
 
@@ -299,8 +333,6 @@ def set_suggest_match_threshold(
     Raises:
         ValueError: if ``value`` is not a finite number in ``[0.0, 1.0]``.
     """
-    from app.db import repository
-
     # Reject bool before float — in Python, ``True``/``False`` are ``int``
     # instances and float(True) == 1.0, which would sneak past the range check.
     if isinstance(value, bool):
@@ -316,14 +348,40 @@ def set_suggest_match_threshold(
 
     global _suggest_match_threshold
 
+    _persist_setting_with_audit(
+        key="suggest_match_threshold",
+        new_value=str(parsed),
+        actor_ip=actor_ip,
+        actor_key_id=actor_key_id,
+    )
+
+    _suggest_match_threshold = parsed
+
+
+def _persist_setting_with_audit(
+    *,
+    key: str,
+    new_value: str,
+    actor_ip: str,
+    actor_key_id: str,
+) -> str | None:
+    """Persist a setting + audit row in one transaction. Returns old_value.
+
+    Implements the S-00-AUDIT canonical setter body: open a session, read
+    the current value, write ``settings`` + ``app_settings_audit`` together,
+    commit (or rollback + raise on any failure). Callers MUST update the
+    in-memory cache only after this returns successfully — if the DB write
+    fails, the cache must not advance ahead of the persisted value.
+    """
+    from app.db import repository
+
     db = SessionLocal()
     try:
-        old_value = repository.get_setting(db, "suggest_match_threshold")
-        new_value = str(parsed)
-        repository.set_setting(db, "suggest_match_threshold", new_value)
+        old_value = repository.get_setting(db, key)
+        repository.set_setting(db, key, new_value)
         repository.log_setting_change(
             db,
-            key="suggest_match_threshold",
+            key=key,
             old_value=old_value,
             new_value=new_value,
             actor_ip=actor_ip,
@@ -335,35 +393,50 @@ def set_suggest_match_threshold(
         raise
     finally:
         db.close()
-
-    _suggest_match_threshold = parsed
+    return old_value
 
 
 def load_settings_from_db() -> None:
-    """Load persisted settings from DB, falling back to env/defaults."""
+    """Load persisted settings from DB, falling back to env/defaults.
+
+    Bypasses the public setters (which require audit context) and assigns
+    the module-level globals directly. A startup load is not a user
+    mutation, so no ``app_settings_audit`` row is appropriate here.
+    """
     from app.db import repository
 
     db = SessionLocal()
     try:
         vision_model = repository.get_setting(db, "active_vision_model")
         if vision_model:
-            set_active_vision_model(vision_model)
+            global _active_vision_model
+            _active_vision_model = vision_model
             logger.info("event=settings_loaded key=active_vision_model value=%s", vision_model)
 
         max_px = repository.get_setting(db, "max_image_px")
         if max_px:
             try:
-                set_max_image_px(int(max_px))
-                logger.info("event=settings_loaded key=max_image_px value=%s", max_px)
+                parsed_px = int(max_px)
+                if 128 <= parsed_px <= 4096:
+                    global _max_image_px
+                    _max_image_px = parsed_px
+                    logger.info("event=settings_loaded key=max_image_px value=%s", max_px)
+                else:
+                    logger.warning(
+                        "event=settings_load_invalid key=max_image_px value=%s "
+                        "(out of range; keeping prior cache)",
+                        max_px,
+                    )
             except (TypeError, ValueError):
                 logger.warning("event=settings_load_invalid key=max_image_px value=%s", max_px)
 
         det_model = repository.get_setting(db, "detection_model")
         if det_model:
-            try:
-                set_detection_model(det_model)
+            if det_model in DETECTION_MODEL_ALLOWLIST:
+                global _detection_model_id
+                _detection_model_id = det_model
                 logger.info("event=settings_loaded key=detection_model value=%s", det_model)
-            except ValueError:
+            else:
                 logger.warning(
                     "event=settings_load_invalid key=detection_model value=%s "
                     "(not in allowlist; keeping default)",

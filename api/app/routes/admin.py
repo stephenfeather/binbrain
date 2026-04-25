@@ -7,7 +7,6 @@ from app.deps import (
     DETECTION_MODEL_ALLOWLIST,
     OLLAMA_URL,
     VISION_BASE_URL,
-    SessionLocal,
     get_active_vision_model,
     get_db,
     get_detection_model_id,
@@ -25,6 +24,34 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 router = APIRouter()
+
+
+def _actor_audit_context(request: Request) -> tuple[str, str]:
+    """Return ``(actor_ip, actor_key_id)`` for an admin audit row.
+
+    ``request.client.host`` is upstream-controlled: TestClient reports the
+    literal ``"testclient"`` and some reverse-proxy middleware can surface
+    a hostname instead of an IP. The audit-log helper validates the value
+    with ``ipaddress.ip_address(...)`` and would reject anything unparseable,
+    so normalize unparseable hosts to ``"0.0.0.0"`` (still a valid INET
+    that satisfies the audit contract) rather than 400 on something the
+    admin has no control over.
+
+    Raises:
+        HTTPException(500): if the auth middleware did not attach an
+            ``api_key_id`` to ``request.state`` — the audit-log contract
+            requires a non-empty ``actor_key_id``.
+    """
+    raw_host = request.client.host if request and request.client else ""
+    try:
+        ipaddress.ip_address(raw_host)
+        actor_ip = raw_host
+    except (TypeError, ValueError):
+        actor_ip = "0.0.0.0"
+    actor_key_id = str(getattr(request.state, "api_key_id", "") or "")
+    if not actor_key_id:
+        raise HTTPException(status_code=500, detail="authenticated key missing")
+    return actor_ip, actor_key_id
 
 
 def _is_local_ollama() -> bool:
@@ -165,18 +192,12 @@ def select_model(
         )
         raise HTTPException(status_code=502, detail="upstream service unavailable") from e
 
+    actor_ip, actor_key_id = _actor_audit_context(request)
     previous = get_active_vision_model()
-    set_active_vision_model(model_name)
-
     try:
-        settings_db = SessionLocal()
-        repository.set_setting(settings_db, "active_vision_model", model_name)
-        settings_db.commit()
-        settings_db.close()
-    except Exception as e:
-        logger.warning(
-            "event=setting_persist_failed key=active_vision_model error=%s", str(e)[:200]
-        )
+        set_active_vision_model(model_name, actor_ip=actor_ip, actor_key_id=actor_key_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
     logger.info(
         "event=model_select request_id=%s previous=%s active=%s", request_id, previous, model_name
@@ -208,23 +229,19 @@ def set_image_size(
     value = payload.get("max_image_px")
     if value is None:
         raise HTTPException(status_code=400, detail="max_image_px is required")
+    if isinstance(value, bool):
+        raise HTTPException(status_code=400, detail="max_image_px must be an integer")
     try:
         value = int(value)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="max_image_px must be an integer") from None
-    if value < 128 or value > 4096:
-        raise HTTPException(status_code=400, detail="max_image_px must be between 128 and 4096")
 
+    actor_ip, actor_key_id = _actor_audit_context(request)
     previous = get_max_image_px()
-    set_max_image_px(value)
-
     try:
-        settings_db = SessionLocal()
-        repository.set_setting(settings_db, "max_image_px", str(value))
-        settings_db.commit()
-        settings_db.close()
-    except Exception as e:
-        logger.warning("event=setting_persist_failed key=max_image_px error=%s", str(e)[:200])
+        set_max_image_px(value, actor_ip=actor_ip, actor_key_id=actor_key_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
     logger.info(
         "event=image_size_set request_id=%s previous=%s new=%s", request_id, previous, value
@@ -269,26 +286,7 @@ def set_suggest_match_threshold_route(
     if isinstance(value, bool):
         raise HTTPException(status_code=400, detail="value must be a number")
 
-    # ``request.client.host`` is upstream-controlled: TestClient reports the
-    # literal ``"testclient"`` and some reverse-proxy middleware can surface
-    # a hostname instead of an IP. The audit-log helper validates the value
-    # with ``ipaddress.ip_address(...)`` and would reject anything unparseable,
-    # so normalize here rather than let a legitimate admin write 400 on
-    # something the admin has no control over. We preserve forensic value
-    # when the upstream host *is* a real IP, and fall back to ``0.0.0.0``
-    # otherwise (still a non-empty valid IP that passes the audit contract).
-    raw_host = request.client.host if request and request.client else ""
-    try:
-        ipaddress.ip_address(raw_host)
-        actor_ip = raw_host
-    except (TypeError, ValueError):
-        actor_ip = "0.0.0.0"
-    actor_key_id = str(getattr(request.state, "api_key_id", "") or "")
-    if not actor_key_id:
-        # Auth middleware always sets this for authenticated routes; defensive
-        # guard so the audit-log contract (non-empty actor_key_id) holds.
-        raise HTTPException(status_code=500, detail="authenticated key missing")
-
+    actor_ip, actor_key_id = _actor_audit_context(request)
     previous = get_suggest_match_threshold()
     try:
         set_suggest_match_threshold(value, actor_ip=actor_ip, actor_key_id=actor_key_id)
@@ -348,16 +346,12 @@ def set_detection_model_setting(
             ),
         )
 
+    actor_ip, actor_key_id = _actor_audit_context(request)
     previous = get_detection_model_id()
-    set_detection_model(model_id)
-
     try:
-        settings_db = SessionLocal()
-        repository.set_setting(settings_db, "detection_model", model_id)
-        settings_db.commit()
-        settings_db.close()
-    except Exception as e:
-        logger.warning("event=setting_persist_failed key=detection_model error=%s", str(e)[:200])
+        set_detection_model(model_id, actor_ip=actor_ip, actor_key_id=actor_key_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
     logger.info(
         "event=detection_model_set request_id=%s previous=%s new=%s", request_id, previous, model_id
