@@ -453,9 +453,17 @@ def get_photo_file(
 
     ext = fpath.suffix.lower()
     content_type = _MIME_TYPES.get(ext, "application/octet-stream")
+    cache_headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "ETag": f'"{photo_id}-{w or 0}"',
+    }
 
     if w is None:
-        return Response(content=fpath.read_bytes(), media_type=content_type)
+        return Response(
+            content=fpath.read_bytes(),
+            media_type=content_type,
+            headers=cache_headers,
+        )
 
     import io
 
@@ -468,7 +476,11 @@ def get_photo_file(
         img = img.resize((w, h), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
-        return Response(content=buf.getvalue(), media_type="image/jpeg")
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/jpeg",
+            headers=cache_headers,
+        )
 
 
 @router.delete("/photos/{photo_id}")
