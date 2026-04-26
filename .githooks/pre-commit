@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+mapfile -t staged_files < <(
+  git diff --cached --name-only --diff-filter=ACMR | grep -E '^api/.*\.pyi?$' || true
+)
+
+if [[ "${#staged_files[@]}" -eq 0 ]]; then
+  exit 0
+fi
+
+for i in "${!staged_files[@]}"; do
+  staged_files[$i]="${staged_files[$i]#api/}"
+done
+
+cd "$repo_root/api"
+
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --extra test ruff check "${staged_files[@]}"
+fi
+
+if command -v ruff >/dev/null 2>&1; then
+  exec ruff check --config pyproject.toml "${staged_files[@]}"
+fi
+
+echo "pre-commit: install uv or ruff before committing." >&2
+echo "pre-commit: expected 'cd api && uv sync --extra test' to provide ruff." >&2
+exit 1
